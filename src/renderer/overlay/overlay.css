@@ -1,0 +1,73 @@
+/* Стили оверлей-окна: прозрачный фон, контент — панели браузера. */
+/* Цвета через те же CSS-переменные shell: тему кладет main в payload
+   (html[data-theme]), кастомные панели фиксируются классом .theme-lock. */
+* { box-sizing: border-box; }
+html, body, #overlay { margin: 0; padding: 0; background: transparent; }
+:root, :root[data-theme='dark'] {
+  --ov-bg: #1e1e1e;
+  --ov-border: #3a3a3a;
+  --ov-text: #eee;
+  --ov-hover: #333;
+  --ov-input-bg: #141414;
+  --ov-input-border: #444;
+  --ov-btn-bg: #3a3a3a;
+  --ov-btn-hover: #4a4a4a;
+  --ov-dim: #aaa;
+  --ov-faint: #888;
+}
+:root[data-theme='light'] {
+  --ov-bg: #ffffff;
+  --ov-border: #ccc;
+  --ov-text: #1a1a1a;
+  --ov-hover: #e4e4e4;
+  --ov-input-bg: #f2f2f2;
+  --ov-input-border: #bbb;
+  --ov-btn-bg: #d0d0d0;
+  --ov-btn-hover: #bdbdbd;
+  --ov-dim: #555;
+  --ov-faint: #777;
+}
+:root[data-theme='slate'] {
+  --ov-bg: #2c3542;
+  --ov-border: #3d4c60;
+  --ov-text: #dbe4f0;
+  --ov-hover: #3b4a5e;
+  --ov-input-bg: #1c232e;
+  --ov-input-border: #4a5a70;
+  --ov-btn-bg: #46586e;
+  --ov-btn-hover: #54687f;
+  --ov-dim: #b3c1d4;
+  --ov-faint: #7d8ea6;
+}
+.theme-lock {
+  --ov-bg: #1e1e1e;
+  --ov-border: #3a3a3a;
+  --ov-text: #eee;
+  --ov-hover: #333;
+  --ov-input-bg: #141414;
+  --ov-input-border: #444;
+  --ov-btn-bg: #3a3a3a;
+  --ov-btn-hover: #4a4a4a;
+  --ov-dim: #aaa;
+  --ov-faint: #888;
+}
+body {
+  font-family: system-ui, sans-serif;
+  color: #eee;
+  overflow: hidden;
+  user-select: none;
+}
+#overlay { width: 100vw; height: 100vh; }
+/* Появление оверлея: короткий fade-in 60ms. Отключается настройкой
+   Settings -> Animations (payload.animations === false -> .no-anim).
+   !important нужен: scoped-стили Vue грузятся позже и перебивают
+   animation без него, из-за чего fade оставался при animations off. */
+.browser-menu, .dialog, .toast, .find-bar { animation: overlay-fade 60ms ease-out !important; }
+@keyframes overlay-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.overlay-root.no-anim .browser-menu,
+.overlay-root.no-anim .dialog,
+.overlay-root.no-anim .toast,
+.overlay-root.no-anim .find-bar { animation: none !important; }

@@ -1,0 +1,23 @@
+# 🔌 Мост shell
+
+Документ описывает preload-мосты основного и overlay-окон: `window.browserAPI` и `window.overlayAPI`.
+
+## 🧩 Состав
+
+`src/preload/index.ts` отдает `browserAPI` для shell: вкладки, навигация, окна, layout, меню, тосты, поиск, настройки. `src/preload/overlay.ts` отдает `overlayAPI` для overlay-окна: выбор, ввод, поиск. Оба идут через `contextBridge` с `contextIsolation`.
+
+## 🔀 Направления
+
+Shell вызывает main через `invoke` и `send`, main пушит состояние через `send`. Оверлей вызывает только свои каналы `overlay:*` и `find:*`. Каналы изолированы друг от друга.
+
+```mermaid
+flowchart LR
+  Shell[App.vue] -->|browserAPI| Main[src/main]
+  Main -->|tabs:state, settings:changed| Shell
+  Ov[OverlayRoot] -->|overlayAPI| Main
+  Main -->|payload в hash| Ov
+```
+
+## 🔒 Изоляция
+
+Сборка идет в `cjs`, песочница выключена, иначе скрипт молча не грузится. `nodeIntegration` выключен, прямого `require('electron')` в renderer нет.
