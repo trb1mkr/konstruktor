@@ -18,7 +18,7 @@ npm run dev
 
 ## 🧩 Кастомизация
 
-Корневой layout — `src/renderer/App.vue`. Стандартные блоки лежат в `src/renderer/components/stdlib/` (`AddressBar`, `TabStrip`, `BookmarksBar`, `DropdownMenu`, `WindowControls`). Общее состояние вкладок хранится в `core/useTabs.ts`, отступы под WebContentsView считает `layoutEngine.ts`.
+Корневой layout — `src/renderer/App.vue`. Стандартные блоки лежат в `src/renderer/components/stdlib/` (`AddressBar`, `TabStrip`, `BookmarksBar`, `DropdownMenu`, `WindowControls`). Общее состояние вкладок хранится в `core/useTabs.ts`, отступы под WebContentsView считает `layoutEngine.ts`. Группы вкладок живут в `src/main/groupsStore.ts` и `src/main/groupsManager.ts`, рисуются через `TabGroupNode.vue`.  
 
 ## 📄 Документация
 

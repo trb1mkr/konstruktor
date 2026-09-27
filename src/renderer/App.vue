@@ -111,11 +111,16 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .shell.rounded:not(.maximized):not(.content-fs) { border-radius: 12px; }
 .shell.incognito { background: #1a1030; color: #eee; }
 .panel-top { display: flex; flex-direction: column; flex-shrink: 0; min-height: 60px; z-index: 10; background: var(--panel-bg); }
-/* Кастомный заголовок: пустая область тащит окно, кнопки — нет. */
-.titlebar { display: flex; align-items: stretch; -webkit-app-region: drag; }
-.titlebar .grow { flex: 1; min-width: 0; }
-.titlebar .controls { flex-shrink: 0; display: flex; align-items: stretch; }
-.titlebar .menu { display: flex; align-items: stretch; }
+/* Кастомный заголовок: вкладки и кнопки окна на одной линии по центру,
+   одинаковая высота (32px), разрыв 8px между панелью и кнопками —
+   вкладка больше не упирается в кнопку меню. */
+.titlebar { display: flex; align-items: center; gap: 4px; padding: 0px 0px; -webkit-app-region: drag; }
+.titlebar .grow { flex: 1; min-width: 0; display: flex; }
+/* Панель вкладок отдает свои отступы заголовку: иначе двойной паддинг
+   (6px стрипа + 6px заголовка) делает вкладки выше кнопок. */
+.titlebar .grow :deep(.tabstrip) { flex: 1; padding: 0; }
+.titlebar .controls { flex-shrink: 0; display: flex; align-items: center; }
+.titlebar .menu { display: flex; align-items: center; }
 .panel-bottom { display: none; }
 .shell.rounded:not(.maximized):not(.content-fs) .panel-bottom { display: flex; flex-direction: column; flex-shrink: 0; height: 12px; min-height: 12px; z-index: 10; background: transparent; }
 .incognito-badge { align-self: center; font-size: 18px; padding: 0 4px 0 8px; }

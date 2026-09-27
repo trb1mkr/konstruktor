@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, nativeTheme, shell, protocol, session, clipboard, dialog } from 'electron'
+import { app, BrowserWindow, WebContentsView, ipcMain, nativeTheme, shell, protocol, session, clipboard } from 'electron'
 import { join } from 'path'
 import { START_PAGE_HTML, START_URL } from './startPage'
 import {
@@ -20,7 +20,7 @@ import {
   type WindowState,
   type TabRecord
 } from './browserState'
-import { applyThemeToViews, applyThemeToTab } from './browserTheme'
+import { applyThemeToViews, applyThemeToTab, viewBackgroundFor } from './browserTheme'
 import {
   openFindOverlay,
   queryFind,
@@ -42,6 +42,8 @@ import {
 } from './downloadsStore'
 import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { getShortcuts, addShortcut, removeShortcut } from './shortcutsStore'
+import { createSavedGroup, getGroups } from './groupsStore'
+import { registerGroupsIpc } from './groupsManager'
 import { registerInternalPreload } from './internalBridge'
 import { dnsServersFor, applySecureDns } from './dnsConfig'
 import {
@@ -51,6 +53,7 @@ import {
   resolveOverlaySelect,
   resolveOverlayDismiss,
   resolveOverlaySubmit,
+  resolveOverlaySubmitIcon,
   type OverlayMenuItem
 } from './overlayManager'
 
@@ -101,6 +104,117 @@ function readSettingsFileSync(): {
     }
   } catch {
     return {}
+  }
+}
+
+// Единый ряд панели вкладок: токены 't:<id>' и 'g:<instanceId>'.
+// Группы того же ранга, что вкладки: таб и группа чередуются свободно.
+// Закрепленные живут в pinnedStripOrder, обычные — в stripOrder.
+// Вложенные группы (parentInstanceId) в ряд не входят — рисуются внутри родителя.
+function rootGroupIds(ws: WindowState): string[] {
+  return ws.openGroups.filter((g) => !g.parentInstanceId).map((g) => g.instanceId)
+}
+
+function isGroupPinned(ws: WindowState, instanceId: string): boolean {
+  return ws.openGroups.find((g) => g.instanceId === instanceId)?.pinned ?? false
+}
+
+// Добавить токен в конец нужной зоны, если его там еще нет.
+function ensureStripToken(ws: WindowState, token: string, pinned: boolean): void {
+  const arr = pinned ? ws.pinnedStripOrder : ws.stripOrder
+  if (!arr.includes(token)) arr.push(token)
+}
+
+// Убрать токен из обоих рядов (смена зоны/удаление).
+function removeStripToken(ws: WindowState, token: string): void {
+  ws.stripOrder = ws.stripOrder.filter((t) => t !== token)
+  ws.pinnedStripOrder = ws.pinnedStripOrder.filter((t) => t !== token)
+}
+
+// Переместить токен в нужную зону с сохранением относительного порядка.
+function moveStripToken(ws: WindowState, token: string, pinned: boolean): void {
+  removeStripToken(ws, token)
+  ensureStripToken(ws, token, pinned)
+}
+
+// Пересобрать ряды из текущего состояния: сначала пины, потом обычные.
+// Minimize не двигает вкладку: свернутые живут в общем ряду на своём месте.
+// pinnedStripOrder — только закрепленные группы, stripOrder — все вкладки + обычные группы.
+function rebuildStripFromTabs(ws: WindowState): void {
+  const pinnedTabs: number[] = []
+  const normalTabs = ws.tabOrder.filter((id) => {
+    const t = ws.tabs.get(id)
+    return t && !t.groupId
+  })
+  const pinnedGroups = rootGroupIds(ws).filter((gid) => isGroupPinned(ws, gid))
+  const normalGroups = rootGroupIds(ws).filter((gid) => !isGroupPinned(ws, gid))
+  // Сохраняем существующий относительный порядок токенов, добавляем новые в конец.
+  const keepOrder = (old: string[], fresh: string[]): string[] => {
+    const set = new Set(fresh)
+    const kept = old.filter((t) => set.has(t))
+    for (const t of fresh) if (!kept.includes(t)) kept.push(t)
+    return kept
+  }
+  ws.pinnedStripOrder = keepOrder(ws.pinnedStripOrder, [
+    ...pinnedTabs.map((id) => `t:${id}`),
+    ...pinnedGroups.map((gid) => `g:${gid}`)
+  ])
+  ws.stripOrder = keepOrder(ws.stripOrder, [
+    ...normalTabs.map((id) => `t:${id}`),
+    ...normalGroups.map((gid) => `g:${gid}`)
+  ])
+}
+
+  // Применить порядок единого ряда от renderer после DnD.
+// Minimize не двигает вкладку: все вкладки живут в обычном ряду на своём месте.
+// Пины — только для групп. Неизвестные токены отбрасываются, недостающие дописываются в конец.
+function reorderStrip(ws: WindowState, order: string[]): void {
+  const knownTabs = new Set(
+    ws.tabOrder.filter((id) => {
+      const t = ws.tabs.get(id)
+      return t && !t.groupId
+    }).map((id) => `t:${id}`)
+  )
+  const knownGroups = new Set(rootGroupIds(ws).map((gid) => `g:${gid}`))
+  const pinned: string[] = []
+  const normal: string[] = []
+  for (const tok of order) {
+    if (tok.startsWith('t:')) {
+      if (!knownTabs.has(tok)) continue
+      const id = Number(tok.slice(2))
+      const rec = ws.tabs.get(id)
+      if (!rec) continue
+      // Вкладки всегда в обычном ряду, minimize на зону не влияет.
+      if (!normal.includes(tok)) normal.push(tok)
+    } else if (tok.startsWith('g:')) {
+      if (!knownGroups.has(tok)) continue
+      const gid = tok.slice(2)
+      if (isGroupPinned(ws, gid)) { if (!pinned.includes(tok)) pinned.push(tok) }
+      else { if (!normal.includes(tok)) normal.push(tok) }
+    }
+  }
+  // Недостающие — в конец своей зоны: вкладки всегда в обычный ряд.
+  for (const id of ws.tabOrder) {
+    const t = ws.tabs.get(id)
+    if (!t || t.groupId) continue
+    const tok = `t:${id}`
+    if (!pinned.includes(tok) && !normal.includes(tok)) normal.push(tok)
+  }
+  for (const gid of rootGroupIds(ws)) {
+    const tok = `g:${gid}`
+    if (isGroupPinned(ws, gid) && !pinned.includes(tok)) pinned.push(tok)
+    if (!isGroupPinned(ws, gid) && !normal.includes(tok)) normal.push(tok)
+  }
+  ws.pinnedStripOrder = pinned
+  ws.stripOrder = normal
+  // tabOrder синхронизируем с рядом: сначала пины, потом обычные.
+  const tabSeq = [...pinned, ...normal]
+    .filter((t) => t.startsWith('t:'))
+    .map((t) => Number(t.slice(2)))
+  const grouped = ws.tabOrder.filter((id) => ws.tabs.get(id)?.groupId)
+  ws.tabOrder = [...tabSeq, ...grouped.filter((id) => !tabSeq.includes(id))]
+  for (const id of [...ws.tabs.keys()]) {
+    if (!ws.tabOrder.includes(id)) ws.tabOrder.push(id)
   }
 }
 
@@ -215,15 +329,19 @@ function pushTabsState(ws: WindowState) {
             url: t.url,
             title: t.customTitle ?? t.title,
             pinned: t.pinned,
-            favicon: t.customFavicon ?? t.favicon
+            favicon: t.customFavicon ?? t.favicon,
+            groupId: t.groupId
           }
         : null
     })
-    .filter((t): t is TabRecord => t !== null)
+    .filter((t) => t !== null) as TabRecord[]
   ws.window?.webContents.send('tabs:state', {
     tabs: list,
     activeTabId: ws.activeTabId,
-    incognito: ws.incognito
+    incognito: ws.incognito,
+    openGroups: ws.openGroups.map((g) => ({ ...g })),
+    stripOrder: [...ws.stripOrder],
+    pinnedStripOrder: [...ws.pinnedStripOrder]
   })
 }
 
@@ -294,9 +412,18 @@ function createTab(ws: WindowState, url = START_URL): number {
       partition: ws.incognito ? INCOGNITO_PARTITION : NORMAL_PARTITION
     }
   })
+  // Нативный фон view под тему: дефолт #FFF вспыхивает белым
+  // до первой отрисовки страницы. Красим сразу при создании.
+  try {
+    view.setBackgroundColor(viewBackgroundFor(getSettingsSync().theme ?? 'dark'))
+  } catch {
+    // Старый Electron без setBackgroundColor у View — игнорим.
+  }
   const id = allocTabId()
   ws.tabs.set(id, { view, url, title: 'New Tab', pinned: false, favicon: '', retriedWithChromeUA: false, customTitle: undefined, customFavicon: undefined })
   ws.tabOrder.push(id)
+  // Новая вкладка без группы — в конец обычного ряда панели.
+  ensureStripToken(ws, `t:${id}`, false)
   ws.window.contentView.addChildView(view)
   // Начальная геометрия сразу, иначе view с нулевыми bounds до первого layout:update.
   layoutView(ws, view)
@@ -456,10 +583,15 @@ function setActiveTab(ws: WindowState, id: number) {
 function closeTab(ws: WindowState, id: number) {
   const rec = ws.tabs.get(id)
   if (!rec || !ws.window) return
+  const groupId = rec.groupId
   ws.window.contentView.removeChildView(rec.view)
   rec.view.webContents.close()
   ws.tabs.delete(id)
   ws.tabOrder = ws.tabOrder.filter((t) => t !== id)
+  // Вкладка без группы жила в едином ряду — убираем токен.
+  if (!groupId) removeStripToken(ws, `t:${id}`)
+  // Группа без вкладок исчезает с панели вкладок, шаблон остается в store.
+  if (groupId) pruneEmptyGroup(ws, groupId)
   if (ws.activeTabId === id) {
     ws.activeTabId = null
     if (ws.tabOrder.length > 0) setActiveTab(ws, ws.tabOrder[ws.tabOrder.length - 1])
@@ -470,6 +602,15 @@ function closeTab(ws: WindowState, id: number) {
   } else {
     pushTabsState(ws)
     persistSessionTabs(ws)
+  }
+}
+
+// Убрать пустые экземпляры групп: ни одной вкладки с таким instanceId.
+function pruneEmptyGroup(ws: WindowState, instanceId: string) {
+  const alive = [...ws.tabs.values()].some((t) => t.groupId === instanceId)
+  if (!alive) {
+    ws.openGroups = ws.openGroups.filter((g) => g.instanceId !== instanceId)
+    removeStripToken(ws, `g:${instanceId}`)
   }
 }
 
@@ -492,10 +633,13 @@ function detachTabToNewWindow(fromWs: WindowState, id: number, sx: number, sy: n
   ws.tabs.set(id, rec)
   ws.tabOrder.push(id)
   ws.activeTabId = id
+  // Detach уносит вкладку без группы — токен в ряд нового окна.
+  if (!rec.groupId) ensureStripToken(ws, `t:${id}`, rec.pinned)
 
   fromWs.window.contentView.removeChildView(rec.view)
   fromWs.tabs.delete(id)
   fromWs.tabOrder = fromWs.tabOrder.filter((t) => t !== id)
+  if (!rec.groupId) removeStripToken(fromWs, `t:${id}`)
   if (fromWs.activeTabId === id) {
     fromWs.activeTabId = null
     if (fromWs.tabOrder.length > 0) {
@@ -521,9 +665,12 @@ function createWindow(opts: { x?: number; y?: number; incognito?: boolean } = {}
     tabs: new Map(),
     tabOrder: [],
     activeTabId: null,
+    stripOrder: [],
+    pinnedStripOrder: [],
     uiInsets: { top: 110, bottom: 50, left: 0, right: 0 },
     incognito: opts.incognito ?? false,
-    contentFullscreen: false
+    contentFullscreen: false,
+    openGroups: []
   }
   // Восстановление геометрии: при rememberBounds стартуем с прошлого
   // размера/позиции, иначе дефолт 1600×900. Maximized — отдельным флагом.
@@ -742,20 +889,38 @@ function registerIpc() {
     return {
       tabs: ws.tabOrder.map((id) => {
         const t = ws.tabs.get(id)!
-        return { id, url: t.url, title: t.customTitle ?? t.title, pinned: t.pinned, favicon: t.customFavicon ?? t.favicon }
+        return { id, url: t.url, title: t.customTitle ?? t.title, pinned: t.pinned, favicon: t.customFavicon ?? t.favicon, groupId: t.groupId }
       }),
       activeTabId: ws.activeTabId,
-      incognito: ws.incognito
+      incognito: ws.incognito,
+      openGroups: ws.openGroups.map((g) => ({ ...g })),
+      stripOrder: [...ws.stripOrder],
+      pinnedStripOrder: [...ws.pinnedStripOrder]
     }
   })
   // Новый порядок вкладок после DnD в панели.
-  ipcMain.handle('tabs:reorder', (e, order: number[]) => {
+  // Старый формат (number[]) — только вкладки; новый (string[]) — токены
+  // 't:<id>'/'g:<instanceId>' единого ряда. Группы того же ранга, что табы.
+  ipcMain.handle('tabs:reorder', (e, order: (number | string)[]) => {
     const ws = wsOf(e)
-    const known = new Set(ws.tabs.keys())
-    ws.tabOrder = order.filter((id) => known.has(id))
-    for (const id of known) {
-      if (!ws.tabOrder.includes(id)) ws.tabOrder.push(id)
+    if (order.length > 0 && typeof order[0] === 'string') {
+      reorderStrip(ws, order as string[])
+    } else {
+      const known = new Set(ws.tabs.keys())
+      ws.tabOrder = (order as number[]).filter((id) => known.has(id))
+      for (const id of known) {
+        if (!ws.tabOrder.includes(id)) ws.tabOrder.push(id)
+      }
+      // Старый клиент без stripOrder: пересобрать ряд из tabOrder.
+      rebuildStripFromTabs(ws)
     }
+    pushTabsState(ws)
+    return true
+  })
+  // Перестановка корневых групп в едином ряду панели.
+  ipcMain.handle('tabs:reorder-groups', (e, order: string[]) => {
+    const ws = wsOf(e)
+    reorderStrip(ws, order)
     pushTabsState(ws)
     return true
   })
@@ -764,6 +929,7 @@ function registerIpc() {
     const rec = ws.tabs.get(id)
     if (!rec) throw new Error(`Tab ${id} not found`)
     rec.pinned = pinned
+    // Minimize не двигает вкладку между зонами — только флаг иконки.
     pushTabsState(ws)
     return true
   })
@@ -777,6 +943,13 @@ function registerIpc() {
     ws.tabOrder = ws.tabOrder.filter((t) => t !== newId)
     const at = ws.tabOrder.indexOf(id)
     ws.tabOrder.splice(at + 1, 0, newId)
+    // Дубликат без группы — токен рядом с оригиналом в том же ряду.
+    if (!ws.tabs.get(newId)?.groupId) {
+      const arr = rec.pinned ? ws.pinnedStripOrder : ws.stripOrder
+      removeStripToken(ws, `t:${newId}`)
+      const anchor = arr.indexOf(`t:${id}`)
+      arr.splice(anchor < 0 ? arr.length : anchor + 1, 0, `t:${newId}`)
+    }
     pushTabsState(ws)
     return newId
   })
@@ -801,22 +974,6 @@ function registerIpc() {
     pushTabsState(found.ws)
     return true
   })
-  // Системный диалог выбора файла иконки: возвращает file:// URL
-  // или null, если пользователь отменил. Только картинки.
-  ipcMain.handle('tabs:pick-icon-file', async (e) => {
-    const win = BrowserWindow.fromWebContents(e.sender) ?? undefined
-    const res = await dialog.showOpenDialog(win ?? (null as never), {
-      title: 'Choose tab icon',
-      properties: ['openFile'],
-      filters: [
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'] },
-        { name: 'All files', extensions: ['*'] }
-      ]
-    })
-    if (res.canceled || res.filePaths.length === 0) return null
-    const { pathToFileURL } = await import('url')
-    return pathToFileURL(res.filePaths[0]).href
-  })
   // Контекстное меню вкладки: якорь — точка клика относительно окна.
   // Пункты зависят от состояния (закреплена/нет), действия — через onSelect.
   ipcMain.on('tabs:context-menu', (e, payload: { id: number; x: number; y: number }) => {
@@ -826,13 +983,19 @@ function registerIpc() {
     const rec = ws.tabs.get(payload.id)
     if (!rec) return
     const id = payload.id
+    // Пункт добавления в группу — всегда: второй уровень показывает
+    // открытые группы + шаблоны из закладок (закрытые откроются).
+    // Remove — только для вкладки, которая реально в группе.
+    const inGroup = !!rec.groupId && ws.openGroups.some((g) => g.instanceId === rec.groupId)
     const items: OverlayMenuItem[] = [
       rec.pinned
-        ? { id: 'unpin', label: 'Unpin tab', icon: '📌' }
-        : { id: 'pin', label: 'Pin tab', icon: '📌' },
-      { id: 'duplicate', label: 'Duplicate tab', icon: '⧉' },
-      { id: 'rename', label: 'Rename tab…', icon: '✏️' },
-      { id: 'set-icon', label: 'Change icon…', icon: '🖼️' },
+        ? { id: 'unpin', label: 'Unminimize', icon: '↔️' }
+        : { id: 'pin', label: 'Minimize', icon: '🤏' },
+      { id: 'duplicate', label: 'Duplicate tab', icon: '👥' },
+      { id: 'add-to-group', label: 'Add to group', icon: '📁' },
+      ...(inGroup ? [{ id: 'remove-from-group', label: 'Remove from group', icon: '📂' }] : []),
+      { id: 'rename', label: 'Rename tab', icon: '✏️' },
+      { id: 'set-icon', label: 'Change icon', icon: '🖼️' },
       { id: 'copy-url', label: 'Copy URL', icon: '🔗' },
       { id: 'reload', label: 'Reload', icon: '🔄' },
       { id: 'close', label: 'Close tab', icon: '✕' }
@@ -862,56 +1025,122 @@ function registerIpc() {
           trec.view.webContents.reload()
         } else if (action === 'close') {
           closeTab(tws, id)
+        } else if (action === 'add-to-group' || action === 'remove-from-group') {
+          // Выбор группы — второй уровень меню: открытые экземпляры
+          // + шаблоны из закладок (закрытый шаблон откроется и примет вкладку).
+          const parent = tws.window
+          if (!parent) return
+          if (action === 'remove-from-group') {
+            const old = trec.groupId
+            trec.groupId = undefined
+            if (old) {
+              pruneEmptyGroup(tws, old)
+              removeStripToken(tws, `t:${id}`)
+              ensureStripToken(tws, `t:${id}`, trec.pinned)
+            }
+            pushTabsState(tws)
+            return
+          }
+          void getGroups().then((saved) => {
+            const live = findTab(id)
+            if (!live) return
+            // Все открытые корневые экземпляры (как на панели вкладок)
+            // + закрепленные шаблоны из закладок, даже закрытые.
+            // Иконка/название/цвет — как задано в шаблоне.
+            const byId = new Map(saved.map((g) => [g.id, g]))
+            const seen = new Set<string>()
+            const targets: OverlayMenuItem[] = []
+            for (const g of live.ws.openGroups) {
+              if (g.parentInstanceId || seen.has(g.savedId)) continue
+              const s = byId.get(g.savedId)
+              if (!s) continue
+              seen.add(g.savedId)
+              targets.push({
+                id: g.instanceId,
+                label: s.name,
+                icon: s.icon?.startsWith('emoji:') ? s.icon.replace(/^emoji:/, '') : s.icon || '📁',
+                color: s.color
+              })
+            }
+            for (const g of saved) {
+              if (!g.pinned || seen.has(g.id)) continue
+              seen.add(g.id)
+              targets.push({
+                id: `saved:${g.id}`,
+                label: `${g.name} (closed)`,
+                icon: g.icon?.startsWith('emoji:') ? g.icon.replace(/^emoji:/, '') : g.icon || '📁',
+                color: g.color
+              })
+            }
+            if (targets.length === 0) return
+            showOverlay(parent, {
+              kind: 'menu',
+              anchor: { x: Math.round(payload.x), y: Math.round(payload.y) },
+              items: targets,
+              incognito: false,
+              align: 'start',
+              onSelect: (targetId) => {
+                const cur = findTab(id)
+                if (!cur) return
+                // Закрытый шаблон: открываем экземпляр, вкладка — первой.
+                if (targetId.startsWith('saved:')) {
+                  const savedId = targetId.slice('saved:'.length)
+                  void getGroups().then((fresh) => {
+                    const s = fresh.find((g) => g.id === savedId)
+                    const l2 = findTab(id)?.ws
+                    if (!s || !l2) return
+                    const nid = `i${Date.now()}${Math.floor(Math.random() * 1000)}`
+                    l2.openGroups.push({ instanceId: nid, savedId: s.id, collapsed: false, pinned: false })
+                    ensureStripToken(l2, `g:${nid}`, false)
+                    const old = cur.rec.groupId
+                    cur.rec.groupId = nid
+                    removeStripToken(l2, `t:${id}`)
+                    l2.tabOrder = l2.tabOrder.filter((t) => t !== id)
+                    l2.tabOrder.push(id)
+                    if (old) pruneEmptyGroup(l2, old)
+                    pushTabsState(l2)
+                  })
+                  return
+                }
+                const old = cur.rec.groupId
+                cur.rec.groupId = targetId
+                removeStripToken(cur.ws, `t:${id}`)
+                cur.ws.tabOrder = cur.ws.tabOrder.filter((t) => t !== id)
+                let at = cur.ws.tabOrder.length
+                for (let i = cur.ws.tabOrder.length - 1; i >= 0; i--) {
+                  if (cur.ws.tabs.get(cur.ws.tabOrder[i])?.groupId === targetId) {
+                    at = i + 1
+                    break
+                  }
+                }
+                cur.ws.tabOrder.splice(at, 0, id)
+                if (old) pruneEmptyGroup(cur.ws, old)
+                pushTabsState(cur.ws)
+              }
+            })
+          })
         } else if (action === 'rename') {
           // Переименование — инлайн в самой вкладке (TabStrip),
           // без отдельных окон: шлем событие в renderer.
           tws.window?.webContents.send('tabs:tab-action', { id, action })
         } else if (action === 'set-icon') {
-          // Выбор иконки — модальный диалог по центру окна:
-          // URL (ввод) или Local file (системный диалог).
+          // Общий диалог иконки: URL, файл, emoji + отмена, верификация в main.
           const parent = tws.window
           if (!parent) return
           showOverlay(parent, {
-            kind: 'dialog',
+            kind: 'icon',
             anchor: { x: 0, y: 0 },
-            dialog: {
+            icon: {
               title: 'Tab icon',
-              buttons: [
-                { id: 'url', label: '🔗 URL' },
-                { id: 'file', label: '📁 Local file…' }
-              ]
+              placeholder: 'URL, file path or emoji (empty resets)',
+              initial: trec.customFavicon ?? ''
             },
-            onSelect: (raw) => {
-              const sep = raw.indexOf('::')
-              const btn = sep >= 0 ? raw.slice(0, sep) : raw
-              const text = sep >= 0 ? raw.slice(sep + 2) : ''
+            onIconApply: (icon) => {
               const live = findTab(id)
               if (!live) return
-              if (btn === 'file') {
-                void dialog
-                  .showOpenDialog(parent, {
-                    title: 'Choose tab icon',
-                    properties: ['openFile'],
-                    filters: [
-                      {
-                        name: 'Images',
-                        extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp']
-                      },
-                      { name: 'All files', extensions: ['*'] }
-                    ]
-                  })
-                  .then(async (res) => {
-                    if (res.canceled || res.filePaths.length === 0) return
-                    const { pathToFileURL } = await import('url')
-                    live.rec.customFavicon = pathToFileURL(res.filePaths[0]).href
-                    pushTabsState(live.ws)
-                  })
-              } else if (btn === 'url') {
-                // Пустой ввод = сброс к иконке сайта.
-                const value = text.trim()
-                live.rec.customFavicon = value ? value : undefined
-                pushTabsState(live.ws)
-              }
+              // Пустой ввод = сброс к иконке сайта.
+              live.rec.customFavicon = icon ? icon : undefined
+              pushTabsState(live.ws)
             }
           })
         }
@@ -919,14 +1148,15 @@ function registerIpc() {
     })
   })
   // Контекстное меню самой панели вкладок (мимо вкладок):
-  // создать вкладку, закрыть все вкладки окна.
+  // создать вкладку, создать группу, закрыть все вкладки окна.
   ipcMain.on('tabs:strip-context-menu', (e, payload: { x: number; y: number }) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     const ws = win ? getState(win) : undefined
     if (!win || !ws) return
     const items: OverlayMenuItem[] = [
       { id: 'new-tab', label: 'New tab', icon: '＋' },
-      { id: 'close-all', label: 'Close all tabs', icon: '✕' }
+      { id: 'new-group', label: 'New group', icon: '📁' },
+      { id: 'close-all', label: 'Close group', icon: '✕' }
     ]
     showOverlay(win, {
       kind: 'menu',
@@ -939,6 +1169,21 @@ function registerIpc() {
         if (!live) return
         if (action === 'new-tab') {
           createTab(live)
+        } else if (action === 'new-group') {
+          // Новая группа = шаблон + экземпляр с 1 вкладкой (минимум).
+          // createTab кладет токен в ряд, но вкладка сразу уходит в группу —
+          // чистим токен вкладки и кладем токен группы, иначе группа не видна.
+          void createSavedGroup({ name: 'Group', urls: [START_URL] }).then((saved) => {
+            const l2 = win && !win.isDestroyed() ? getState(win) : undefined
+            if (!l2) return
+            const instanceId = `i${Date.now()}${Math.floor(Math.random() * 1000)}`
+            l2.openGroups.push({ instanceId, savedId: saved.id, collapsed: false, pinned: false })
+            ensureStripToken(l2, `g:${instanceId}`, false)
+            const id = createTab(l2, START_URL)
+            l2.tabs.get(id)!.groupId = instanceId
+            removeStripToken(l2, `t:${id}`)
+            pushTabsState(l2)
+          })
         } else if (action === 'close-all') {
           // Закрываем по копии порядка: closeTab мутирует tabOrder.
           for (const id of [...live.tabOrder]) closeTab(live, id)
@@ -951,6 +1196,8 @@ function registerIpc() {
     const ws = createWindow({ incognito: true })
     return ws.window?.id ?? null
   })
+  // Группы вкладок: шаблоны в groups.json + открытые экземпляры в WindowState.
+  registerGroupsIpc(wsOf, { createTab, closeTab, setActiveTab, pushTabsState, pruneEmptyGroup, ensureStripToken, removeStripToken, moveStripToken })
   // Внутренние страницы в активной вкладке текущего окна.
   ipcMain.handle('tabs:open-history', (e) => {
     const ws = wsOf(e)
@@ -1134,6 +1381,7 @@ function registerIpc() {
     fromWs.window?.contentView.removeChildView(rec.view)
     fromWs.tabs.delete(id)
     fromWs.tabOrder = fromWs.tabOrder.filter((t) => t !== id)
+    if (!rec.groupId) removeStripToken(fromWs, `t:${id}`)
     if (fromWs.activeTabId === id) {
       fromWs.activeTabId = null
       if (fromWs.tabOrder.length > 0) {
@@ -1149,6 +1397,7 @@ function registerIpc() {
 
     target.tabs.set(id, rec)
     target.tabOrder.push(id)
+    if (!rec.groupId) ensureStripToken(target, `t:${id}`, rec.pinned)
     target.window.contentView.addChildView(rec.view)
     setActiveTab(target, id)
     return true
@@ -1253,6 +1502,15 @@ function registerIpc() {
     const overlay = BrowserWindow.fromWebContents(e.sender)
     if (overlay) resolveOverlaySubmit(overlay, raw)
     return true
+  })
+  // Общий диалог иконки: верификация источника, apply кладет иконку.
+  // Контекст (вкладка/группа) хранится в замыкании onSelect диалога.
+  ipcMain.handle('overlay:submit-icon', (e, buttonId: string, value: string) => {
+    const overlay = BrowserWindow.fromWebContents(e.sender)
+    if (!overlay) return false
+    const apply = (overlay as unknown as { __iconApply?: (icon: string) => void }).__iconApply
+    if (!apply) return false
+    return resolveOverlaySubmitIcon(overlay, buttonId, value, apply)
   })
   ipcMain.handle('overlay:dismiss', (e) => {
     const overlay = BrowserWindow.fromWebContents(e.sender)

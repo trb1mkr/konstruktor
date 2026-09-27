@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import BrowserMenu from './BrowserMenu.vue'
 import ToastStack from './ToastStack.vue'
 import PromptDialog from './PromptDialog.vue'
+import IconDialog from './IconDialog.vue'
 import FindBar from './FindBar.vue'
 
 // Корень оверлей-окна. Main передает payload через ?payload= в hash URL:
@@ -12,17 +13,19 @@ export interface MenuItem {
   id: string
   label: string
   icon: string
+  color?: string
   disabled?: boolean
 }
 
 interface OverlayPayload {
-  kind: 'menu' | 'toast' | 'dialog' | 'find'
+  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
   items?: MenuItem[]
   incognito?: boolean
   animations?: boolean
   theme?: string
   toast?: { title: string; body?: string; timeout?: number }
   dialog?: { title: string; placeholder?: string; initial?: string; buttons: { id: string; label: string }[] }
+  icon?: { title: string; placeholder?: string; initial?: string }
   find?: { query?: string }
 }
 
@@ -97,6 +100,10 @@ async function onSubmit(value: string) {
       v-else-if="payload?.kind === 'dialog' && payload.dialog"
       :dialog="payload.dialog"
       @submit="onSubmit"
+    />
+    <IconDialog
+      v-else-if="payload?.kind === 'icon' && payload.icon"
+      :icon="payload.icon"
     />
     <FindBar
       v-else-if="payload?.kind === 'find'"

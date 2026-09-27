@@ -10,6 +10,9 @@ export interface TabRecord {
   title: string
   pinned: boolean
   favicon: string
+  // Открытый экземпляр группы: ссылка на шаблон в groups.json.
+  // undefined = вкладка вне групп.
+  groupId?: string
 }
 
 export interface TabData {
@@ -26,22 +29,45 @@ export interface TabData {
   customFavicon?: string
   // Ключ последнего insertCSS темы (color-scheme) — для снятия при смене.
   themeKey?: string
+  // Открытый экземпляр группы: ссылка на шаблон в groups.json.
+  groupId?: string
 }
 
 // Состояние одного окна браузера. Вкладки живут внутри окна,
 // detach переносит view целиком в новое WindowState.
 // incognito: окно целиком приватное — in-memory партиция, без persist.
+export interface OpenGroup {
+  // id экземпляра: один шаблон можно открыть несколько раз,
+  // поэтому у каждого открытия свой instanceId.
+  instanceId: string
+  // id шаблона в groups.json — для имени, цвета, иконки.
+  savedId: string
+  collapsed: boolean
+  pinned: boolean
+  // Вложенность открытых экземпляров: instanceId родителя.
+  // undefined = группа верхнего уровня на панели вкладок.
+  parentInstanceId?: string
+}
+
 export interface WindowState {
   window: BrowserWindow | null
   tabs: Map<number, TabData>
   tabOrder: number[]
   activeTabId: number | null
+  // Единый порядок панели вкладок: токены корневых элементов.
+  // 't:<id>' — вкладка без группы, 'g:<instanceId>' — корневая группа.
+  // Группы того же ранга, что вкладки: таб и группа чередуются свободно.
+  stripOrder: string[]
+  // То же для закрепленной зоны слева (пины всегда слева, не смешиваются).
+  pinnedStripOrder: string[]
   uiInsets: { top: number; bottom: number; left: number; right: number }
   incognito: boolean
   // Контентный fullscreen: view растянута на все окно, панели скрыты.
   contentFullscreen: boolean
   // Исконные bounds окна до контентного fullscreen — для возврата.
   savedBounds?: Electron.Rectangle
+  // Открытые экземпляры групп этого окна (порядок = порядок на панели).
+  openGroups: OpenGroup[]
 }
 
 // Партиции: обычная persistent, инкогнито in-memory (без persist:).

@@ -17,7 +17,7 @@ button:focus-visible { outline: 1px solid #fff; outline-offset: 1px; }
   --shell-bg: #1e1e1e;
   --panel-bg: #252525;
   --panel-bottom-bg: #2b2b2b;
-  --bookmarks-bg: #242424;
+  --bookmarks-bg: #252525;
   --tab-bg: #333;
   --tab-active-bg: #1e1e1e;
   --tab-hover-bg: #3d3d3d;
@@ -35,7 +35,7 @@ button:focus-visible { outline: 1px solid #fff; outline-offset: 1px; }
   --shell-bg: #f2f2f2;
   --panel-bg: #e8e8e8;
   --panel-bottom-bg: #e0e0e0;
-  --bookmarks-bg: #e4e4e4;
+  --bookmarks-bg: #e8e8e8;
   --tab-bg: #d4d4d4;
   --tab-active-bg: #ffffff;
   --tab-hover-bg: #c4c4c4;
@@ -54,7 +54,7 @@ button:focus-visible { outline: 1px solid #fff; outline-offset: 1px; }
   --shell-bg: #232a35;
   --panel-bg: #2c3542;
   --panel-bottom-bg: #333e4e;
-  --bookmarks-bg: #2a323e;
+  --bookmarks-bg: #2c3542;
   --tab-bg: #3b4a5e;
   --tab-active-bg: #232a35;
   --tab-hover-bg: #4a5c74;
@@ -73,7 +73,7 @@ button:focus-visible { outline: 1px solid #fff; outline-offset: 1px; }
   --shell-bg: #1e1e1e;
   --panel-bg: #252525;
   --panel-bottom-bg: #2b2b2b;
-  --bookmarks-bg: #242424;
+  --bookmarks-bg: #252525;
   --tab-bg: #333;
   --tab-active-bg: #1e1e1e;
   --tab-hover-bg: #3d3d3d;

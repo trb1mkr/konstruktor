@@ -7,6 +7,10 @@ const overlayAPI = {
   dismiss: (): Promise<boolean> => ipcRenderer.invoke('overlay:dismiss'),
   // Диалог с полем ввода: значение уходит через overlay:submit.
   submit: (value: string): Promise<boolean> => ipcRenderer.invoke('overlay:submit', value),
+  // Общий диалог иконки: кнопка + ввод уходят через overlay:submit-icon.
+  // false = main отклонил источник (ошибка верификации), диалог не закрывается.
+  submitIcon: (buttonId: string, value: string): Promise<boolean> =>
+    ipcRenderer.invoke('overlay:submit-icon', buttonId, value),
   // Поиск по странице: запрос, навигация и закрытие панели.
   findQuery: (opts: {
     query: string

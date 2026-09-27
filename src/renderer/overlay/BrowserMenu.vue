@@ -23,7 +23,10 @@ const emit = defineEmits<{
       :disabled="item.disabled"
       @click="emit('select', item.id)"
     >
-      <span class="menu-icon">{{ item.icon }}</span>
+      <span class="menu-icon">
+        <span v-if="item.color" class="menu-dot" :style="{ background: item.color }" />
+        <template v-if="item.icon">{{ item.icon }}</template>
+      </span>
       <span>{{ item.label }}</span>
     </button>
   </div>
@@ -62,5 +65,7 @@ const emit = defineEmits<{
 }
 .menu-item:hover:not(:disabled) { background: var(--ov-hover); }
 .menu-item:disabled { color: #666; cursor: default; }
-.menu-icon { width: 20px; text-align: center; flex-shrink: 0; }
+.menu-icon { width: 20px; text-align: center; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; }
+/* Цвет группы в Add to group: точка как на панели закладок. */
+.menu-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 </style>

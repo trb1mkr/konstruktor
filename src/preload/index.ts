@@ -7,12 +7,35 @@ export interface TabInfo {
   title: string
   pinned: boolean
   favicon: string
+  groupId?: string
+}
+
+export interface OpenGroupInfo {
+  instanceId: string
+  savedId: string
+  collapsed: boolean
+  pinned: boolean
+  parentInstanceId?: string
+}
+
+export interface SavedGroupInfo {
+  id: string
+  name: string
+  icon: string
+  color: string
+  urls: string[]
+  children: string[]
+  pinned: boolean
 }
 
 export interface TabsState {
   tabs: TabInfo[]
   activeTabId: number | null
   incognito: boolean
+  openGroups: OpenGroupInfo[]
+  // Единый порядок панели: 't:<id>' вкладка, 'g:<instanceId>' группа.
+  stripOrder: string[]
+  pinnedStripOrder: string[]
 }
 
 export interface UiInsets {
@@ -34,6 +57,8 @@ const browserAPI = {
   reload: (): Promise<boolean> => ipcRenderer.invoke('tabs:reload'),
   // Новый порядок после DnD в панели.
   reorderTabs: (order: number[]): Promise<boolean> => ipcRenderer.invoke('tabs:reorder', order),
+  // Единый ряд: токены 't:<id>'/'g:<instanceId>' — вкладки и группы одного ранга.
+  reorderStrip: (order: string[]): Promise<boolean> => ipcRenderer.invoke('tabs:reorder', order),
   pinTab: (id: number, pinned: boolean): Promise<boolean> =>
     ipcRenderer.invoke('tabs:pin', id, pinned),
   duplicateTab: (id: number): Promise<number> => ipcRenderer.invoke('tabs:duplicate', id),
@@ -41,7 +66,6 @@ const browserAPI = {
     ipcRenderer.invoke('tabs:rename', id, title),
   setTabIcon: (id: number, icon: string): Promise<boolean> =>
     ipcRenderer.invoke('tabs:set-icon', id, icon),
-  pickIconFile: (): Promise<string | null> => ipcRenderer.invoke('tabs:pick-icon-file'),
   // Контекстное меню вкладки: точка клика относительно content-области окна.
   // rename/set-icon выбираются в меню, а значения спрашивает renderer-диалог.
   tabContextMenu: (id: number, pos: { x: number; y: number }): void =>
@@ -50,6 +74,39 @@ const browserAPI = {
   // создать вкладку, закрыть все.
   tabStripContextMenu: (pos: { x: number; y: number }): void =>
     ipcRenderer.send('tabs:strip-context-menu', pos),
+  // Группы вкладок: шаблоны в groups.json + открытые экземпляры.
+  listGroups: (): Promise<SavedGroupInfo[]> => ipcRenderer.invoke('groups:list'),
+  createGroup: (input?: { name?: string; icon?: string; color?: string; pinned?: boolean }): Promise<{ saved: SavedGroupInfo; instanceId: string }> =>
+    ipcRenderer.invoke('groups:create', input ?? {}),
+  openGroup: (savedId: string): Promise<string> => ipcRenderer.invoke('groups:open', savedId),
+  renameGroup: (savedId: string, name: string): Promise<SavedGroupInfo | null> =>
+    ipcRenderer.invoke('groups:rename', savedId, name),
+  setGroupColor: (savedId: string, color: string): Promise<SavedGroupInfo | null> =>
+    ipcRenderer.invoke('groups:set-color', savedId, color),
+  setGroupIcon: (savedId: string, icon: string): Promise<SavedGroupInfo | null> =>
+    ipcRenderer.invoke('groups:set-icon', savedId, icon),
+  deleteGroup: (savedId: string): Promise<boolean> => ipcRenderer.invoke('groups:delete', savedId),
+  toggleGroupCollapse: (instanceId: string): Promise<boolean> =>
+    ipcRenderer.invoke('groups:toggle-collapse', instanceId),
+  toggleGroupPin: (instanceId: string): Promise<boolean> =>
+    ipcRenderer.invoke('groups:toggle-pin', instanceId),
+  toggleGroupBookmarkPin: (savedId: string): Promise<SavedGroupInfo | null> =>
+    ipcRenderer.invoke('groups:toggle-bookmark-pin', savedId),
+  nestGroup: (childSavedId: string, parentSavedId: string): Promise<SavedGroupInfo | null> =>
+    ipcRenderer.invoke('groups:nest', childSavedId, parentSavedId),
+  unnestGroup: (childSavedId: string, parentSavedId: string): Promise<SavedGroupInfo | null> =>
+    ipcRenderer.invoke('groups:unnest', childSavedId, parentSavedId),
+  addTabToGroup: (tabId: number, instanceId: string): Promise<boolean> =>
+    ipcRenderer.invoke('groups:add-tab', tabId, instanceId),
+  removeTabFromGroup: (tabId: number): Promise<boolean> =>
+    ipcRenderer.invoke('groups:remove-tab', tabId),
+  ungroup: (instanceId: string): Promise<boolean> => ipcRenderer.invoke('groups:ungroup', instanceId),
+  closeGroupTabs: (instanceId: string): Promise<boolean> =>
+    ipcRenderer.invoke('groups:close-tabs', instanceId),
+  moveGroupTabs: (fromInstance: string, toInstance: string): Promise<boolean> =>
+    ipcRenderer.invoke('groups:move-tabs', fromInstance, toInstance),
+  groupContextMenu: (instanceId: string, pos: { x: number; y: number }): void =>
+    ipcRenderer.send('groups:context-menu', { instanceId, ...pos }),
   // Вынос вкладки за окно — новое окно браузера с этой вкладкой.
   detachTab: (id: number, pos: { x: number; y: number }): Promise<boolean> =>
     ipcRenderer.invoke('tabs:detach', id, pos),
@@ -92,6 +149,13 @@ const browserAPI = {
     const listener = (_e: unknown, state: TabsState) => cb(state)
     ipcRenderer.on('tabs:state', listener as never)
     return () => ipcRenderer.removeListener('tabs:state', listener as never)
+  },
+  // Моментальная синхронизация шаблонов групп: main шлет свежий
+  // список после каждой мутации store, shell не ждет tabs:state.
+  onGroupsChanged: (cb: (groups: SavedGroupInfo[]) => void): (() => void) => {
+    const listener = (_e: unknown, groups: SavedGroupInfo[]) => cb(groups)
+    ipcRenderer.on('groups:changed', listener as never)
+    return () => ipcRenderer.removeListener('groups:changed', listener as never)
   },
   onNavigated: (cb: (info: { id: number; url: string }) => void): (() => void) => {
     const listener = (_e: unknown, info: { id: number; url: string }) => cb(info)

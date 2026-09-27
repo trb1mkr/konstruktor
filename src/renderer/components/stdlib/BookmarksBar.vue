@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { tabs, activeTabId, isIncognito } from '../../core/useTabs'
+import { tabs, activeTabId, isIncognito, savedGroups, openGroups } from '../../core/useTabs'
 
+// Панель закладок: звезда, закладки, закрепленные группы вкладок.
+// Незакрепленная группа здесь не показывается — она живет только
+// на панели вкладок, пока открыта. Закрепленная видна всегда,
+// даже когда все ее вкладки закрыты.
 interface Bookmark {
   title: string
   url: string
@@ -28,7 +32,8 @@ function addCurrent() {
   if (isIncognito.value) return
   const current = tabs.value.find((t) => t.id === activeTabId.value)
   if (!current || !current.url || current.url === 'about:blank') return
-  if (current.url.startsWith('konstruktor://')) return
+  // Внутренние страницы (konstruktor://) тоже можно в закладки:
+  // открываются через navigate в активной вкладке, как обычные URL.
   // Тоггл: повторный клик по закрашенной звезде снимает закладку.
   if (bookmarks.value.some((b) => b.url === current.url)) {
     remove(current.url)
@@ -56,6 +61,28 @@ function remove(url: string) {
 
 async function open(url: string) {
   if (activeTabId.value !== null) await window.browserAPI.navigate(activeTabId.value, url)
+}
+
+// Только закрепленные шаблоны: незакрепленные на панели закладок не живут.
+const pinnedGroups = computed(() => savedGroups.value.filter((g) => g.pinned))
+
+// Открыть шаблон группы: новый экземпляр, можно несколько одинаковых.
+async function openSavedGroup(savedId: string) {
+  await window.browserAPI.openGroup(savedId)
+}
+
+// Сколько экземпляров шаблона сейчас открыто (бейдж на кнопке).
+function openCount(savedId: string) {
+  return openGroups.value.filter((g) => g.savedId === savedId).length
+}
+
+// Меню шаблона на панели закладок больше нет: ЛКМ открывает экземпляр,
+// ПКМ удаляет шаблон (открытые экземпляры разгруппировываются, вкладки живут).
+async function deleteSavedGroup(savedId: string) {
+  await window.browserAPI.deleteGroup(savedId)
+  await window.browserAPI.listGroups().then((groups) => {
+    savedGroups.value = groups
+  }).catch(() => undefined)
 }
 
 // Колесо над панелью: вертикальное колесо листает закладки
@@ -92,6 +119,22 @@ onMounted(load)
       <span v-else class="bm-fav fallback">◉</span>
       {{ b.title }}
     </button>
+    <!-- Закрепленные группы: ЛКМ открывает экземпляр, ПКМ удаляет шаблон. -->
+    <button
+      v-for="g in pinnedGroups"
+      :key="g.id"
+      class="bm-item bm-group"
+      :style="{ '--group-color': g.color }"
+      :title="`${g.name} — ${g.urls.length} tabs`"
+      @click="openSavedGroup(g.id)"
+      @contextmenu.prevent="deleteSavedGroup(g.id)"
+    >
+      <span class="bm-group-dot" />
+      <img v-if="g.icon && !g.icon.startsWith('emoji:')" class="bm-fav" :src="g.icon" alt="" draggable="false" />
+      <span v-else class="bm-fav fallback">{{ g.icon.replace(/^emoji:/, '') || '📁' }}</span>
+      {{ g.name }}
+      <span v-if="openCount(g.id) > 0" class="bm-group-count">{{ openCount(g.id) }}</span>
+    </button>
     <slot />
   </div>
 </template>
@@ -102,7 +145,7 @@ onMounted(load)
   gap: 4px;
   align-items: center;
   padding: 4px 8px;
-  background: var(--bookmarks-bg);
+  background: var(--panel-bg);
   /* Переполнение — только колесом: скроллбары скрыты всегда,
      даже при сотне закладок или экстремально узком окне. */
   overflow-x: auto;
@@ -142,4 +185,20 @@ onMounted(load)
 .bm-add:hover { background: var(--btn-hover-bg); color: var(--text); }
 /* Закрашенная звезда = страница в закладках. */
 .bm-add.active { color: #ffd75e; }
+/* Сохраненная группа: цветная точка + счетчик открытых экземпляров. */
+.bm-group { border: 1px solid color-mix(in srgb, var(--group-color, #888888) 45%, transparent); }
+.bm-group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--group-color, #888888);
+  flex-shrink: 0;
+}
+.bm-group-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--btn-bg);
+  border-radius: 8px;
+  padding: 0 6px;
+}
 </style>

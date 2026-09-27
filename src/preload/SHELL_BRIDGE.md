@@ -4,7 +4,7 @@
 
 ## 🧩 Состав
 
-`src/preload/index.ts` отдает `browserAPI` для shell: вкладки, навигация, окна, layout, меню, тосты, поиск, настройки. `src/preload/overlay.ts` отдает `overlayAPI` для overlay-окна: выбор, ввод, поиск. Оба идут через `contextBridge` с `contextIsolation`.
+`src/preload/index.ts` отдает `browserAPI` для shell: вкладки, навигация, окна, layout, меню, тосты, поиск, настройки, группы (`groups:*`, `reorderStrip`, `stripOrder`/`pinnedStripOrder` в `TabsState`). `src/preload/overlay.ts` отдает `overlayAPI` для overlay-окна: выбор, ввод, поиск. Оба идут через `contextBridge` с `contextIsolation`.
 
 ## 🔀 Направления
 

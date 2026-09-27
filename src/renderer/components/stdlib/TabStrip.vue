@@ -1,20 +1,203 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { tabs, activeTabId } from '../../core/useTabs'
+import { tabs, activeTabId, openGroups, stripOrder, pinnedStripOrder } from '../../core/useTabs'
+import TabGroupNode from './TabGroupNode.vue'
 
 // Панель вкладок: DnD-перестановка, detach в новое окно, pin, favicon.
 // Закрепленные всегда слева, только иконка сайта без лишних меток.
+// Единый ряд: вкладки и корневые группы одного ранга — таб и группа
+// чередуются свободно по stripOrder/pinnedStripOrder из main.
+// Группы: горизонтальный узел (заголовок слева, вкладки справа),
+// вложенность через parentInstanceId, сворачивание, pin.
 // Правый клик — контекстное меню (оверлей-окно): pin, duplicate,
 // rename (инлайн в самой вкладке), set-icon (диалог по центру окна),
-// copy URL, reload, close.
+// copy URL, reload, close. Клик по заголовку группы — меню группы.
 const strip = ref<HTMLElement | null>(null)
 const dragId = ref<number | null>(null)
+// Перетаскиваемая корневая группа (единый ряд): instanceId.
+const dragGroupId = ref<string | null>(null)
 const dragOverId = ref<number | null>(null)
+// Подсветка дропа группы: токен ряда 't:<id>' или 'g:<instanceId>'.
+const dragOverToken = ref<string | null>(null)
+// Примерная ширина перетаскиваемого элемента: на неё сдвигается цель,
+// освобождая место под дроп. Замеряем в dragstart по реальному DOM.
+const dragWidth = ref(0)
 // true пока чужой drag (из другого окна) висит над панелью — подсветка слияния.
 const mergeHover = ref(false)
 
-const pinnedTabs = computed(() => tabs.value.filter((t) => t.pinned))
-const normalTabs = computed(() => tabs.value.filter((t) => !t.pinned))
+// Карты для быстрого поиска по токенам ряда.
+const tabById = computed(() => new Map(tabs.value.map((t) => [t.id, t])))
+const groupByInstance = computed(() => new Map(openGroups.value.map((g) => [g.instanceId, g])))
+
+// Favicon вкладки: emoji-иконка (emoji:...) рисуется текстом,
+// остальное — картинкой. Без этого emoji ломал <img>.
+function faviconIsEmoji(favicon?: string) {
+  return !!favicon && favicon.startsWith('emoji:')
+}
+
+function faviconEmoji(favicon?: string) {
+  return (favicon ?? '').replace(/^emoji:/, '')
+}
+
+// Единый ряд закрепленной зоны: только закрепленные группы.
+// Minimize вкладок не двигает их: свернутые остаются в общем ряду на месте.
+const pinnedStrip = computed<string[]>(() => {
+  if (pinnedStripOrder.value.length > 0) return pinnedStripOrder.value.filter((t) => t.startsWith('g:'))
+  return openGroups.value.filter((g) => g.pinned && !g.parentInstanceId).map((g) => `g:${g.instanceId}`)
+})
+
+// Единый ряд обычной зоны: все вкладки без группы (включая minimize) + обычные группы.
+const normalStrip = computed<string[]>(() => {
+  if (stripOrder.value.length > 0) return stripOrder.value
+  const groups = openGroups.value.filter((g) => !g.pinned && !g.parentInstanceId).map((g) => `g:${g.instanceId}`)
+  const tbs = tabs.value.filter((t) => !t.groupId).map((t) => `t:${t.id}`)
+  return [...groups, ...tbs]
+})
+
+// Заголовок группы: клик — свернуть/развернуть, правый клик — меню группы.
+function toggleGroup(instanceId: string) {
+  void window.browserAPI.toggleGroupCollapse(instanceId)
+}
+
+function openGroupMenu(instanceId: string, e: MouseEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  window.browserAPI.groupContextMenu(instanceId, {
+    x: Math.round(e.clientX),
+    y: Math.round(e.clientY)
+  })
+}
+
+// Дроп вкладки на заголовок группы: положить вкладку в группу.
+// Перетаскивание групп (dragGroupId) сюда не относится — им занимается
+// единый ряд (onStripItemDrop), поэтому групповой drag игнорим и даем
+// событию всплыть до корня узла для reorder.
+function onGroupDragOver(e: DragEvent) {
+  if (dragGroupId.value !== null) return
+  if (dragId.value === null) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+async function onGroupDrop(instanceId: string, e: DragEvent) {
+  if (dragGroupId.value !== null) return
+  e.preventDefault()
+  e.stopPropagation()
+  const from = dragId.value
+  dragId.value = null
+  dragOverId.value = null
+  dragOverToken.value = null
+  if (from === null) return
+  await window.browserAPI.addTabToGroup(from, instanceId)
+}
+
+// --- DnD единого ряда: вкладки и группы одного ранга ---
+
+// Старт перетаскивания корневой группы: метка своя, как у вкладок.
+function onGroupDragStart(instanceId: string, e: DragEvent) {
+  dragGroupId.value = instanceId
+  dragId.value = null
+  const el = e.currentTarget instanceof HTMLElement ? e.currentTarget : null
+  dragWidth.value = el?.offsetWidth || 160
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('application/x-konstruktor-group', instanceId)
+    e.dataTransfer.setData('text/plain', `konstruktor-group:${instanceId}`)
+  }
+}
+
+// Подсветка позиции дропа в едином ряду: токен элемента под курсором.
+// Вкладку можно бросить на группу (встанет перед ней), группу — на вкладку.
+// Повторный dragover того же токена игнорим: иначе каждый mousemove
+// переписывает токен и перезапускает transition margin — отсюда прыгание.
+// Токен «липкий»: когда цель сдвигается вправо на ширину перетаскиваемого,
+// курсор оказывается левее цели — над зазором, исходником или соседом.
+// Переключать токен в этот момент нельзя, иначе цель возвращается назад
+// и начинается цикл прыгания. Поэтому dragover над самим перетаскиваемым
+// токен не меняет (но preventDefault делаем, чтобы drop сработал), а дроп
+// всегда идет по липкому токену, а не по элементу под курсором.
+function onStripItemDragOver(token: string, e: DragEvent) {
+  if (dragId.value === null && dragGroupId.value === null) return
+  const moving = dragId.value !== null ? `t:${dragId.value}` : `g:${dragGroupId.value!}`
+  // Над самим перетаскиваемым: токен не меняем, дроп разрешаем.
+  if (token === moving) {
+    e.preventDefault()
+    e.stopPropagation()
+    return
+  }
+  // Группа на саму себя — не подсвечиваем.
+  if (dragGroupId.value !== null && token === `g:${dragGroupId.value}`) return
+  if (dragOverToken.value === token) {
+    e.preventDefault()
+    e.stopPropagation()
+    return
+  }
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dragOverToken.value = token
+}
+
+// Общий коммит перестановки единого ряда: вставить moving ПЕРЕД target.
+// Возвращает false если двигать нечего (чуждая зона, тот же индекс).
+async function commitStripOrder(target: string, moving: string): Promise<boolean> {
+  const pinned = pinnedStrip.value.includes(target)
+  const arr = [...(pinned ? pinnedStrip.value : normalStrip.value)]
+  if (!arr.includes(moving)) return false
+  const fromIdx = arr.indexOf(moving)
+  let toIdx = arr.indexOf(target)
+  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return false
+  // Движение вперед: после вырезки индексы левеют — целимся перед целью.
+  const [item] = arr.splice(fromIdx, 1)
+  if (fromIdx < toIdx) toIdx -= 1
+  arr.splice(toIdx, 0, item)
+  const next = pinned
+    ? { pinned: arr, normal: [...normalStrip.value] }
+    : { pinned: [...pinnedStrip.value], normal: arr }
+  await window.browserAPI.reorderStrip([...next.pinned, ...next.normal])
+  return true
+}
+
+// Дроп на элемент единого ряда: вставляем перетаскиваемое ПЕРЕД целью.
+// Вкладка на вкладку/группу, группа на группу/вкладку — ранг одинаковый.
+// Цель берем из липкого токена: после сдвига курсор уже не над целью
+// (над зазором/исходником), а событие drop приходит элементу под курсором.
+async function onStripItemDrop(token: string, e: DragEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  const fromTab = dragId.value
+  const fromGroup = dragGroupId.value
+  const target = dragOverToken.value ?? token
+  dragId.value = null
+  dragGroupId.value = null
+  dragOverId.value = null
+  dragOverToken.value = null
+  dragWidth.value = 0
+  if (fromTab === null && fromGroup === null) return
+  const moving = fromTab !== null ? `t:${fromTab}` : `g:${fromGroup!}`
+  await commitStripOrder(target, moving)
+}
+
+// Ширина плейсхолдера под дроп: ширина перетаскиваемого + зазор ряда.
+// Плейсхолдер — отдельный прозрачный элемент ПЕРЕД целью: он занимает
+// место в layout, поэтому цель не возвращается назад, а курсор над зазором
+// продолжает относиться к цели (dragover плейсхолдера = тот же токен).
+function gapWidthFor(token: string): number {
+  if (dragOverToken.value !== token || dragWidth.value <= 0) return 0
+  if (dragId.value === null && dragGroupId.value === null) return 0
+  if (dragId.value !== null && token === `t:${dragId.value}`) return 0
+  if (dragGroupId.value !== null && token === `g:${dragGroupId.value}`) return 0
+  return Math.round(dragWidth.value + 4)
+}
+function onGroupDragEnd(e: DragEvent) {
+  const gid = dragGroupId.value
+  dragGroupId.value = null
+  dragOverToken.value = null
+  dragWidth.value = 0
+  mergeHover.value = false
+  if (gid === null || !strip.value) return
+  // Группы не detach'атся — просто сбрасываем состояние.
+}
 
 async function activate(id: number) {
   await window.browserAPI.activateTab(id)
@@ -151,6 +334,9 @@ function shortTitle(t: { title: string; url: string }) {
 
 function onDragStart(id: number, e: DragEvent) {
   dragId.value = id
+  dragGroupId.value = null
+  const el = e.currentTarget instanceof HTMLElement ? e.currentTarget : null
+  dragWidth.value = el?.offsetWidth || 160
   if (e.dataTransfer) {
     e.dataTransfer.effectAllowed = 'move'
     // Формат метки свой: чужие окна отличают наш drag от файлов/текста.
@@ -167,28 +353,31 @@ function onDragOver(id: number, e: DragEvent) {
 }
 
 function onDragLeave() {
+  // Зазор НЕ сбрасываем: margin сдвигает цель вправо, курсор оказывается
+  // в зазоре -> dragleave -> сброс -> возврат -> dragover -> цикл прыгания.
+  // Токен живет до дропа/dragend/ухода с панели, поэтому сдвиг стабилен.
   dragOverId.value = null
 }
 
 async function onDrop(id: number, e: DragEvent) {
   e.preventDefault()
+  e.stopPropagation()
   const from = dragId.value
   dragOverId.value = null
+  dragOverToken.value = null
+  dragWidth.value = 0
   dragId.value = null
   if (from === null || from === id) return
-  // Закрепленные и обычные не смешиваются: дроп только внутри своей группы.
-  const fromPinned = tabs.value.find((t) => t.id === from)?.pinned ?? false
-  const toPinned = tabs.value.find((t) => t.id === id)?.pinned ?? false
-  if (fromPinned !== toPinned) return
-  const group = (fromPinned ? pinnedTabs.value : normalTabs.value).map((t) => t.id)
-  const fromIdx = group.indexOf(from)
-  const toIdx = group.indexOf(id)
+  // Единый ряд: дроп вкладки на вкладку = вставка перед целью.
+  // Minimize зону не меняет: все вкладки в обычном ряду, двигаются свободно.
+  const arr = [...normalStrip.value]
+  const moving = `t:${from}`
+  const target = `t:${id}`
+  const fromIdx = arr.indexOf(moving)
+  const toIdx = arr.indexOf(target)
   if (fromIdx < 0 || toIdx < 0) return
-  group.splice(toIdx, 0, ...group.splice(fromIdx, 1))
-  // Склеиваем обратно: закрепленные всегда слева.
-  const other = fromPinned ? normalTabs.value.map((t) => t.id) : pinnedTabs.value.map((t) => t.id)
-  const next = fromPinned ? [...group, ...other] : [...other, ...group]
-  await window.browserAPI.reorderTabs(next)
+  arr.splice(toIdx, 0, ...arr.splice(fromIdx, 1))
+  await window.browserAPI.reorderStrip([...pinnedStrip.value, ...arr])
 }
 
 // Вынос за окно: если pointerup случился вне панели — detach в новое окно.
@@ -196,7 +385,10 @@ async function onDrop(id: number, e: DragEvent) {
 async function onDragEnd(e: DragEvent) {
   const id = dragId.value
   dragId.value = null
+  dragGroupId.value = null
   dragOverId.value = null
+  dragOverToken.value = null
+  dragWidth.value = 0
   mergeHover.value = false
   if (id === null || !strip.value) return
   // dropEffect 'none' = дроп приняли в другом окне (merge) — новое не создаем.
@@ -220,8 +412,14 @@ function dragHasTab(e: DragEvent): boolean {
 }
 
 function onStripDragOver(e: DragEvent) {
-  // Свой drag внутри панели обрабатывают onDragOver вкладок.
-  if (dragId.value !== null) return
+  // Свой drag над зазором между элементами (после сдвига цели курсор
+  // уже не над целью): разрешаем дроп, иначе браузер его заблокирует.
+  // Подсветку слияния при этом не включаем — это не чужое окно.
+  if (dragId.value !== null || dragGroupId.value !== null) {
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    return
+  }
   if (!dragHasTab(e)) return
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
@@ -231,11 +429,27 @@ function onStripDragOver(e: DragEvent) {
 function onStripDragLeave(e: DragEvent) {
   if (strip.value && e.relatedTarget instanceof Node && strip.value.contains(e.relatedTarget)) return
   mergeHover.value = false
+  // Ушли с панели целиком — зазор больше не нужен.
+  dragOverToken.value = null
 }
 
 async function onStripDrop(e: DragEvent) {
   mergeHover.value = false
-  if (dragId.value !== null) return
+  // Свой drag, отпущенный в зазоре между элементами (мимо всех токенов):
+  // дроп идет по липкому токену — иначе перестановка терялась бы.
+  if (dragId.value !== null || dragGroupId.value !== null) {
+    e.preventDefault()
+    const target = dragOverToken.value
+    const moving =
+      dragId.value !== null ? `t:${dragId.value}` : `g:${dragGroupId.value!}`
+    dragId.value = null
+    dragGroupId.value = null
+    dragOverId.value = null
+    dragOverToken.value = null
+    dragWidth.value = 0
+    if (target) await commitStripOrder(target, moving)
+    return
+  }
   e.preventDefault()
   const raw =
     e.dataTransfer?.getData('application/x-konstruktor-tab') ??
@@ -261,58 +475,165 @@ async function onStripDrop(e: DragEvent) {
     @contextmenu.prevent="openStripMenu($event)"
     @wheel.prevent="onWheel($event)"
   >
-    <!-- Закрепленные: только иконка сайта, слева -->
-    <div
-      v-for="t in pinnedTabs"
-      :key="t.id"
-      class="tab pinned"
-      :class="{ active: t.id === activeTabId, dragover: t.id === dragOverId }"
-      :title="shortTitle(t)"
-      draggable="true"
-      @click="activate(t.id)"
-      @dblclick="togglePin(t.id, $event)"
-      @contextmenu.prevent="openContext(t.id, $event)"
-      @dragstart="onDragStart(t.id, $event)"
-      @dragover="onDragOver(t.id, $event)"
-      @dragleave="onDragLeave"
-      @drop="onDrop(t.id, $event)"
-      @dragend="onDragEnd($event)"
-    >
-      <img v-if="t.favicon" class="favicon" :src="t.favicon" alt="" draggable="false" />
-      <span v-else class="favicon fallback">◉</span>
-    </div>
-    <!-- Обычные вкладки -->
-    <div
-      v-for="t in normalTabs"
-      :key="t.id"
-      class="tab"
-      :class="{ active: t.id === activeTabId, dragover: t.id === dragOverId }"
-      draggable="true"
-      @click="activate(t.id)"
-      @dblclick="togglePin(t.id, $event)"
-      @contextmenu.prevent="openContext(t.id, $event)"
-      @dragstart="onDragStart(t.id, $event)"
-      @dragover="onDragOver(t.id, $event)"
-      @dragleave="onDragLeave"
-      @drop="onDrop(t.id, $event)"
-      @dragend="onDragEnd($event)"
-    >
-      <img v-if="t.favicon" class="favicon" :src="t.favicon" :title="t.url" alt="" draggable="false" />
-      <span v-else class="favicon fallback" :title="t.url">◉</span>
-      <span v-if="renamingId !== t.id" class="tab-title">{{ shortTitle(t) }}</span>
-      <input
-        v-else
-        ref="renameInput"
-        v-model="renameValue"
-        class="tab-rename"
-        spellcheck="false"
-        @click.stop
-        @keydown="onRenameKey"
-        @blur="cancelRename"
+    <!-- Единый ряд закрепленной зоны: вкладки и группы одного ранга.
+         Токен 't:<id>' — вкладка-иконка, 'g:<instanceId>' — узел группы. -->
+    <template v-for="token in pinnedStrip" :key="token">
+      <!-- Плейсхолдер зазора: прозрачный элемент перед целью дропа.
+           Держит место в layout — цель не возвращается назад, пока
+           курсор над зазором. Dragover/drop на нём = тот же токен. -->
+      <div
+        v-if="gapWidthFor(token) > 0"
+        class="drop-gap"
+        :style="{ width: gapWidthFor(token) + 'px' }"
+        @dragover="onStripItemDragOver(token, $event)"
+        @drop="onStripItemDrop(token, $event)"
       />
-      <button class="tab-close" @click="close(t.id, $event)">×</button>
-    </div>
+      <TabGroupNode
+        v-if="token.startsWith('g:') && groupByInstance.has(token.slice(2))"
+        :instance-id="token.slice(2)"
+        :depth="0"
+        :drag-over-id="dragOverId"
+        :renaming-id="renamingId"
+        :rename-value="renameValue"
+        :class="{ 'strip-dragover': dragOverToken === token }"
+        draggable="true"
+        @activate="activate($event)"
+        @close="close($event.id, $event.ev)"
+        @toggle-pin="togglePin($event.id, $event.ev)"
+        @open-context="openContext($event.id, $event.ev)"
+        @open-group-menu="openGroupMenu($event.instanceId, $event.ev)"
+        @toggle-group="toggleGroup($event)"
+        @drag-start="onDragStart($event.id, $event.ev)"
+        @drag-over="onDragOver($event.id, $event.ev)"
+        @drag-leave="onDragLeave()"
+        @drop="onDrop($event.id, $event.ev)"
+        @drag-end="onDragEnd($event)"
+        @group-drag-over="onGroupDragOver($event)"
+        @group-drop="onGroupDrop($event.instanceId, $event.ev)"
+        @group-drag-start="onGroupDragStart($event.instanceId, $event.ev)"
+        @group-drag-end="onGroupDragEnd($event)"
+        @strip-item-drag-over="onStripItemDragOver(token, $event)"
+        @strip-item-drop="onStripItemDrop(token, $event)"
+        @rename-key="onRenameKey($event)"
+        @rename-input="renameValue = $event"
+        @cancel-rename="cancelRename()"
+        @register-input="renameInput = $event"
+      />
+      <div
+        v-else-if="token.startsWith('t:') && tabById.has(Number(token.slice(2)))"
+        class="tab"
+        :class="{ active: Number(token.slice(2)) === activeTabId, dragover: Number(token.slice(2)) === dragOverId, 'strip-dragover': dragOverToken === token, minimized: tabById.get(Number(token.slice(2)))!.pinned }"
+        :title="shortTitle(tabById.get(Number(token.slice(2)))!)"
+        draggable="true"
+        @click="activate(Number(token.slice(2)))"
+        @dblclick="togglePin(Number(token.slice(2)), $event)"
+        @contextmenu.prevent="openContext(Number(token.slice(2)), $event)"
+        @dragstart="onDragStart(Number(token.slice(2)), $event)"
+        @dragover="onStripItemDragOver(token, $event)"
+        @dragleave="onDragLeave"
+        @drop="onStripItemDrop(token, $event)"
+        @dragend="onDragEnd($event)"
+      >
+        <img v-if="tabById.get(Number(token.slice(2)))!.favicon && !faviconIsEmoji(tabById.get(Number(token.slice(2)))!.favicon)" class="favicon" :src="tabById.get(Number(token.slice(2)))!.favicon" alt="" draggable="false" />
+        <span v-else-if="faviconIsEmoji(tabById.get(Number(token.slice(2)))!.favicon)" class="favicon fallback">{{ faviconEmoji(tabById.get(Number(token.slice(2)))!.favicon) }}</span>
+        <span v-else class="favicon fallback">◉</span>
+        <!-- Minimize: только иконка, вкладка остается на своём месте. -->
+        <template v-if="!tabById.get(Number(token.slice(2)))!.pinned">
+          <span v-if="renamingId !== Number(token.slice(2))" class="tab-title">{{ shortTitle(tabById.get(Number(token.slice(2)))!) }}</span>
+          <input
+            v-else
+            ref="renameInput"
+            v-model="renameValue"
+            class="tab-rename"
+            spellcheck="false"
+            @click.stop
+            @keydown="onRenameKey"
+            @blur="cancelRename"
+          />
+          <button class="tab-close" @click="close(Number(token.slice(2)), $event)">×</button>
+        </template>
+      </div>
+    </template>
+    <!-- Единый ряд обычной зоны: вкладка, потом группа — любой порядок. -->
+    <template v-for="token in normalStrip" :key="token">
+      <div
+        v-if="gapWidthFor(token) > 0"
+        class="drop-gap"
+        :style="{ width: gapWidthFor(token) + 'px' }"
+        @dragover="onStripItemDragOver(token, $event)"
+        @drop="onStripItemDrop(token, $event)"
+      />
+      <TabGroupNode
+        v-if="token.startsWith('g:') && groupByInstance.has(token.slice(2))"
+        :instance-id="token.slice(2)"
+        :depth="0"
+        :drag-over-id="dragOverId"
+        :renaming-id="renamingId"
+        :rename-value="renameValue"
+        :class="{ 'strip-dragover': dragOverToken === token }"
+        draggable="true"
+        @activate="activate($event)"
+        @close="close($event.id, $event.ev)"
+        @toggle-pin="togglePin($event.id, $event.ev)"
+        @open-context="openContext($event.id, $event.ev)"
+        @open-group-menu="openGroupMenu($event.instanceId, $event.ev)"
+        @toggle-group="toggleGroup($event)"
+        @drag-start="onDragStart($event.id, $event.ev)"
+        @drag-over="onDragOver($event.id, $event.ev)"
+        @drag-leave="onDragLeave()"
+        @drop="onDrop($event.id, $event.ev)"
+        @drag-end="onDragEnd($event)"
+        @group-drag-over="onGroupDragOver($event)"
+        @group-drop="onGroupDrop($event.instanceId, $event.ev)"
+        @group-drag-start="onGroupDragStart($event.instanceId, $event.ev)"
+        @group-drag-end="onGroupDragEnd($event)"
+        @strip-item-drag-over="onStripItemDragOver(token, $event)"
+        @strip-item-drop="onStripItemDrop(token, $event)"
+        @rename-key="onRenameKey($event)"
+        @rename-input="renameValue = $event"
+        @cancel-rename="cancelRename()"
+        @register-input="renameInput = $event"
+      />
+      <div
+        v-else-if="token.startsWith('t:') && tabById.has(Number(token.slice(2)))"
+        class="tab"
+        :class="{ active: Number(token.slice(2)) === activeTabId, dragover: Number(token.slice(2)) === dragOverId, 'strip-dragover': dragOverToken === token, minimized: tabById.get(Number(token.slice(2)))!.pinned }"
+        draggable="true"
+        @click="activate(Number(token.slice(2)))"
+        @dblclick="togglePin(Number(token.slice(2)), $event)"
+        @contextmenu.prevent="openContext(Number(token.slice(2)), $event)"
+        @dragstart="onDragStart(Number(token.slice(2)), $event)"
+        @dragover="onStripItemDragOver(token, $event)"
+        @dragleave="onDragLeave"
+        @drop="onStripItemDrop(token, $event)"
+        @dragend="onDragEnd($event)"
+      >
+        <img v-if="tabById.get(Number(token.slice(2)))!.favicon && !faviconIsEmoji(tabById.get(Number(token.slice(2)))!.favicon)" class="favicon" :src="tabById.get(Number(token.slice(2)))!.favicon" :title="tabById.get(Number(token.slice(2)))!.url" alt="" draggable="false" />
+        <span v-else-if="faviconIsEmoji(tabById.get(Number(token.slice(2)))!.favicon)" class="favicon fallback" :title="tabById.get(Number(token.slice(2)))!.url">{{ faviconEmoji(tabById.get(Number(token.slice(2)))!.favicon) }}</span>
+        <span v-else class="favicon fallback" :title="tabById.get(Number(token.slice(2)))!.url">◉</span>
+        <!-- Minimize: только иконка, вкладка остается на своём месте. -->
+        <template v-if="!tabById.get(Number(token.slice(2)))!.pinned">
+          <span v-if="renamingId !== Number(token.slice(2))" class="tab-title">{{ shortTitle(tabById.get(Number(token.slice(2)))!) }}</span>
+          <input
+            v-else
+            ref="renameInput"
+            v-model="renameValue"
+            class="tab-rename"
+            spellcheck="false"
+            @click.stop
+            @keydown="onRenameKey"
+            @blur="cancelRename"
+          />
+          <button class="tab-close" @click="close(Number(token.slice(2)), $event)">×</button>
+        </template>
+      </div>
+    </template>
     <button class="tab-add" title="New tab" @click="add()">+</button>
+    <!-- Заполнитель от кнопки + до кнопок окна: правый клик открывает
+         меню панели. no-drag обязателен: на drag-области Windows отдает
+         правый клик системному меню окна и renderer его не получает
+         (поэтому меню открывалось только на кнопке +). -->
+    <div class="strip-filler" @contextmenu.prevent="openStripMenu($event)" />
     <slot />
   </div>
 </template>
@@ -356,9 +677,27 @@ async function onStripDrop(e: DragEvent) {
 .tab:not(.active):hover { background: var(--tab-hover-bg); }
 .tab.active:hover { background: var(--tab-hover-bg); }
 .tab.dragover { outline: 2px solid #fff; outline-offset: -2px; }
+/* Подсветка позиции дропа в едином ряду: перетаскиваемое встанет перед этим элементом. */
+.strip-dragover { outline: none; }
+/* Плейсхолдер зазора: прозрачный элемент перед целью, держит место.
+   Курсор над зазором попадает в него, а не в соседа — цель не прыгает. */
+.drop-gap {
+  flex: 0 0 auto;
+  align-self: stretch;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px dashed var(--text-faint);
+  opacity: 0.55;
+  -webkit-app-region: no-drag;
+  animation: gap-grow 120ms ease;
+}
+@keyframes gap-grow {
+  from { opacity: 0; }
+}
 /* Зона слияния: окно подсвечивается когда чужую вкладку тащат над панелью. */
 .tabstrip.merge-target { outline: 2px dashed #7dd87d; outline-offset: -4px; background: #2a332a; }
-.tab.pinned { max-width: 64px; padding: 6px 8px; }
+/* Minimize: вкладка схлопывается до иконки, но остается на своём месте. */
+.tab.minimized { max-width: 64px; padding: 6px 8px; }
 .favicon { width: 16px; height: 16px; flex-shrink: 0; border-radius: 3px; }
 .favicon.fallback { font-size: 12px; color: #888; text-align: center; }
 .tab-title { overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
@@ -391,6 +730,16 @@ async function onStripDrop(e: DragEvent) {
   padding: 6px 12px;
   cursor: pointer;
   flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+/* Заполнитель пустого места панели до кнопок окна: тянет окно
+   (как пустая область titlebar) и отдает правый клик меню панели. */
+.strip-filler {
+  flex: 1;
+  align-self: stretch;
+  min-width: 12px;
+  /* no-drag: на drag-области правый клик уходит системному меню окна,
+     renderer его не видит. Таскать окно можно за titlebar выше/ниже. */
   -webkit-app-region: no-drag;
 }
 </style>

@@ -1,4 +1,4 @@
-import { BrowserWindow, nativeTheme } from 'electron'
+import { BrowserWindow, dialog, nativeTheme } from 'electron'
 import { join } from 'path'
 import { getSettingsSync } from './settingsStore'
 
@@ -14,6 +14,8 @@ export interface OverlayMenuItem {
   id: string
   label: string
   icon: string
+  // Цвет группы (для Add to group): точка-индикатор как на панели закладок.
+  color?: string
   disabled?: boolean
 }
 
@@ -22,15 +24,67 @@ export interface OverlayDialogButton {
   label: string
 }
 
+// Общий диалог иконки: одно поле ввода + 4 кнопки (URL, файл, emoji, отмена).
+// В поле вводится любой из трех источников, при нажатии тип верифицируется:
+// URL (http/file/data/konstruktor), локальный путь к файлу (-> file://),
+// одиночный emoji (-> emoji:). Пустой ввод = сброс иконки.
+export interface IconDialogState {
+  title: string
+  placeholder?: string
+  initial?: string
+}
+
+// Верификация источника иконки: нормализует ввод к хранимому виду.
+// Возвращает { ok: true, icon } или { ok: false, error } для тоста/повтора.
+export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok: false; error: string } {
+  const text = raw.trim()
+  // Пустой ввод = сброс к иконке по умолчанию.
+  if (!text) return { ok: true, icon: '' }
+  // Уже нормализованный emoji-префикс.
+  if (text.startsWith('emoji:')) {
+    return text.length > 'emoji:'.length
+      ? { ok: true, icon: text }
+      : { ok: false, error: 'Empty emoji' }
+  }
+  // URL-источники: http(s), file://, data:, внутренние страницы.
+  if (/^(https?:|file:|data:|konstruktor:)/i.test(text)) return { ok: true, icon: text }
+  // Локальный путь к файлу (C:\..., /..., .\...): проверяем существование.
+  if (/^([a-zA-Z]:[\\/]|\\\\|\.{0,2}[\\/]|\/)/.test(text) || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(text)) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require('fs') as typeof import('fs')
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { pathToFileURL } = require('url') as typeof import('url')
+      const unquoted = text.replace(/^"|"$/g, '')
+      if (!fs.existsSync(unquoted)) return { ok: false, error: 'File not found' }
+      return { ok: true, icon: pathToFileURL(unquoted).href }
+    } catch {
+      return { ok: false, error: 'Cannot read file' }
+    }
+  }
+  // Одиночный emoji (1-2 графемы, без пробелов и точек): храним с префиксом.
+  // Иначе TabGroupNode примет его за URL (iconIsUrl) и сломает <img>.
+  const graphemes = [...text]
+  if (!/\s/.test(text) && !text.includes('.') && graphemes.length <= 4 && /\p{Extended_Pictographic}|\p{Emoji}/u.test(text)) {
+    return { ok: true, icon: `emoji:${text}` }
+  }
+  return { ok: false, error: 'Enter a URL, file path or emoji' }
+}
+
 interface OverlayRequest {
-  kind: 'menu' | 'toast' | 'dialog' | 'find'
+  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
   anchor: { x: number; y: number }
   items?: OverlayMenuItem[]
   incognito?: boolean
   toast?: { title: string; body?: string; timeout?: number }
   dialog?: { title: string; buttons: OverlayDialogButton[] }
+  icon?: IconDialogState
   find?: { query?: string }
   onSelect?: (id: string) => void
+  // Контекст общего диалога иконки: apply вызывается после верификации.
+  // Хранится и в request, и дублируется на overlay (__iconApply) —
+  // хендлер overlay:submit-icon находит его по sender-окну.
+  onIconApply?: (icon: string) => void
   // Выравнивание меню относительно якоря: 'end' — правый край меню
   // у якоря (кнопка ☰), 'start' — левый край у якоря (контекстное меню).
   align?: 'end' | 'start'
@@ -44,6 +98,9 @@ const MENU_ITEM_H = 40
 const MENU_PAD = 20
 const DIALOG_W = 320
 const DIALOG_H = 190
+// Общий диалог иконки: поле + 4 кнопки, выше обычного диалога.
+const ICON_W = 340
+const ICON_H = 250
 // Панель поиска: ширина как у VS Code, высота под одну строку + отступ.
 const FIND_W = 380
 const FIND_H = 56
@@ -116,23 +173,27 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
       ? MENU_W
       : request.kind === 'dialog'
         ? DIALOG_W
-        : request.kind === 'find'
-          ? FIND_W
-          : 360
+        : request.kind === 'icon'
+          ? ICON_W
+          : request.kind === 'find'
+            ? FIND_W
+            : 360
   const height =
     request.kind === 'menu'
       ? menuHeight(request.items ?? [], request.incognito ?? false)
       : request.kind === 'dialog'
         ? DIALOG_H
-        : request.kind === 'find'
-          ? FIND_H
-          : 120
+        : request.kind === 'icon'
+          ? ICON_H
+          : request.kind === 'find'
+            ? FIND_H
+            : 120
 
-  // Диалог — по центру родителя. Поиск — правый верхний угол ОБЛАСТИ
+  // Диалог и диалог иконки — по центру родителя. Поиск — правый верхний угол ОБЛАСТИ
   // СТРАНИЦЫ (ниже верхней панели UI): anchor несет uiInsets.top.
   // Меню — от якоря (align end/start). Клампим в границы родителя.
   const align = request.align ?? 'end'
-  const centered = request.kind === 'dialog'
+  const centered = request.kind === 'dialog' || request.kind === 'icon'
   const isFind = request.kind === 'find'
   const x = centered
     ? parentBounds.x + Math.max(0, Math.round((parentBounds.width - width) / 2))
@@ -182,6 +243,11 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   })
 
   active.set(parent.id, { overlay, request })
+  // Контекст диалога иконки дублируем на окно: хендлер overlay:submit-icon
+  // находит apply по sender-окну, request при этом недоступен напрямую.
+  if (request.kind === 'icon' && request.onIconApply) {
+    ;(overlay as unknown as { __iconApply?: (icon: string) => void }).__iconApply = request.onIconApply
+  }
 
   const cleanup = () => {
     if (active.get(parent.id)?.overlay === overlay) active.delete(parent.id)
@@ -204,9 +270,11 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
       ? { kind: 'menu', items: request.items, incognito: request.incognito, animations, theme }
       : request.kind === 'dialog'
         ? { kind: 'dialog', dialog: request.dialog, animations, theme }
-        : request.kind === 'find'
-          ? { kind: 'find', find: request.find ?? {}, animations, theme }
-          : { kind: 'toast', toast: request.toast, animations, theme }
+        : request.kind === 'icon'
+          ? { kind: 'icon', icon: request.icon, animations, theme }
+          : request.kind === 'find'
+            ? { kind: 'find', find: request.find ?? {}, animations, theme }
+            : { kind: 'toast', toast: request.toast, animations, theme }
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     void overlay.loadURL(overlayUrl(payload))
@@ -290,4 +358,74 @@ export function resolveOverlaySubmit(overlay: BrowserWindow, raw: string): void 
       return
     }
   }
+}
+
+// Общий диалог иконки: верификация источника перед применением.
+// Возвращает true если применено (диалог закроется), false если
+// источник отклонен (диалог остается, renderer показывает ошибку).
+// Кнопка file открывает системный диалог выбора картинки и подставляет
+// путь в поле через executeJavaScript — submit идет обычным путем.
+export function resolveOverlaySubmitIcon(
+  overlay: BrowserWindow,
+  buttonId: string,
+  value: string,
+  apply: (icon: string) => void
+): boolean {
+  for (const [parentId, entry] of active) {
+    if (entry.overlay !== overlay) continue
+    if (buttonId === 'file') {
+      const parent = BrowserWindow.fromId(parentId)
+      void dialog
+        .showOpenDialog(parent ?? (null as never), {
+          title: 'Choose icon',
+          properties: ['openFile'],
+          filters: [
+            { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'] },
+            { name: 'All files', extensions: ['*'] }
+          ]
+        })
+        .then(async (res) => {
+          if (res.canceled || res.filePaths.length === 0 || overlay.isDestroyed()) return
+          const { pathToFileURL } = await import('url')
+          const href = pathToFileURL(res.filePaths[0]).href
+          // Подставляем путь в поле ввода: пользователь жмет URL/Emoji/Enter сам.
+          const escaped = href.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+          void overlay.webContents
+            .executeJavaScript(
+              `(()=>{const i=document.querySelector('.dialog-input');if(!i)return false;i.focus();i.value='${escaped}';i.dispatchEvent(new Event('input',{bubbles:true}));return true})()`
+            )
+            .catch(() => undefined)
+        })
+      return true
+    }
+    // Кнопки url/emoji: верифицируем ввод как соответствующий тип.
+    let check: { ok: true; icon: string } | { ok: false; error: string }
+    if (buttonId === 'emoji') {
+      const text = value.trim()
+      check =
+        text && [...text].length <= 4 && /\p{Extended_Pictographic}|\p{Emoji}/u.test(text)
+          ? { ok: true as const, icon: `emoji:${text.replace(/^emoji:/, '')}` }
+          : { ok: false as const, error: 'Not an emoji' }
+    } else {
+      check = verifyIconSource(value)
+      // Кнопка URL не принимает голый emoji: для него есть своя кнопка.
+      if (check.ok && check.icon.startsWith('emoji:')) {
+        check = { ok: false, error: 'Use Emoji button for emoji' }
+      }
+    }
+    if (!check.ok) return false
+    apply(check.icon)
+    const parent = BrowserWindow.fromId(parentId)
+    if (parent) closeOverlay(parent)
+    else {
+      active.delete(parentId)
+      try {
+        overlay.close()
+      } catch {
+        // Игнорим.
+      }
+    }
+    return true
+  }
+  return false
 }

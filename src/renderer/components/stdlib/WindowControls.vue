@@ -63,7 +63,7 @@ async function close() {
   flex-shrink: 0;
   /* Кнопки не тащат окно — клики идут в Vue. */
   -webkit-app-region: no-drag;
-  padding: 2px 2px 2px 0;
+  padding: 0;
 }
 .wc-btn {
   width: 36px;

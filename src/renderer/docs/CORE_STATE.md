@@ -4,7 +4,7 @@
 
 ## 🧩 Вкладки
 
-`useTabs.ts` держит `tabs`, `activeTabId`, `isIncognito`. Стартовая загрузка идет через `listTabs`, дальше состояние пушится через `tabs:state` и `tabs:navigated`. Инкогнито красит shell темным акцентом.
+`useTabs.ts` держит `tabs`, `activeTabId`, `isIncognito`, `openGroups`, `savedGroups`, `stripOrder`, `pinnedStripOrder`. Стартовая загрузка идет через `listTabs`, дальше состояние пушится через `tabs:state` и `tabs:navigated`. Шаблоны групп синкаются через `groups:changed`. Инкогнито красит shell темным акцентом.
 
 ## 🎨 Тема
 

@@ -47,6 +47,13 @@ export function applyThemeToViews(theme: string): void {
       if (rec.url.startsWith('konstruktor://')) {
         rec.view.webContents.executeJavaScript(buildPageThemeScript(pageTheme)).catch(() => undefined)
       }
+      // Нативный фон view под тему: иначе при смене темы старая view
+      // вспыхнет белым до первой отрисовки после переключения.
+      try {
+        rec.view.setBackgroundColor(viewBackgroundFor(theme))
+      } catch {
+        // Старый Electron без setBackgroundColor у View — игнорим.
+      }
     }
   }
 }
@@ -62,4 +69,14 @@ export function applyThemeToTab(rec: TabData, theme: string, setKey: (k: string)
   } catch {
     // CSS еще не готов — применится при следующей смене темы.
   }
+}
+
+// Нативный фон view до первой отрисовки страницы: иначе новая вкладка
+// на пару миллисекунд вспыхивает белым (#FFF по умолчанию).
+// Цвет совпадает с --pg-bg внутренних страниц, чтобы переход был бесшовным.
+export function viewBackgroundFor(theme: string): string {
+  const page = effectivePageTheme(theme)
+  if (page === 'light') return '#f2f2f2'
+  if (page === 'slate') return '#232a35'
+  return '#141414'
 }

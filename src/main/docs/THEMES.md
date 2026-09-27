@@ -23,7 +23,7 @@ flowchart LR
 
 ## 🌐 Сайты
 
-`browserTheme.ts` прокидывает `color-scheme` через `insertCSS` во все view. Работает только для сайтов, уважающих `prefers-color-scheme`. Смена темы ОС при `system` пересчитывается через `nativeTheme.updated`.
+`browserTheme.ts` прокидывает `color-scheme` через `insertCSS` во все view. Работает только для сайтов, уважающих `prefers-color-scheme`. Смена темы ОС при `system` пересчитывается через `nativeTheme.updated`. Нативный фон view красится через `viewBackgroundFor` + `setBackgroundColor` при создании вкладки и при смене темы: иначе пустая view вспыхивает белым до первой отрисовки.
 
 ## 📄 Внутренние страницы
 
