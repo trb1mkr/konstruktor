@@ -22,8 +22,15 @@ flowchart LR
 src/
   main/                 ядро: окна, вкладки, overlay, поиск, темы, stores
     docs/               документация систем main
-    index.ts            окна, вкладки, layout, IPC-регистрация
+    index.ts            IPC-роутер, связка deps без циклов
     browserState.ts     типы WindowState/TabData, пул окон
+    windowsManager.ts   окна, layout, fullscreen, bounds, сессии
+    tabsManager.ts      вкладки, detach/attach, pushTabsState
+    stripOrder.ts       единый ряд t:/g:, инвариант
+    groupsManager.ts    роутер groups:*
+    groupsInstances.ts  экземпляры групп, collapse/pin
+    groupsMenu.ts       контекстное меню группы
+    iconVerify.ts       верификация иконок URL/file/emoji
     browserTheme.ts     color-scheme сайтов, dataset.theme страниц
     findManager.ts      состояние поиска, findInPage и custom-поиск
     findScripts.ts      builder-функции JS-инъекций
@@ -47,7 +54,7 @@ src/
     docs/               документация shell и UI
     App.vue             корневой layout, panel-top и panel-bottom
     core/               useTabs, useTheme, layoutEngine, registry
-    components/stdlib/  TabStrip, AddressBar, BookmarksBar и другие
+    components/stdlib/  TabStrip, TabGroupNode, tabShared, useStripDrag и другие
     overlay/            BrowserMenu, ToastStack, PromptDialog, FindBar
     layouts/            пресеты ClassicTop, Minimal
 docs/

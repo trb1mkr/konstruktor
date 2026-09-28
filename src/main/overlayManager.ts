@@ -1,6 +1,8 @@
 import { BrowserWindow, dialog, nativeTheme } from 'electron'
 import { join } from 'path'
 import { getSettingsSync } from './settingsStore'
+import { verifyIconSource, verifyEmojiButton, fileToIconDataUrl } from './iconVerify'
+import { buildIconErrorScript } from './findScripts'
 
 // Менеджер оверлей-окон: прозрачные frameless-окна поверх основного,
 // в них DOM-меню/тосты/попапы любой темы. Замена системному Menu.popup,
@@ -34,42 +36,9 @@ export interface IconDialogState {
   initial?: string
 }
 
-// Верификация источника иконки: нормализует ввод к хранимому виду.
-// Возвращает { ok: true, icon } или { ok: false, error } для тоста/повтора.
-export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok: false; error: string } {
-  const text = raw.trim()
-  // Пустой ввод = сброс к иконке по умолчанию.
-  if (!text) return { ok: true, icon: '' }
-  // Уже нормализованный emoji-префикс.
-  if (text.startsWith('emoji:')) {
-    return text.length > 'emoji:'.length
-      ? { ok: true, icon: text }
-      : { ok: false, error: 'Empty emoji' }
-  }
-  // URL-источники: http(s), file://, data:, внутренние страницы.
-  if (/^(https?:|file:|data:|konstruktor:)/i.test(text)) return { ok: true, icon: text }
-  // Локальный путь к файлу (C:\..., /..., .\...): проверяем существование.
-  if (/^([a-zA-Z]:[\\/]|\\\\|\.{0,2}[\\/]|\/)/.test(text) || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(text)) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const fs = require('fs') as typeof import('fs')
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { pathToFileURL } = require('url') as typeof import('url')
-      const unquoted = text.replace(/^"|"$/g, '')
-      if (!fs.existsSync(unquoted)) return { ok: false, error: 'File not found' }
-      return { ok: true, icon: pathToFileURL(unquoted).href }
-    } catch {
-      return { ok: false, error: 'Cannot read file' }
-    }
-  }
-  // Одиночный emoji (1-2 графемы, без пробелов и точек): храним с префиксом.
-  // Иначе TabGroupNode примет его за URL (iconIsUrl) и сломает <img>.
-  const graphemes = [...text]
-  if (!/\s/.test(text) && !text.includes('.') && graphemes.length <= 4 && /\p{Extended_Pictographic}|\p{Emoji}/u.test(text)) {
-    return { ok: true, icon: `emoji:${text}` }
-  }
-  return { ok: false, error: 'Enter a URL, file path or emoji' }
-}
+// Верификация источника иконки живет в iconVerify.ts (чистая функция,
+// тестируется без Electron). Здесь — реэкспорт для старых импортов.
+export { verifyIconSource } from './iconVerify'
 
 interface OverlayRequest {
   kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
@@ -92,6 +61,9 @@ interface OverlayRequest {
 
 // parentId -> { overlay, request }
 const active = new Map<number, { overlay: BrowserWindow; request: OverlayRequest }>()
+
+// Флаг: открыт ли системный диалог (файл/сохранение) — чтобы игнорировать blur/move/resize
+let isSystemDialogOpen = false
 
 const MENU_W = 260
 const MENU_ITEM_H = 40
@@ -253,9 +225,15 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     if (active.get(parent.id)?.overlay === overlay) active.delete(parent.id)
   }
   overlay.on('closed', cleanup)
-  overlay.on('blur', () => closeOverlay(parent))
+  overlay.on('blur', () => {
+    if (isSystemDialogOpen) return
+    closeOverlay(parent)
+  })
   // Родитель двигается — оверлей протух, закрываем.
-  const closeOnParent = () => closeOverlay(parent)
+  const closeOnParent = () => {
+    if (isSystemDialogOpen) return
+    closeOverlay(parent)
+  }
   parent.on('move', closeOnParent)
   parent.on('resize', closeOnParent)
   parent.on('minimize', closeOnParent)
@@ -365,18 +343,19 @@ export function resolveOverlaySubmit(overlay: BrowserWindow, raw: string): void 
 // источник отклонен (диалог остается, renderer показывает ошибку).
 // Кнопка file открывает системный диалог выбора картинки и подставляет
 // путь в поле через executeJavaScript — submit идет обычным путем.
-export function resolveOverlaySubmitIcon(
+export async function resolveOverlaySubmitIcon(
   overlay: BrowserWindow,
   buttonId: string,
   value: string,
   apply: (icon: string) => void
-): boolean {
+): Promise<boolean> {
   for (const [parentId, entry] of active) {
     if (entry.overlay !== overlay) continue
     if (buttonId === 'file') {
       const parent = BrowserWindow.fromId(parentId)
-      void dialog
-        .showOpenDialog(parent ?? (null as never), {
+      try {
+        isSystemDialogOpen = true
+        const res = await dialog.showOpenDialog(parent ?? (null as never), {
           title: 'Choose icon',
           properties: ['openFile'],
           filters: [
@@ -384,31 +363,30 @@ export function resolveOverlaySubmitIcon(
             { name: 'All files', extensions: ['*'] }
           ]
         })
-        .then(async (res) => {
-          if (res.canceled || res.filePaths.length === 0 || overlay.isDestroyed()) return
-          const { pathToFileURL } = await import('url')
-          const href = pathToFileURL(res.filePaths[0]).href
-          // Подставляем путь в поле ввода: пользователь жмет URL/Emoji/Enter сам.
-          const escaped = href.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-          void overlay.webContents
-            .executeJavaScript(
-              `(()=>{const i=document.querySelector('.dialog-input');if(!i)return false;i.focus();i.value='${escaped}';i.dispatchEvent(new Event('input',{bubbles:true}));return true})()`
-            )
-            .catch(() => undefined)
-        })
-      return true
+        isSystemDialogOpen = false
+        if (res.canceled || !res.filePaths || res.filePaths.length === 0 || overlay.isDestroyed()) {
+          return true
+        }
+        const conv = fileToIconDataUrl(res.filePaths[0])
+        if (!conv.ok) {
+          const { buildIconErrorScript } = await import('./findScripts')
+          await overlay.webContents.executeJavaScript(buildIconErrorScript(conv.error))
+          return true
+        }
+        apply(conv.icon)
+        const p = BrowserWindow.fromId(parentId)
+        if (p) closeOverlay(p)
+        return true
+      } catch (err) {
+        isSystemDialogOpen = false
+        return true
+      }
     }
-    // Кнопки url/emoji: верифицируем ввод как соответствующий тип.
     let check: { ok: true; icon: string } | { ok: false; error: string }
     if (buttonId === 'emoji') {
-      const text = value.trim()
-      check =
-        text && [...text].length <= 4 && /\p{Extended_Pictographic}|\p{Emoji}/u.test(text)
-          ? { ok: true as const, icon: `emoji:${text.replace(/^emoji:/, '')}` }
-          : { ok: false as const, error: 'Not an emoji' }
+      check = verifyEmojiButton(value)
     } else {
       check = verifyIconSource(value)
-      // Кнопка URL не принимает голый emoji: для него есть своя кнопка.
       if (check.ok && check.icon.startsWith('emoji:')) {
         check = { ok: false, error: 'Use Emoji button for emoji' }
       }
@@ -420,7 +398,7 @@ export function resolveOverlaySubmitIcon(
     else {
       active.delete(parentId)
       try {
-        overlay.close()
+        await overlay.close()
       } catch {
         // Игнорим.
       }

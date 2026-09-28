@@ -120,6 +120,15 @@ export function buildStepCustomFindScript(forward: boolean): string {
   )
 }
 
+// Ошибка диалога иконки: показать текст в .dialog-error без закрытия.
+export function buildIconErrorScript(text: string): string {
+  const t = JSON.stringify(text)
+  return (
+    `(()=>{const e=document.querySelector('.dialog-error');` +
+    `if(e){e.textContent=${t};e.style.display='block';}return true})()`
+  )
+}
+
 // Снятие подсветки при закрытии панели или смене режима поиска.
 export function buildClearCustomFindScript(): string {
   return (

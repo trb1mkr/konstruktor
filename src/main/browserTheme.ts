@@ -59,7 +59,9 @@ export function applyThemeToViews(theme: string): void {
 }
 
 // Тема одной новой вкладки — сразу текущая, без ожидания смены настроек.
-export function applyThemeToTab(rec: TabData, theme: string, setKey: (k: string) => void): void {
+export type ThemeKeySetter = (k: string) => void
+
+export function applyThemeToTab(rec: TabData, theme: string, setKey: ThemeKeySetter): void {
   try {
     const scheme = effectiveColorScheme(theme ?? 'dark')
     void rec.view.webContents

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { tabs, activeTabId, openGroups, savedGroups } from '../../core/useTabs'
+import { faviconIsEmoji, faviconEmoji, shortTitle, iconIsUrl, groupIconText, wheelDelta } from './tabShared'
 
 // Рекурсивный узел группы: заголовок слева, содержимое справа в одну линию.
 // Вложенные группы рисуются тем же компонентом через <TabGroupNode>.
@@ -50,24 +51,6 @@ const childGroups = computed(() =>
   openGroups.value.filter((g) => g.parentInstanceId === props.instanceId)
 )
 
-function shortTitle(t: { title: string; url: string }) {
-  return t.title || t.url || 'New Tab'
-}
-
-function iconIsUrl(icon?: string) {
-  return !!icon && !icon.startsWith('emoji:')
-}
-
-// Favicon вкладки: emoji-иконка (emoji:...) рисуется текстом,
-// остальное — картинкой. Без этого emoji ломал <img>.
-function faviconIsEmoji(favicon?: string) {
-  return !!favicon && favicon.startsWith('emoji:')
-}
-
-function faviconEmoji(favicon?: string) {
-  return (favicon ?? '').replace(/^emoji:/, '')
-}
-
 // Колесо над телом группы: листает вкладки группы горизонтально,
 // не трогая скролл всей панели. Скроллбара нет, листание — только так.
 const body = ref<HTMLElement | null>(null)
@@ -75,7 +58,7 @@ const body = ref<HTMLElement | null>(null)
 function onBodyWheel(e: WheelEvent) {
   const el = body.value
   if (!el) return
-  const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  const dx = wheelDelta(e)
   if (dx === 0) return
   // Листаем только если внутри есть куда: иначе отдаем панели.
   const can = el.scrollWidth > el.clientWidth + 1
@@ -110,7 +93,7 @@ function onBodyWheel(e: WheelEvent) {
       @drop="emit('group-drop', { instanceId, ev: $event })"
     >
       <img v-if="iconIsUrl(saved?.icon)" class="tabgroup-icon" :src="saved?.icon" alt="" draggable="false" />
-      <span v-else class="tabgroup-icon fallback">{{ saved?.icon?.replace(/^emoji:/, '') || '📁' }}</span>
+      <span v-else class="tabgroup-icon fallback">{{ groupIconText(saved?.icon) }}</span>
       <span class="tabgroup-name">{{ saved?.name ?? 'Group' }}</span>
       <span class="tabgroup-count">{{ ownTabs.length }}</span>
     </div>

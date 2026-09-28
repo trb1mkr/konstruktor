@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { tabs, activeTabId, openGroups, stripOrder, pinnedStripOrder } from '../../core/useTabs'
 import TabGroupNode from './TabGroupNode.vue'
+import { faviconIsEmoji, faviconEmoji, shortTitle } from './tabShared'
+import { createStripDrag, stripItemDragOver, gapWidthFor as gapWidth, resetStripDrag } from './useStripDrag'
 
 // Панель вкладок: DnD-перестановка, detach в новое окно, pin, favicon.
 // Закрепленные всегда слева, только иконка сайта без лишних меток.
@@ -13,31 +15,23 @@ import TabGroupNode from './TabGroupNode.vue'
 // rename (инлайн в самой вкладке), set-icon (диалог по центру окна),
 // copy URL, reload, close. Клик по заголовку группы — меню группы.
 const strip = ref<HTMLElement | null>(null)
-const dragId = ref<number | null>(null)
+// DnD единого ряда вынесен в useStripDrag: липкий токен + зазор.
+const stripDrag = createStripDrag()
+const dragId = stripDrag.dragId
 // Перетаскиваемая корневая группа (единый ряд): instanceId.
-const dragGroupId = ref<string | null>(null)
+const dragGroupId = stripDrag.dragGroupId
 const dragOverId = ref<number | null>(null)
 // Подсветка дропа группы: токен ряда 't:<id>' или 'g:<instanceId>'.
-const dragOverToken = ref<string | null>(null)
+const dragOverToken = stripDrag.dragOverToken
 // Примерная ширина перетаскиваемого элемента: на неё сдвигается цель,
 // освобождая место под дроп. Замеряем в dragstart по реальному DOM.
-const dragWidth = ref(0)
+const dragWidth = stripDrag.dragWidth
 // true пока чужой drag (из другого окна) висит над панелью — подсветка слияния.
 const mergeHover = ref(false)
 
 // Карты для быстрого поиска по токенам ряда.
 const tabById = computed(() => new Map(tabs.value.map((t) => [t.id, t])))
 const groupByInstance = computed(() => new Map(openGroups.value.map((g) => [g.instanceId, g])))
-
-// Favicon вкладки: emoji-иконка (emoji:...) рисуется текстом,
-// остальное — картинкой. Без этого emoji ломал <img>.
-function faviconIsEmoji(favicon?: string) {
-  return !!favicon && favicon.startsWith('emoji:')
-}
-
-function faviconEmoji(favicon?: string) {
-  return (favicon ?? '').replace(/^emoji:/, '')
-}
 
 // Единый ряд закрепленной зоны: только закрепленные группы.
 // Minimize вкладок не двигает их: свернутые остаются в общем ряду на месте.
@@ -84,10 +78,17 @@ async function onGroupDrop(instanceId: string, e: DragEvent) {
   e.preventDefault()
   e.stopPropagation()
   const from = dragId.value
-  dragId.value = null
+  resetStripDrag(stripDrag)
   dragOverId.value = null
-  dragOverToken.value = null
-  if (from === null) return
+  // Чужой дроп на заголовок группы: втягиваем и кладем в группу.
+  if (from === null) {
+    const fid = extractForeignTabId(e)
+    mergeHover.value = false
+    if (fid === null) return
+    await window.browserAPI.attachTab(fid)
+    await window.browserAPI.addTabToGroup(fid, instanceId)
+    return
+  }
   await window.browserAPI.addTabToGroup(from, instanceId)
 }
 
@@ -106,36 +107,19 @@ function onGroupDragStart(instanceId: string, e: DragEvent) {
   }
 }
 
-// Подсветка позиции дропа в едином ряду: токен элемента под курсором.
-// Вкладку можно бросить на группу (встанет перед ней), группу — на вкладку.
-// Повторный dragover того же токена игнорим: иначе каждый mousemove
-// переписывает токен и перезапускает transition margin — отсюда прыгание.
-// Токен «липкий»: когда цель сдвигается вправо на ширину перетаскиваемого,
-// курсор оказывается левее цели — над зазором, исходником или соседом.
-// Переключать токен в этот момент нельзя, иначе цель возвращается назад
-// и начинается цикл прыгания. Поэтому dragover над самим перетаскиваемым
-// токен не меняет (но preventDefault делаем, чтобы drop сработал), а дроп
-// всегда идет по липкому токену, а не по элементу под курсором.
+// Подсветка позиции дропа в едином ряду — в useStripDrag (липкий токен).
+// Чужой drag (из другого окна): токена нет, только разрешаем дроп
+// и подсвечиваем панель тем же пунктиром, дроп разберут токены/полоса.
 function onStripItemDragOver(token: string, e: DragEvent) {
-  if (dragId.value === null && dragGroupId.value === null) return
-  const moving = dragId.value !== null ? `t:${dragId.value}` : `g:${dragGroupId.value!}`
-  // Над самим перетаскиваемым: токен не меняем, дроп разрешаем.
-  if (token === moving) {
+  if (dragId.value === null && dragGroupId.value === null) {
+    if (!dragHasTab(e)) return
     e.preventDefault()
     e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    mergeHover.value = true
     return
   }
-  // Группа на саму себя — не подсвечиваем.
-  if (dragGroupId.value !== null && token === `g:${dragGroupId.value}`) return
-  if (dragOverToken.value === token) {
-    e.preventDefault()
-    e.stopPropagation()
-    return
-  }
-  e.preventDefault()
-  e.stopPropagation()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-  dragOverToken.value = token
+  stripItemDragOver(stripDrag, token, e)
 }
 
 // Общий коммит перестановки единого ряда: вставить moving ПЕРЕД target.
@@ -168,32 +152,27 @@ async function onStripItemDrop(token: string, e: DragEvent) {
   const fromTab = dragId.value
   const fromGroup = dragGroupId.value
   const target = dragOverToken.value ?? token
-  dragId.value = null
-  dragGroupId.value = null
+  resetStripDrag(stripDrag)
   dragOverId.value = null
-  dragOverToken.value = null
-  dragWidth.value = 0
-  if (fromTab === null && fromGroup === null) return
+  // Чужой дроп на элемент ряда: втягиваем вкладку в это окно.
+  if (fromTab === null && fromGroup === null) {
+    const fid = extractForeignTabId(e)
+    mergeHover.value = false
+    if (fid === null) return
+    await window.browserAPI.attachTab(fid)
+    return
+  }
   const moving = fromTab !== null ? `t:${fromTab}` : `g:${fromGroup!}`
   await commitStripOrder(target, moving)
 }
 
-// Ширина плейсхолдера под дроп: ширина перетаскиваемого + зазор ряда.
-// Плейсхолдер — отдельный прозрачный элемент ПЕРЕД целью: он занимает
-// место в layout, поэтому цель не возвращается назад, а курсор над зазором
-// продолжает относиться к цели (dragover плейсхолдера = тот же токен).
+// Ширина плейсхолдера — в useStripDrag (прозрачный элемент перед целью).
 function gapWidthFor(token: string): number {
-  if (dragOverToken.value !== token || dragWidth.value <= 0) return 0
-  if (dragId.value === null && dragGroupId.value === null) return 0
-  if (dragId.value !== null && token === `t:${dragId.value}`) return 0
-  if (dragGroupId.value !== null && token === `g:${dragGroupId.value}`) return 0
-  return Math.round(dragWidth.value + 4)
+  return gapWidth(stripDrag, token)
 }
 function onGroupDragEnd(e: DragEvent) {
   const gid = dragGroupId.value
-  dragGroupId.value = null
-  dragOverToken.value = null
-  dragWidth.value = 0
+  resetStripDrag(stripDrag)
   mergeHover.value = false
   if (gid === null || !strip.value) return
   // Группы не detach'атся — просто сбрасываем состояние.
@@ -328,10 +307,6 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKey, true)
 })
 
-function shortTitle(t: { title: string; url: string }) {
-  return t.title || t.url || 'New Tab'
-}
-
 function onDragStart(id: number, e: DragEvent) {
   dragId.value = id
   dragGroupId.value = null
@@ -364,10 +339,17 @@ async function onDrop(id: number, e: DragEvent) {
   e.stopPropagation()
   const from = dragId.value
   dragOverId.value = null
-  dragOverToken.value = null
-  dragWidth.value = 0
+  resetStripDrag(stripDrag)
   dragId.value = null
-  if (from === null || from === id) return
+  if (from === id) return
+  // Чужой дроп на вкладку: втягиваем вкладку в это окно.
+  if (from === null) {
+    const fid = extractForeignTabId(e)
+    mergeHover.value = false
+    if (fid === null) return
+    await window.browserAPI.attachTab(fid)
+    return
+  }
   // Единый ряд: дроп вкладки на вкладку = вставка перед целью.
   // Minimize зону не меняет: все вкладки в обычном ряду, двигаются свободно.
   const arr = [...normalStrip.value]
@@ -384,11 +366,8 @@ async function onDrop(id: number, e: DragEvent) {
 // Отслеживаем через dragend + координаты курсора относительно панели.
 async function onDragEnd(e: DragEvent) {
   const id = dragId.value
-  dragId.value = null
-  dragGroupId.value = null
+  resetStripDrag(stripDrag)
   dragOverId.value = null
-  dragOverToken.value = null
-  dragWidth.value = 0
   mergeHover.value = false
   if (id === null || !strip.value) return
   // dropEffect 'none' = дроп приняли в другом окне (merge) — новое не создаем.
@@ -409,6 +388,19 @@ async function onDragEnd(e: DragEvent) {
 function dragHasTab(e: DragEvent): boolean {
   const types = Array.from(e.dataTransfer?.types ?? [])
   return types.includes('application/x-konstruktor-tab') || types.includes('text/plain')
+}
+
+// Id чужой вкладки из dataTransfer. null = свой таб уже здесь или не таб.
+function extractForeignTabId(e: DragEvent): number | null {
+  const raw =
+    e.dataTransfer?.getData('application/x-konstruktor-tab') ??
+    e.dataTransfer?.getData('text/plain') ??
+    ''
+  const m = raw.match(/(\d+)/)
+  if (!m) return null
+  const id = Number(m[1])
+  if (tabs.value.some((t) => t.id === id)) return null
+  return id
 }
 
 function onStripDragOver(e: DragEvent) {
@@ -442,25 +434,16 @@ async function onStripDrop(e: DragEvent) {
     const target = dragOverToken.value
     const moving =
       dragId.value !== null ? `t:${dragId.value}` : `g:${dragGroupId.value!}`
-    dragId.value = null
-    dragGroupId.value = null
+    resetStripDrag(stripDrag)
     dragOverId.value = null
-    dragOverToken.value = null
-    dragWidth.value = 0
     if (target) await commitStripOrder(target, moving)
     return
   }
+  // Чужой дроп на пустое место полосы: втягиваем вкладку в это окно.
   e.preventDefault()
-  const raw =
-    e.dataTransfer?.getData('application/x-konstruktor-tab') ??
-    e.dataTransfer?.getData('text/plain') ??
-    ''
-  const m = raw.match(/(\d+)/)
-  if (!m) return
-  const id = Number(m[1])
-  // Своя вкладка уже здесь — игнорим.
-  if (tabs.value.some((t) => t.id === id)) return
-  await window.browserAPI.attachTab(id)
+  const fid = extractForeignTabId(e)
+  if (fid === null) return
+  await window.browserAPI.attachTab(fid)
 }
 </script>
 
@@ -694,8 +677,8 @@ async function onStripDrop(e: DragEvent) {
 @keyframes gap-grow {
   from { opacity: 0; }
 }
-/* Зона слияния: окно подсвечивается когда чужую вкладку тащат над панелью. */
-.tabstrip.merge-target { outline: 2px dashed #7dd87d; outline-offset: -4px; background: #2a332a; }
+/* Зона слияния: тот же пунктир, что у зазора внутри окна (.drop-gap). */
+.tabstrip.merge-target { outline: 1px dashed var(--text-faint); outline-offset: -4px; background: transparent; }
 /* Minimize: вкладка схлопывается до иконки, но остается на своём месте. */
 .tab.minimized { max-width: 64px; padding: 6px 8px; }
 .favicon { width: 16px; height: 16px; flex-shrink: 0; border-radius: 3px; }
@@ -738,8 +721,9 @@ async function onStripDrop(e: DragEvent) {
   flex: 1;
   align-self: stretch;
   min-width: 12px;
-  /* no-drag: на drag-области правый клик уходит системному меню окна,
-     renderer его не видит. Таскать окно можно за titlebar выше/ниже. */
-  -webkit-app-region: no-drag;
+  /* drag: область между + и меню тащит окно (frameless).
+     Контекстное меню при этом работает: strip-root (тоже drag)
+     уже принимает @contextmenu, filler только пробрасывает его. */
+  -webkit-app-region: drag;
 }
 </style>
