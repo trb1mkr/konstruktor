@@ -7,6 +7,7 @@ import { join } from 'path'
 import { windows, type WindowState } from './browserState'
 import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { openFindOverlay } from './findManager'
+import { ensureOverlayWindow } from './overlayManager'
 import { readFileSync, existsSync } from 'fs'
 
 // NOTE: dev = не упакованное приложение.
@@ -196,6 +197,9 @@ export function createWindow(
   })
   ws.window = win
   windows.set(win.id, ws)
+
+  // Создаём оверлей-окно заранее, чтобы первый оверлей открывался мгновенно.
+  ensureOverlayWindow(win)
 
   // DevTools по требованию: настройка devtools, env KONSTRUKTOR_DEVTOOLS=1
   // или флаг --devtools. По умолчанию закрыты.

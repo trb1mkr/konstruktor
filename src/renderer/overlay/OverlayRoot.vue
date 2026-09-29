@@ -23,6 +23,7 @@ interface OverlayPayload {
   incognito?: boolean
   animations?: boolean
   theme?: string
+  align?: 'start' | 'end'
   toast?: { title: string; body?: string; timeout?: number }
   dialog?: { title: string; placeholder?: string; initial?: string; buttons: { id: string; label: string }[] }
   icon?: { title: string; placeholder?: string; initial?: string }
@@ -65,6 +66,23 @@ onMounted(() => {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') void window.overlayAPI.dismiss()
   })
+  // В dev-режиме (Vite dev server) loadURL с новым hash не перезагружает страницу,
+  // а просто меняет маршрут. Слушаем hashchange и перепарсим payload.
+  window.addEventListener('hashchange', () => {
+    payload.value = parsePayload()
+    if (!payload.value) error.value = 'Empty overlay payload.'
+    // Обновляем тему, если она изменилась в новом payload
+    const rawTheme = payload.value?.theme ?? 'dark'
+    const effTheme =
+      rawTheme === 'system'
+        ? window.matchMedia?.('(prefers-color-scheme: light)').matches
+          ? 'light'
+          : 'dark'
+        : rawTheme === 'slate' || rawTheme === 'light'
+          ? rawTheme
+          : 'dark'
+    document.documentElement.dataset.theme = effTheme
+  })
 })
 
 async function onBackdrop(e: MouseEvent) {
@@ -83,13 +101,14 @@ async function onSubmit(value: string) {
 <template>
   <div
     class="overlay-root"
-    :class="{ 'no-anim': payload?.animations === false }"
+    :class="{ 'no-anim': payload?.animations === false, 'align-start': payload?.align === 'start' }"
     @mousedown="onBackdrop">
     <div v-if="error" class="overlay-error">{{ error }}</div>
     <BrowserMenu
       v-else-if="payload?.kind === 'menu'"
       :items="payload.items ?? []"
       :incognito="payload.incognito ?? false"
+      :align="payload.align ?? 'end'"
       @select="onSelect"
     />
     <ToastStack
@@ -121,6 +140,10 @@ async function onSubmit(value: string) {
   justify-content: flex-end;
   align-items: flex-start;
   padding: 0;
+}
+/* Контекстные меню (align=start): левый край меню в точке клика */
+.overlay-root.align-start {
+  justify-content: flex-start;
 }
 /* Диалог — по центру окна, меню/тосты — как раньше. Без дим-подложки:
    окно оверлея ровно по размеру панели, затемнение по краям выглядело

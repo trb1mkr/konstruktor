@@ -64,6 +64,9 @@ async function close() {
   /* Кнопки не тащат окно — клики идут в Vue. */
   -webkit-app-region: no-drag;
   padding: 0;
+  /* Отступ справа = левый padding табстрипа (8px), чтобы кнопка закрытия
+     не прилипала к краю окна. */
+  margin-right: 8px;
 }
 .wc-btn {
   width: 36px;

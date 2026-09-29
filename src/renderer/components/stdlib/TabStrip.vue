@@ -715,15 +715,15 @@ async function onStripDrop(e: DragEvent) {
   flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
-/* Заполнитель пустого места панели до кнопок окна: тянет окно
-   (как пустая область titlebar) и отдает правый клик меню панели. */
+/* Заполнитель пустого места панели до кнопок окна: правый клик открывает
+   меню панели. no-drag обязателен: на drag-области Windows отдает
+   правый клик системному меню окна и renderer его не получает.
+   Тащить окно можно за пустое пространство табстрипа (слева от filler)
+   или за заголовок окна (titlebar). */
 .strip-filler {
   flex: 1;
   align-self: stretch;
   min-width: 12px;
-  /* drag: область между + и меню тащит окно (frameless).
-     Контекстное меню при этом работает: strip-root (тоже drag)
-     уже принимает @contextmenu, filler только пробрасывает его. */
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 </style>

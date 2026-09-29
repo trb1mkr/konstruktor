@@ -65,6 +65,9 @@ const active = new Map<number, { overlay: BrowserWindow; request: OverlayRequest
 // Флаг: открыт ли системный диалог (файл/сохранение) — чтобы игнорировать blur/move/resize
 let isSystemDialogOpen = false
 
+// Переиспользуемые оверлей-окна: parentId -> BrowserWindow (скрыто когда не используется)
+const overlayPool = new Map<number, BrowserWindow>()
+
 const MENU_W = 260
 const MENU_ITEM_H = 40
 const MENU_PAD = 20
@@ -87,6 +90,59 @@ function overlayUrl(payload: object): string {
     return `${process.env['ELECTRON_RENDERER_URL']}/menu.html#payload=${encoded}`
   }
   return `file://${join(__dirname, '../renderer/menu.html')}#payload=${encoded}`
+}
+
+// Создаёт оверлей-окно заранее и кладёт в пул, не показывая его.
+// Вызывается при создании основного окна браузера, чтобы первый оверлей
+// открывался мгновенно (без задержки на new BrowserWindow + load).
+export function ensureOverlayWindow(parent: BrowserWindow): void {
+  if (overlayPool.has(parent.id)) return
+  const overlay = new BrowserWindow({
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    parent,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    focusable: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/overlay.cjs'),
+      contextIsolation: true,
+      sandbox: false
+    }
+  })
+  overlayPool.set(parent.id, overlay)
+
+  const cleanup = () => {
+    if (active.get(parent.id)?.overlay === overlay) active.delete(parent.id)
+  }
+  overlay.on('closed', cleanup)
+  overlay.on('blur', () => {
+    if (isSystemDialogOpen) return
+    closeOverlay(parent)
+  })
+  const closeOnParent = () => {
+    if (isSystemDialogOpen) return
+    closeOverlay(parent)
+  }
+  parent.on('move', closeOnParent)
+  parent.on('resize', closeOnParent)
+  parent.on('minimize', closeOnParent)
+  overlay.on('closed', () => {
+    parent.removeListener('move', closeOnParent)
+    parent.removeListener('resize', closeOnParent)
+    parent.removeListener('minimize', closeOnParent)
+  })
 }
 
 export function closeOverlay(parent: BrowserWindow): void {
@@ -120,9 +176,6 @@ export function getParentOfOverlay(overlay: BrowserWindow): BrowserWindow | unde
 }
 
 export function showOverlay(parent: BrowserWindow, request: OverlayRequest): void {
-  // Один оверлей на родителя: старый закрываем.
-  closeOverlay(parent)
-
   // Флаг анимаций из настроек: false = открыть моментально без fade-in.
   // Синхронно из кэша — без await, иначе меню открывается с задержкой.
   // Тему тоже из кэша: оверлей красится до монтирования.
@@ -145,21 +198,21 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
       ? MENU_W
       : request.kind === 'dialog'
         ? DIALOG_W
-        : request.kind === 'icon'
-          ? ICON_W
-          : request.kind === 'find'
-            ? FIND_W
-            : 360
+      : request.kind === 'icon'
+        ? ICON_W
+      : request.kind === 'find'
+        ? FIND_W
+        : 360
   const height =
     request.kind === 'menu'
       ? menuHeight(request.items ?? [], request.incognito ?? false)
       : request.kind === 'dialog'
         ? DIALOG_H
-        : request.kind === 'icon'
-          ? ICON_H
-          : request.kind === 'find'
-            ? FIND_H
-            : 120
+      : request.kind === 'icon'
+        ? ICON_H
+      : request.kind === 'find'
+        ? FIND_H
+        : 120
 
   // Диалог и диалог иконки — по центру родителя. Поиск — правый верхний угол ОБЛАСТИ
   // СТРАНИЦЫ (ниже верхней панели UI): anchor несет uiInsets.top.
@@ -187,32 +240,62 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
           parentBounds.y + parentBounds.height - height
         )
 
-  const overlay = new BrowserWindow({
-    x: Math.round(x),
-    y: Math.round(y),
-    width,
-    height,
-    parent,
-    show: false,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    hasShadow: false,
-    backgroundColor: '#00000000',
-    // Панель поиска должна держать фокус ввода: без focusable:false
-    // клик/фокус уходит обратно в страницу и окно кажется неоткрывшимся.
-    focusable: true,
-    webPreferences: {
-      preload: join(__dirname, '../preload/overlay.cjs'),
-      contextIsolation: true,
-      sandbox: false
+  // Оверлей-окно уже создано заранее через ensureOverlayWindow.
+  // Просто обновляем bounds и загружаем новый payload.
+  let overlay = overlayPool.get(parent.id)
+  if (!overlay || overlay.isDestroyed()) {
+    // Fallback: если окно не было создано заранее (на всякий случай)
+    overlay = new BrowserWindow({
+      x: Math.round(x),
+      y: Math.round(y),
+      width,
+      height,
+      parent,
+      show: false,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      hasShadow: false,
+      backgroundColor: '#00000000',
+      focusable: true,
+      webPreferences: {
+        preload: join(__dirname, '../preload/overlay.cjs'),
+        contextIsolation: true,
+        sandbox: false
+      }
+    })
+    overlayPool.set(parent.id, overlay)
+
+    const cleanup = () => {
+      if (active.get(parent.id)?.overlay === overlay) active.delete(parent.id)
     }
-  })
+    overlay.on('closed', cleanup)
+    overlay.on('blur', () => {
+      if (isSystemDialogOpen) return
+      closeOverlay(parent)
+    })
+    // Родитель двигается — оверлей протух, закрываем.
+    const closeOnParent = () => {
+      if (isSystemDialogOpen) return
+      closeOverlay(parent)
+    }
+    parent.on('move', closeOnParent)
+    parent.on('resize', closeOnParent)
+    parent.on('minimize', closeOnParent)
+    overlay.on('closed', () => {
+      parent.removeListener('move', closeOnParent)
+      parent.removeListener('resize', closeOnParent)
+      parent.removeListener('minimize', closeOnParent)
+    })
+  } else {
+    // Окно уже есть — обновляем позицию/размер.
+    overlay.setBounds({ x: Math.round(x), y: Math.round(y), width, height })
+  }
 
   active.set(parent.id, { overlay, request })
   // Контекст диалога иконки дублируем на окно: хендлер overlay:submit-icon
@@ -220,32 +303,9 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   if (request.kind === 'icon' && request.onIconApply) {
     ;(overlay as unknown as { __iconApply?: (icon: string) => void }).__iconApply = request.onIconApply
   }
-
-  const cleanup = () => {
-    if (active.get(parent.id)?.overlay === overlay) active.delete(parent.id)
-  }
-  overlay.on('closed', cleanup)
-  overlay.on('blur', () => {
-    if (isSystemDialogOpen) return
-    closeOverlay(parent)
-  })
-  // Родитель двигается — оверлей протух, закрываем.
-  const closeOnParent = () => {
-    if (isSystemDialogOpen) return
-    closeOverlay(parent)
-  }
-  parent.on('move', closeOnParent)
-  parent.on('resize', closeOnParent)
-  parent.on('minimize', closeOnParent)
-  overlay.on('closed', () => {
-    parent.removeListener('move', closeOnParent)
-    parent.removeListener('resize', closeOnParent)
-    parent.removeListener('minimize', closeOnParent)
-  })
-
   const payload =
     request.kind === 'menu'
-      ? { kind: 'menu', items: request.items, incognito: request.incognito, animations, theme }
+      ? { kind: 'menu', items: request.items, incognito: request.incognito, animations, theme, align: request.align }
       : request.kind === 'dialog'
         ? { kind: 'dialog', dialog: request.dialog, animations, theme }
         : request.kind === 'icon'
@@ -261,11 +321,10 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
       hash: `payload=${encodeURIComponent(JSON.stringify(payload))}`
     })
   }
-  // Показываем сразу по готовности первой отрисовки: ready-to-show
-  // ждет полной загрузки и дает видимую задержку перед открытием.
-  // showInactive для меню/тостов (фокус остается в странице),
-  // для поиска — show + focus, иначе не печатается.
-  overlay.webContents.once('did-frame-finish-load', () => {
+  // Показываем сразу когда окно готово к показу (ready-to-show),
+  // не дожидаясь полной загрузки ресурсов (did-frame-finish-load).
+  // Это убирает задержку открытия меню/диалогов/тостов.
+  overlay.once('ready-to-show', () => {
     if (overlay.isDestroyed()) return
     if (request.kind === 'find') {
       overlay.show()

@@ -6,6 +6,7 @@ import type { MenuItem } from './OverlayRoot.vue'
 defineProps<{
   items: MenuItem[]
   incognito: boolean
+  align?: 'start' | 'end'
 }>()
 
 const emit = defineEmits<{
@@ -14,7 +15,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="browser-menu" @mousedown.stop>
+  <div class="browser-menu" @mousedown.stop :class="{ 'align-start': align === 'start' }">
     <div v-if="incognito" class="menu-badge">🕵️ Incognito</div>
     <button
       v-for="item in items"
@@ -44,6 +45,10 @@ const emit = defineEmits<{
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* Контекстные меню: левый край меню в точке клика */
+.browser-menu.align-start {
+  margin: 4px 0 0 4px;
 }
 .menu-badge {
   font-size: 12px;

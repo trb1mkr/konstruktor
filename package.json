@@ -9,6 +9,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "start": "electron ./out/main/index.js",
     "dist": "electron-vite build ; electron-builder --win --x64"
   },
   "keywords": [],
