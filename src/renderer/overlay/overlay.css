@@ -59,15 +59,17 @@ body {
 }
 #overlay { width: 100vw; height: 100vh; }
 /* Появление оверлея: короткий fade-in 60ms. Отключается настройкой
-   Settings -> Animations (payload.animations === false -> .no-anim).
-   !important нужен: scoped-стили Vue грузятся позже и перебивают
-   animation без него, из-за чего fade оставался при animations off. */
+   Settings -> Animations. Флаг ставится на <html> синхронно при разборе
+   payload (см. OverlayRoot.vue), до монтирования Vue — иначе анимация
+   успевает стартовать раньше, чем применится no-anim, и fade проиграется
+   даже при animations off. Селектор через <html>, а не .overlay-root,
+   именно поэтому он такой. !important перебивает scoped-стили Vue. */
 .browser-menu, .dialog, .toast, .find-bar { animation: overlay-fade 60ms ease-out !important; }
 @keyframes overlay-fade {
   from { opacity: 0; }
   to { opacity: 1; }
 }
-.overlay-root.no-anim .browser-menu,
-.overlay-root.no-anim .dialog,
-.overlay-root.no-anim .toast,
-.overlay-root.no-anim .find-bar { animation: none !important; }
+html.no-anim .browser-menu,
+html.no-anim .dialog,
+html.no-anim .toast,
+html.no-anim .find-bar { animation: none !important; }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import BrowserMenu from './BrowserMenu.vue'
 import ToastStack from './ToastStack.vue'
 import PromptDialog from './PromptDialog.vue'
@@ -24,6 +24,9 @@ interface OverlayPayload {
   animations?: boolean
   theme?: string
   align?: 'start' | 'end'
+  // Токен сессии от main. Нужен для подтверждения готовности: main держит
+  // окно прозрачным, пока renderer не сообщит, что этот токен отрисован.
+  token?: number
   toast?: { title: string; body?: string; timeout?: number }
   dialog?: { title: string; placeholder?: string; initial?: string; buttons: { id: string; label: string }[] }
   icon?: { title: string; placeholder?: string; initial?: string }
@@ -47,6 +50,14 @@ const effTheme =
       ? rawTheme
       : 'dark'
 document.documentElement.dataset.theme = effTheme
+// Флаг анимаций — на <html>, не на .overlay-root. Причина: CSS-анимация
+// overlay-fade на .browser-menu стартует в тот же кадр, когда Vue монтирует
+// компонент. Если вешать no-anim реактивно на .overlay-root, класс успевает
+// примениться ПОСЛЕ старта анимации — и fade проигрывается даже при
+// animations: false. На <html> класс стоит до первой отрисовки, поэтому
+// анимация не начинается вовсе. Работает и при первом открытии (prewarm грузит
+// страницу без payload — флаг сразу false), и при переиспользовании окна.
+document.documentElement.classList.toggle('no-anim', payload.value?.animations === false)
 
 function parsePayload(): OverlayPayload | null {
   try {
@@ -60,17 +71,69 @@ function parsePayload(): OverlayPayload | null {
   }
 }
 
+// Диагностика анимаций: сообщаем в main, какие CSS-анимации реально
+// запустились на элементах оверлея. Нужно, чтобы отличить нашу
+// overlay-fade от системной анимации появления окна в OS.
+function traceAnimations(tag: string): void {
+  requestAnimationFrame(() => {
+    const html = document.documentElement
+    const anims = document.getAnimations().map((a) => {
+      const t = (a as unknown as { animationName?: string }).animationName
+      return t ?? a.constructor.name
+    })
+    window.overlayAPI?.trace(
+      `${tag} no-anim=${html.classList.contains('no-anim')} ` +
+        `anims=[${anims.join(',')}] count=${anims.length}`
+    )
+  })
+}
+
+// Подтверждает main, что текущий payload отрисован. Main держит окно
+// прозрачным до этого сигнала — иначе между setOpacity(1) и обновлением
+// DOM пользователь видит пункты предыдущего меню (однокадровая вспышка).
+//
+// nextTick ждёт, пока Vue смонтирует новый компонент; два requestAnimationFrame
+// — пока браузер реально отрисует кадр. Без второго rAF сигнал уходит раньше
+// фактической отрисовки, и вспышка остаётся.
+function reportReady(tag: string): void {
+  const token = payload.value?.token
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (token === undefined) {
+          // Prewarm: payload ещё нет, подтверждать нечего.
+          return
+        }
+        window.overlayAPI?.ready(token)
+        window.overlayAPI?.trace(`ready(${tag}) token=${token}`)
+      })
+    })
+  })
+}
+
 onMounted(() => {
-  if (!payload.value) error.value = 'Empty overlay payload.'
+  // error ставим только если payload реально отсутствует ПОСЛЕ монтирования.
+  // При prewarm страница грузится без payload — это норма, не ошибка.
+  error.value = payload.value ? '' : 'Empty overlay payload.'
+  traceAnimations('mount')
+  // Prod-путь: loadFile с payload = полный reload, payload уже применён
+  // к моменту монтирования. Dev-путь переподтверждает в hashchange.
+  reportReady('mount')
   // Escape закрывает без выбора.
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') void window.overlayAPI.dismiss()
   })
   // В dev-режиме (Vite dev server) loadURL с новым hash не перезагружает страницу,
   // а просто меняет маршрут. Слушаем hashchange и перепарсим payload.
+  // В prod это полный reload, и hashchange не нужен — но лишний слушатель
+  // не мешает, а код остается один.
   window.addEventListener('hashchange', () => {
     payload.value = parsePayload()
-    if (!payload.value) error.value = 'Empty overlay payload.'
+    // error сбрасываем в обе стороны: prewarm грузит страницу БЕЗ payload
+    // (error = 'Empty overlay payload.'), потом приходит реальный payload —
+    // иначе v-if="error" перебьёт рендер меню. Обратный случай (payload
+    // есть, потом исчез) — тоже должен показывать ошибку, а не пустоту.
+    error.value = payload.value ? '' : 'Empty overlay payload.'
     // Обновляем тему, если она изменилась в новом payload
     const rawTheme = payload.value?.theme ?? 'dark'
     const effTheme =
@@ -82,6 +145,12 @@ onMounted(() => {
           ? rawTheme
           : 'dark'
     document.documentElement.dataset.theme = effTheme
+    // Синхронизируем флаг анимаций с новым payload — настройку могли
+    // переключить, пока оверлей был в пуле.
+    document.documentElement.classList.toggle('no-anim', payload.value?.animations === false)
+    traceAnimations('hashchange')
+    // Dev-путь: DOM обновлен — подтверждаем main, чтобы он снял прозрачность.
+    reportReady('hashchange')
   })
 })
 
@@ -101,7 +170,7 @@ async function onSubmit(value: string) {
 <template>
   <div
     class="overlay-root"
-    :class="{ 'no-anim': payload?.animations === false, 'align-start': payload?.align === 'start' }"
+    :class="{ 'align-start': payload?.align === 'start' }"
     @mousedown="onBackdrop">
     <div v-if="error" class="overlay-error">{{ error }}</div>
     <BrowserMenu

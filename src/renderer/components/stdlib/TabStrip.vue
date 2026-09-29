@@ -715,15 +715,14 @@ async function onStripDrop(e: DragEvent) {
   flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
-/* Заполнитель пустого места панели до кнопок окна: правый клик открывает
-   меню панели. no-drag обязателен: на drag-области Windows отдает
-   правый клик системному меню окна и renderer его не получает.
-   Тащить окно можно за пустое пространство табстрипа (слева от filler)
-   или за заголовок окна (titlebar). */
+/* Заполнитель пустого места панели до кнопок окна: тянет окно
+   (frameless) на всей ширине, включая участок от "+" до кнопок окна.
+   drag отдаёт правый клик системному меню окна, поэтому контекстное
+   меню панели ловится capture-слушателем в App.vue (см. onGlobalContextMenu). */
 .strip-filler {
   flex: 1;
   align-self: stretch;
   min-width: 12px;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
 </style>

@@ -36,7 +36,8 @@ Main:
 
 - [🖥️ Окна и вкладки](./src/main/docs/WINDOWS_TABS.md)
 - [💬 Оверлей-окна](./src/main/docs/OVERLAY.md)
-- [🔍 Поиск по странице](./src/main/docs/FIND.md)
+- [�️ План рефакторинга оверлеев](./src/main/docs/OVERLAY_PLAN.md)
+- [�🔍 Поиск по странице](./src/main/docs/FIND.md)
 - [🎨 Темы](./src/main/docs/THEMES.md)
 - [💾 Хранилища](./src/main/docs/STORES.md)
 - [🌐 Внутренние страницы](./src/main/docs/INTERNAL_PAGES.md)

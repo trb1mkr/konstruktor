@@ -77,8 +77,10 @@ import {
   resolveOverlayDismiss,
   resolveOverlaySubmit,
   resolveOverlaySubmitIcon,
+  confirmOverlayReady,
   type OverlayMenuItem
 } from './overlayManager'
+import { dumpStats as dumpOverlayStats, log } from './overlay/logger'
 
 // Кастомная схема должна стать privileged ДО ready, иначе WebContentsView ее не отрендерит.
 protocol.registerSchemesAsPrivileged([
@@ -808,6 +810,8 @@ function registerIpc() {
       anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
       items,
       incognito: ws.incognito,
+      // Второй клик по кнопке ☰ закрывает открытое ею же меню.
+      toggleKey: 'browser-menu',
       onSelect: (id) => {
         if (id === 'downloads') openPage(DOWNLOADS_URL)
         else if (id === 'history') openPage(HISTORY_URL)
@@ -835,6 +839,20 @@ function registerIpc() {
     const apply = (overlay as unknown as { __iconApply?: (icon: string) => void }).__iconApply
     if (!apply) return false
     return resolveOverlaySubmitIcon(overlay, buttonId, value, apply)
+  })
+  // Диагностика (шаг 1 рефакторинга): renderer оверлея сообщает о своих
+  // наблюдениях — активные анимации, классы. Помогает отличить CSS-анимацию
+  // от системной анимации появления окна.
+  ipcMain.on('overlay:trace', (e, message: string) => {
+    const overlay = BrowserWindow.fromWebContents(e.sender)
+    log('lifecycle', `[trace] ${message}`, { windowId: overlay?.id })
+  })
+  // Renderer отрисовал новый payload — можно снимать прозрачность окна.
+  // До этого сигнала в окне лежат пункты предыдущего меню, и пользователь
+  // видит их как однокадровую вспышку при смене вида меню.
+  ipcMain.on('overlay:ready', (e, token: number) => {
+    const overlay = BrowserWindow.fromWebContents(e.sender)
+    if (overlay) confirmOverlayReady(overlay, token)
   })
   ipcMain.handle('overlay:dismiss', (e) => {
     const overlay = BrowserWindow.fromWebContents(e.sender)
@@ -937,6 +955,8 @@ void app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+  // Сводка по времени открытия оверлеев раз в 5 минут (OVERLAY_DEBUG != silent).
+  setInterval(() => dumpOverlayStats(), 5 * 60 * 1000)
 })
 
 app.on('window-all-closed', () => {
