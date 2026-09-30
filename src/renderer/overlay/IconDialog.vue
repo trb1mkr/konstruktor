@@ -64,10 +64,11 @@ function onBackdrop(e: MouseEvent) {
           <button class="dialog-btn" title="Pick local image file" @click="choose('file')">📁 File</button>
           <button class="dialog-btn" title="Use input as emoji" @click="choose('emoji')">😀 Emoji</button>
         </div>
-        <!-- Отмена отдельной группой справа: визуально отличается от
-             кнопок-источников и попадает в общий стиль панелей,
-             где отмена = приглушенный цвет, без рамки. -->
-        <button class="dialog-btn dialog-btn-ghost" @click="choose('__cancel__')">Cancel</button>
+        <!-- Отмена — та же кнопка, что и источники: тот же фон, тот же
+             размер, тот же шрифт. Отдельного приглушённого варианта
+             больше нет — он выглядел как отдельный элемент управления,
+             а не как кнопка этого диалога. -->
+        <button class="dialog-btn" @click="choose('__cancel__')">Cancel</button>
       </div>
     </div>
   </div>
@@ -120,14 +121,5 @@ function onBackdrop(e: MouseEvent) {
   white-space: nowrap;
 }
 .dialog-btn:hover { background: var(--ov-btn-hover); }
-/* Отмена: прозрачный фон и приглушённый текст — тот же приём, что у
-   закрывающей кнопки ✕ в панели поиска, вместо серой заливки. */
-.dialog-btn-ghost {
-  background: transparent;
-  color: var(--ov-dim);
-}
-.dialog-btn-ghost:hover {
-  background: var(--ov-hover);
-  color: var(--ov-text);
-}
+
 </style>

@@ -94,26 +94,26 @@ function traceAnimations(tag: string): void {
   })
 }
 
-// Подтверждает main, что текущий payload отрисован. Main держит окно
+// Подтверждает main, что текущий payload применён. Main держит окно
 // прозрачным до этого сигнала — иначе между setOpacity(1) и обновлением
 // DOM пользователь видит пункты предыдущего меню (однокадровая вспышка).
 //
-// nextTick ждёт, пока Vue смонтирует новый компонент; два requestAnimationFrame
-// — пока браузер реально отрисует кадр. Без второго rAF сигнал уходит раньше
-// фактической отрисовки, и вспышка остаётся.
+// Кадра композитора здесь ждать не нужно: за отрисовку отвечает
+// отдельная фаза painted, а от ready требуется только факт применения
+// payload в JS. Раньше здесь стоял requestAnimationFrame, и именно на
+// него приходилась вся разница между первым и последующими открытиями
+// (2–16 мс, при 60 Гц один кадр = 16.7 мс). На первом открытии кадр
+// приходил с задержкой, потому что окно только что переехало между
+// дисплеями и композитор ещё не построил поверхность для целевого.
 function reportReady(tag: string): void {
   const token = payload.value?.token
   void nextTick(() => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (token === undefined) {
-          // Prewarm: payload ещё нет, подтверждать нечего.
-          return
-        }
-        window.overlayAPI?.ready(token)
-        window.overlayAPI?.trace(`ready(${tag}) token=${token}`)
-      })
-    })
+    if (token === undefined) {
+      // Prewarm: payload ещё нет, подтверждать нечего.
+      return
+    }
+    window.overlayAPI?.ready(token)
+    window.overlayAPI?.trace(`ready(${tag}) token=${token}`)
   })
 }
 
@@ -129,11 +129,16 @@ onMounted(() => {
   // умолчанию true — окно приходит в парке, а не с готовым меню.
   //
   // При снятии парковки (false) подтверждаем main, что кадр реально
-  // отдан: два requestAnimationFrame от момента применения v-if. Main
-  // держит окно прозрачным до этого сигнала — иначе между setOpacity(1)
-  // и отрисовкой нового содержимого пользователь увидит вспышку
-  // предыдущего меню. Один rAF недостаточен: он срабатывает до
-  // применения v-if.
+  // отдан: один requestAnimationFrame после nextTick. Main держит окно
+  // прозрачным до этого сигнала — иначе между setOpacity(1) и отрисовкой
+  // нового содержимого пользователь увидит вспышку предыдущего меню.
+  //
+  // Раньше здесь стояло два rAF подряд. Второй давал +16.7 мс к каждому
+  // открытию (при 60 Гц кадр = 16.7 мс, и замеры 21–55 мс складывались
+  // именно в эти два кадра). Один rAF здесь достаточен, потому что при
+  // парковке контент РАЗМОНТИРОВАН через v-if: окно пустое и прозрачное,
+  // показывать нечего, вспышка старых пунктов физически неоткуда взяться.
+  // Если когда-то появится реальная вспышка — возвращать второй rAF.
   window.overlayAPI?.onParked?.((v: boolean) => {
     parked.value = v
     if (v) return
@@ -141,15 +146,9 @@ onMounted(() => {
     if (token === undefined) return
     void nextTick(() => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.overlayAPI?.painted(token)
-        })
+        window.overlayAPI?.painted(token)
       })
     })
-  })
-  // Escape закрывает без выбора.
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') void window.overlayAPI.dismiss()
   })
   // В dev-режиме (Vite dev server) loadURL с новым hash не перезагружает страницу,
   // а просто меняет маршрут. Слушаем hashchange и перепарсим payload.
