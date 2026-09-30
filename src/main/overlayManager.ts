@@ -259,7 +259,7 @@ function parkOnParentDisplay(
   const actual = overlay.getBounds()
   const actualDisplay = screen.getDisplayMatching(actual)
   const ok = !intersectsWorkArea(actual) && actualDisplay.id === display.id
-  log('geometry', 'parked within parent display', {
+  log('geometry', 'content unmounted on parent display', {
     parentId: parent.id,
     want: bounds,
     got: actual,
@@ -284,9 +284,9 @@ function parkOnParentDisplay(
 // запасной вариант для Linux и для отката одной строкой.
 const PARK_MOVES_WINDOW = false
 
-const PARK_CHANNEL = 'overlay:park'
+const CONTENT_CHANNEL = 'overlay:park'
 
-// Renderer сообщает, что применил parked=false и кадр реально отдан.
+// Renderer сообщает, что применил contentUnmounted=false и кадр отдан.
 // Только после этого main возвращает прозрачность окну.
 const PAINTED_CHANNEL = 'overlay:painted'
 
@@ -302,7 +302,7 @@ const pendingReady = new Map<number, { token: number; resolve: () => void }>()
 // parentId -> true, пока окно парковано (невидимо). Нужно, чтобы
 // слушатели move/resize/minimize не реагировали на собственную парковку
 // и не закрывали активное меню в момент setBounds.
-const parked = new Set<number>()
+const contentUnmounted = new Set<number>()
 
 // parentId -> время, до которого родительский blur не считается
 // переключением на чужое окно. Заполняется noteFocusHandoff.
@@ -361,13 +361,13 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     // Паркованное окно невидимо: парковка двигает его через setBounds,
     // и без этой проверки каждое движение родителя засоряло бы лог
     // и закрывало активное меню в момент установки bounds.
-    if (parked.has(parent.id)) return
+    if (contentUnmounted.has(parent.id)) return
     log('lifecycle', 'parent move/resize/minimize -> close', { parentId: parent.id })
     closeOverlay(parent)
   }
   const closeOnBlur = () => {
     if (isSystemDialogOpen) return
-    if (parked.has(parent.id)) return
+    if (contentUnmounted.has(parent.id)) return
     // Переключение на чужое окно не стреляет ни move, ни resize, ни
     // minimize — ловим только здесь. Иначе оверлей alwaysOnTop висит
     // поверх чужого окна с меню не того приложения.
@@ -501,7 +501,7 @@ function parkOverlay(overlay: BrowserWindow, parentId?: number): void {
     // Порядок обязателен: опустошаем окно, и только потом уводим за
     // экран. Иначе в промежутке между setBounds и прозрачностью WM
     // успевает показать кадр со старым содержимым.
-    sendParked(overlay, true)
+    setContentMounted(overlay, true)
     overlay.setOpacity(0)
     // Выключаем ввод: припаркованный кликабельный оверлей перехватывал
     // клики и слал dismiss в цикл.
@@ -524,8 +524,8 @@ function parkOverlay(overlay: BrowserWindow, parentId?: number): void {
       }
     }
     if (parentId !== undefined) {
-      parked.add(parentId)
-      log('lifecycle', 'overlay parked', { parentId })
+      contentUnmounted.add(parentId)
+      log('lifecycle', 'overlay content unmounted', { parentId })
     }
   } catch (err) {
     logError('failed to park overlay', err)
@@ -537,10 +537,10 @@ function parkOverlay(overlay: BrowserWindow, parentId?: number): void {
 // Отправляем всегда, даже если webContents грузится: сообщение в очереди
 // дойдёт после перезагрузки страницы, а проверка isLoading() оставила бы
 // окно с контентом на экране. В prod loadFile с hash = полный reload,
-// renderer пересоздаётся и его состояние parked сбрасывается к дефолту.
-function sendParked(overlay: BrowserWindow, value: boolean): void {
+// renderer пересоздаётся и его состояние contentUnmounted сбрасывается.
+function setContentMounted(overlay: BrowserWindow, value: boolean): void {
   try {
-    overlay.webContents.send(PARK_CHANNEL, value)
+    overlay.webContents.send(CONTENT_CHANNEL, value)
   } catch (err) {
     logError('failed to send park state', err)
   }
@@ -863,7 +863,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     // показать кадр со старым содержимым.
     if (!overlay.isDestroyed()) {
       // 1. Содержимое убираем первым — главный слой защиты.
-      sendParked(overlay, true)
+      setContentMounted(overlay, true)
       // 2. Гасим прозрачность: на Linux setOpacity(0) не гарантия, но
       //    дешевле и убирает most случаев.
       overlay.setOpacity(0)
@@ -876,19 +876,19 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
           parkOffscreen(overlay, width, height)
         }
       }
-      parked.add(parent.id)
+      contentUnmounted.add(parent.id)
       // Диагностика: сразу после парковки снимаем ФАКТИЧЕСКИЕ границы.
       // setBounds — просьба, а не команда: WM может положить окно в
       // рабочую область соседнего дисплея, и это видно только здесь.
       const after = overlay.getBounds()
-      log('geometry', 'after park', {
+      log('geometry', 'after unmount', {
         parentId: parent.id,
         bounds: after,
         onScreen: intersectsWorkArea(after),
         displayId: screen.getDisplayMatching(after).id
       })
     }
-    log('geometry', 'parked while loading', { x: Math.round(x), y: Math.round(y), width, height })
+    log('geometry', 'content unmounted while loading', { x: Math.round(x), y: Math.round(y), width, height })
   }
 
   log('geometry', 'resolved', { x: Math.round(x), y: Math.round(y), width, height })
@@ -898,7 +898,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   // Гасим окно до любых дальнейших действий: с этого момента до
   // подтверждения отрисовки оно не должно быть видимо.
   win.setOpacity(0)
-  parked.add(parent.id)
+  contentUnmounted.add(parent.id)
   // Токен сессии — до active.set: по нему resolveOverlaySelect отличает
   // свою сессию от новой, открытой из onSelect.
   const sessionToken = ++sessionCounter
@@ -984,7 +984,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     // опустошаем его, и только потом перемещаем — иначе в промежутке
     // между setBounds и прозрачностью WM успевает показать кадр со
     // старым содержимым, и это видно как моргание.
-    sendParked(win, true)
+    setContentMounted(win, true)
     // Ставим позицию сразу, НЕ уводя за экран. Окно уже пустое (v-if
     // в renderer снял содержимое) и прозрачное, поэтому показывать ему
     // нечего и моргать нечему.
@@ -1011,9 +1011,9 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     })
     if (win.isDestroyed()) return
     // Показ. Ключевой момент — прозрачность включается ПОСЛЕ того, как
-    // renderer реально применил parked=false.
+    // renderer реально применил contentUnmounted=false.
     //
-    // sendParked — асинхронный IPC: сообщение уходит в renderer, Vue
+    // setContentMounted — асинхронный IPC: сообщение уходит в renderer, Vue
     // применяет v-if на следующем кадре. Если сразу после него включить
     // opacity, есть кадр, где окно уже на реальных координатах и уже
     // непрозрачное, но ещё со СТАРЫМ содержимым — это и есть вспышка.
@@ -1021,7 +1021,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     // Поэтому ждём подтверждения от renderer и только после него
     // возвращаем прозрачность. Пока окно пустое, моргать нечему, даже
     // если WM его покажет.
-    parked.delete(parent.id)
+    contentUnmounted.delete(parent.id)
     // Позиция уже выставлена до ожидания подтверждения — повторный
     // setBounds здесь был бы лишним вызовом WM без изменения результата.
     // Диагностика фактических границ после установки координат: если
@@ -1038,8 +1038,8 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     win.setIgnoreMouseEvents(false)
     // Содержимое показываем, прозрачность пока НЕ трогаем.
     mark('ov:ready')
-    sendParked(win, false)
-    // Ждём, пока renderer применит parked=false и реально отдаст кадр.
+    setContentMounted(win, false)
+    // Ждём, пока renderer применит contentUnmounted=false и отдаст кадр.
     await overlayPainted(win, sessionToken)
     if (win.isDestroyed()) return
     win.setOpacity(1)
@@ -1104,7 +1104,7 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
         // выглядело как «Cancel не работает».
         //
         // Старое содержимое тоже не трогаем: размонтит его новая
-        // сессия своим sendParked(true), а если она ещё грузится, то
+        // сессия своим setContentMounted(true), а если она ещё грузится, то
         // размонтирование покажет пользователю пустое окно вместо
         // прежних пунктов. Поэтому просто выходим — showOverlay новой
         // сессии уже отправил все нужные сообщения.

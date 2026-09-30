@@ -14,7 +14,7 @@ const READY_CHANNEL = 'overlay:ready'
 // Канал управления парковкой: main сообщает окну, нужно ли убрать
 // содержимое из рендера. Главный механизм скрытия, парковка координатами
 // — вспомогательный.
-const PARK_CHANNEL = 'overlay:park'
+const CONTENT_CHANNEL = 'overlay:park'
 
 // Канал подтверждения отрисовки содержимого после снятия парковки.
 const PAINTED_CHANNEL = 'overlay:painted'
@@ -117,22 +117,25 @@ const overlayAPI = {
     ipcRenderer.send(READY_CHANNEL, token)
   },
 
-  // Парковка. Главный механизм скрытия — не прозрачность окна, а
-  // удаление содержимого из рендера: на Linux с несколькими мониторами
-  // координаты парковки клампятся в рабочую область, и прозрачное окно
-  // всё равно оказывается видимым где-то на экране. Пустой DOM не
-  // виден нигде. setParked — команда main, onParked — подписка.
-  setParked: (parked: boolean): void => {
-    ipcRenderer.send(PARK_CHANNEL, parked)
+  // Управление содержимым оверлея. Главный механизм скрытия — не
+  // прозрачность окна и не позиция, а удаление содержимого из рендера:
+  // пустой DOM не виден нигде, куда бы оконный менеджер ни положил
+  // окно.
+  //
+  // Имя намеренно не про парковку: парковка позицией устарела и
+  // отключена (PARK_MOVES_WINDOW = false), а размонтирование осталось и
+  // работает. Канал прежний — 'overlay:park'.
+  setContentMounted: (mounted: boolean): void => {
+    ipcRenderer.send(CONTENT_CHANNEL, mounted)
   },
-  onParked: (cb: (parked: boolean) => void): (() => void) => {
+  onContentMounted: (cb: (mounted: boolean) => void): (() => void) => {
     const listener = (_e: Electron.IpcRendererEvent, v: boolean): void => cb(v)
-    ipcRenderer.on(PARK_CHANNEL, listener)
-    return () => ipcRenderer.removeListener(PARK_CHANNEL, listener)
+    ipcRenderer.on(CONTENT_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(CONTENT_CHANNEL, listener)
   },
 
   // Кадр реально отдан. Main держит окно прозрачным до этого сигнала:
-  // между sendParked(false) и применением v-if проходит кадр, и в нём
+  // между setContentMounted(false) и применением v-if проходит кадр, и в нём
   // ещё лежит старое содержимое. Если сразу вернуть прозрачность,
   // пользователь увидит вспышку предыдущего меню.
   painted: (token: number): void => {

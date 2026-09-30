@@ -40,7 +40,7 @@ const error = ref('')
 // мониторами координаты клампятся в рабочую область, и оверлей оказывается
 // видимым на соседнем мониторе. Пустой DOM не виден нигде, поэтому
 // содержимое убираем через v-if — это основная защита, а не setOpacity.
-const parked = ref(true)
+const contentUnmounted = ref(true)
 // Парсим синхронно до первого рендера: иначе .no-anim применится
 // после старта анимации и fade при animations off всё равно проиграется.
 // Тему кладем на <html> сразу — оверлей красится до монтирования.
@@ -139,8 +139,8 @@ onMounted(() => {
   // парковке контент РАЗМОНТИРОВАН через v-if: окно пустое и прозрачное,
   // показывать нечего, вспышка старых пунктов физически неоткуда взяться.
   // Если когда-то появится реальная вспышка — возвращать второй rAF.
-  window.overlayAPI?.onParked?.((v: boolean) => {
-    parked.value = v
+  window.overlayAPI?.onContentMounted?.((v: boolean) => {
+    contentUnmounted.value = v
     if (v) return
     const token = payload.value?.token
     if (token === undefined) return
@@ -197,13 +197,13 @@ async function onSubmit(value: string) {
 <template>
   <div
     class="overlay-root"
-    :class="{ 'align-start': payload?.align === 'start', live: !parked }"
+    :class="{ 'align-start': payload?.align === 'start', live: !contentUnmounted }"
     @mousedown="onBackdrop">
-    <!-- parked: содержимое убрано из рендера полностью. Это основная
-         защита от «мусорного» оверлея: окно может оказаться в любой
-         точке экрана (парковку клампит оконный менеджер), но пустой
-         DOM не виден нигде. Прозрачности окна для этого недостаточно. -->
-    <template v-if="!parked">
+    <!-- contentUnmounted: содержимое убрано из рендера полностью. Это
+         основная защита от «мусорного» оверлея: окно может оказаться в
+         любой точке экрана, но пустой DOM не виден нигде.
+         Прозрачности окна для этого недостаточно. -->
+    <template v-if="!contentUnmounted">
       <div v-if="error" class="overlay-error">{{ error }}</div>
       <BrowserMenu
         v-else-if="payload?.kind === 'menu'"
@@ -234,7 +234,7 @@ async function onSubmit(value: string) {
 </template>
 
 <style scoped>
-/* parked: корень перестаёт быть мишенью для мыши ВООБЩЕ. Он занимает
+/* contentUnmounted: корень перестаёт быть мишенью для мыши ВООБЩЕ.
    весь вьюпорт (100vw x 100vh), и при парковке содержимое убрано, но сам
    div остаётся — а пустой полноэкранный div всё равно ловит mousedown
    под собой. Из-за этого клик по вкладке или панели не доходил до
