@@ -4,6 +4,18 @@ import { getSettingsSync } from './settingsStore'
 import { verifyIconSource, verifyEmojiButton, fileToIconDataUrl } from './iconVerify'
 import { buildIconErrorScript } from './findScripts'
 import { log, mark, perf, recordOpen, logError } from './overlay/logger'
+import {
+  createOverlay,
+  ensureOverlayWindow as ensurePooledWindow,
+  getPooledOverlay,
+  hideContent,
+  isContentUnmounted,
+  logBoundsAfterHide,
+  markContentShown,
+  markContentUnmounted,
+  setContentUnmounted
+} from './overlay/pool'
+import type { PoolHooks } from './overlay/pool'
 
 // Менеджер оверлей-окон: прозрачные frameless-окна поверх основного,
 // в них DOM-меню/тосты/попапы любой темы. Замена системному Menu.popup,
@@ -95,8 +107,6 @@ const TOGGLE_ECHO_MS = 250
 // Флаг: открыт ли системный диалог (файл/сохранение) — чтобы игнорировать blur/move/resize
 let isSystemDialogOpen = false
 
-// Переиспользуемые оверлей-окна: parentId -> BrowserWindow (скрыто когда не используется)
-const overlayPool = new Map<number, BrowserWindow>()
 
 // Оверлейное окно живёт постоянно: мы НИКОГДА не вызываем show()/hide().
 // Причина: DWM (Desktop Window Manager) на Windows анимирует появление и
@@ -113,261 +123,30 @@ const overlayPool = new Map<number, BrowserWindow>()
 // пределами экрана и прозрачно — пользователь его не видит и не может
 // кликнуть. Ни одного вызова show/hide → ни одной системной анимации.
 
-// Парковочная позиция. НЕЛЬЗЯ хардкодить отрицательные координаты:
-// при мониторе СЛЕВА (x < 0) точка вроде (-32000, -32000) оказывается
-// внутри его рабочей области — оверлей оказывался виден на втором
-// мониторе вместо парковки, а клики по нему работали как по живому меню.
-// Поэтому паркуем за пределы объединённой рабочей области всех
-// дисплеев: x/y считаются от display.workArea и всегда за экраном.
-/**
- * @deprecated Устарело. Парковка позицией выключена (PARK_MOVES_WINDOW).
- * Скрытие содержимого обеспечивают размонтирование, прозрачность и
- * отключение ввода. Оставлено для Linux и для отката одной строкой.
- */
-function parkPosition(): { x: number; y: number } {
-  // Верхний левый угол объединённой рабочей области всех дисплеев.
-  // Паркуем выше и левее него: в эту точку физически нельзя попасть
-  // курсором, и она гарантированно вне любого монитора, включая
-  // расположенные слева (с отрицательным x).
-  let minX = 0
-  let minY = 0
-  for (const d of screen.getAllDisplays()) {
-    minX = Math.min(minX, d.workArea.x)
-    minY = Math.min(minY, d.workArea.y)
-  }
-  // Запас 2000px достаточен, чтобы не попасть в зону автопоказа, и не
-  // выходит за пределы int-диапазона ОС.
-  return { x: minX - 2000, y: minY - 2000 }
-}
-
-// Размеры парковочного окна. По умолчанию реальные (не 1x1), чтобы при
-// возврате не было пересоздания/ресайза.
-function parkBounds(width: number, height: number): Electron.Rectangle {
-  const p = parkPosition()
-  return { x: p.x, y: p.y, width, height }
-}
-
-// Окно внутри рабочей области какого-либо дисплея?
-// Возвращает true, если хотя бы один прямоугольник пересекается.
-function intersectsWorkArea(r: Electron.Rectangle): boolean {
-  return screen.getAllDisplays().some((d) => {
-    const a = d.workArea
-    const overlapX = Math.min(r.x + r.width, a.x + a.width) - Math.max(r.x, a.x)
-    const overlapY = Math.min(r.y + r.height, a.y + a.height) - Math.max(r.y, a.y)
-    return overlapX > 0 && overlapY > 0
-  })
-}
-
-// Уводит окно за пределы рабочей области, ПРОВЕРЯЯ результат.
-//
-// Почему проверка обязательна: `setBounds` с координатами за экраном —
-// это просьба, а не команда. Оконный менеджер вправе её проигнорировать:
-// на Linux X11/Wayland координаты клампятся в рабочую область ближайшего
-// дисплея, и окно оказывается на соседнем мониторе. Отсюда редкие
-// «выстрелы» — в 9 случаях из 10 парковка срабатывала, на десятый раз
-// WM не успел и оверлей мелькнул на экране.
-//
-// Стратегия: пробуем увести с реальным размером, читаем фактические
-// границы и, если окно всё ещё на экране, повторяем уже крохотным — 1x1
-// в углу. Крохотное прозрачное окно без содержимого не занимает ничего
-// и не перехватывает клики, даже если WM впихнёт его в угол.
-/**
- * @deprecated Устарело. См. PARK_MOVES_WINDOW. На Windows клик по
- * непрозрачной области проходил сквозь окно, лежащее под курсором, и
- * закрывал меню; возвращать парковку следует только вместе с проверкой
- * overlay.isFocused() в обработчике blur.
- */
-function parkOffscreen(overlay: BrowserWindow, width: number, height: number): void {
-  overlay.setBounds(parkBounds(width, height))
-  let actual = overlay.getBounds()
-  if (!intersectsWorkArea(actual)) return
-
-  // Не сработало — сжимаем до 1x1 и уводим ещё дальше.
-  const far = parkPosition()
-  overlay.setBounds({ x: far.x - 4000, y: far.y - 4000, width: 1, height: 1 })
-  actual = overlay.getBounds()
-  if (intersectsWorkArea(actual)) {
-    // Совсем крайний случай: WM упорно держит окно на экране. Сообщаем
-    // в лог, чтобы это было видно, а не молча ловилось на глаз.
-    logError('overlay could not be parked off-screen', { bounds: actual })
-  }
-}
-
-// Парковочная позиция В ПРЕДЕЛАХ дисплея родителя.
-//
-// В отличие от parkPosition(), которая уводит окно за объединённую
-// рабочую область (то есть на другой дисплей при их наличии), эта
-// функция оставляет окно на том же дисплее, но выше его рабочей
-// области. Дисплей не меняется, поэтому композитор не пересоздаёт
-// поверхность — а именно это, по логам, стоило один кадр (16.6 мс)
-// на первом открытии.
-//
-// Возвращает null, если такого положения не существует (например,
-// над дисплеем нет места) — тогда вызывающий код откатится к обычной
-// парковке.
-function parkBoundsWithinDisplay(
-  display: Electron.Display,
-  width: number,
-  height: number
-): Electron.Rectangle | null {
-  // Пробуем сначала над дисплеем, потом под ним. Оба варианта вне
-  // workArea, поэтому intersectsWorkArea() обязан вернуть false.
-  const candidates: Electron.Rectangle[] = [
-    { x: display.bounds.x, y: display.bounds.y - height, width, height },
-    {
-      x: display.bounds.x,
-      y: display.bounds.y + display.bounds.height,
-      width,
-      height
-    }
-  ]
-  for (const c of candidates) {
-    if (intersectsWorkArea(c)) continue
-    return c
-  }
-  return null
-}
-
-// Паркует окно на дисплее родителя. Возвращает true, если сработало.
-/**
- * @deprecated Устарело. Вариант парковки, проверенный измерениями:
- * переезд между дисплеями стоил один кадр композитора, а парковка в
- * пределах дисплея родителя его устраняла. Неработающий путь — если
- * над дисплеем нет места. Оставлено для Linux и для отката.
- */
-function parkOnParentDisplay(
-  overlay: BrowserWindow,
-  parent: BrowserWindow,
-  width: number,
-  height: number
-): boolean {
-  // getDisplayMatching, а не getDisplay: он есть в Electron, а
-  // getDisplay(bounds) — нет. Совпадение с окном родителя даёт нужный
-  // дисплей и заодно корректно для многомониторной раскладки.
-  const display = screen.getDisplayMatching(parent.getBounds())
-  const bounds = parkBoundsWithinDisplay(display, width, height)
-  if (!bounds) {
-    log('geometry', 'no off-screen slot on parent display', {
-      parentId: parent.id,
-      displayId: display.id,
-      width,
-      height
-    })
-    return false
-  }
-  overlay.setBounds(bounds)
-  const actual = overlay.getBounds()
-  const actualDisplay = screen.getDisplayMatching(actual)
-  const ok = !intersectsWorkArea(actual) && actualDisplay.id === display.id
-  log('geometry', 'content unmounted on parent display', {
-    parentId: parent.id,
-    want: bounds,
-    got: actual,
-    onScreen: intersectsWorkArea(actual),
-    wantDisplayId: display.id,
-    gotDisplayId: actualDisplay.id,
-    ok
-  })
-  return ok
-}
-
-// УСТАРЕЛО. Перемещение окна при парковке выключено: содержимое и так
-// размонтировано через v-if, окно прозрачно, ввод отключён. Позиция
-// больше не является механизмом скрытия.
-//
-// Проверено измерениями: именно переезд между дисплеями стоил один
-// кадр композитора (+16.6 мс на первом открытии). Парковка в пределах
-// дисплея родителя задержку убирала, но и убирать перемещение полностью
-// даёт тот же результат.
-//
-// true — прежнее поведение: уводить окно за экран. Оставлено как
-// запасной вариант для Linux и для отката одной строкой.
-const PARK_MOVES_WINDOW = false
-
-const CONTENT_CHANNEL = 'overlay:park'
 
 // Renderer сообщает, что применил contentUnmounted=false и кадр отдан.
 // Только после этого main возвращает прозрачность окну.
 const PAINTED_CHANNEL = 'overlay:painted'
 
-// Монотонный счетчик сессий оверлея. Каждое открытие получает новый
-// токен: renderer подтверждает отрисовку именно этого токена, а main
-// игнорирует подтверждения от устаревших сессий (защита от гонок).
-let sessionCounter = 0
-
-// parentId -> { token, resolve }. Пока Promise не разрешён, окно держится
-// прозрачным: показывать старые пункты нового меню нельзя.
-const pendingReady = new Map<number, { token: number; resolve: () => void }>()
-
-// parentId -> true, пока окно парковано (невидимо). Нужно, чтобы
-// слушатели move/resize/minimize не реагировали на собственную парковку
-// и не закрывали активное меню в момент setBounds.
-const contentUnmounted = new Set<number>()
-
-// parentId -> время, до которого родительский blur не считается
-// переключением на чужое окно. Заполняется noteFocusHandoff.
-const focusHandoff = new Map<number, number>()
-
-// Сколько живёт пометка передачи фокуса. Столько нужно, чтобы focus()
-// оверлея дошёл до него на Linux: там он асинхронный, и в момент blur
-// родителя overlay.isFocused() ещё вернул бы false.
-const FOCUS_HANDOFF_MS = 400
-
-// Оверлей намеренно забирает фокус (панель поиска, автофокус поля в
-// диалоге) — родитель закономерно его теряет. Такой blur пропускаем.
-function noteFocusHandoff(parentId: number): void {
-  focusHandoff.set(parentId, Date.now() + FOCUS_HANDOFF_MS)
-}
-
-const MENU_W = 260
-const MENU_ITEM_H = 40
-const MENU_PAD = 20
-const DIALOG_W = 320
-const DIALOG_H = 190
-// Общий диалог иконки: поле + 4 кнопки, выше обычного диалога.
-const ICON_W = 340
-const ICON_H = 250
-// Панель поиска: ширина как у VS Code, высота под одну строку + отступ.
-const FIND_W = 380
-const FIND_H = 56
-
-function menuHeight(items: OverlayMenuItem[], incognito: boolean): number {
-  return MENU_PAD + items.length * MENU_ITEM_H + (incognito ? 26 : 0)
-}
-
-function overlayUrl(payload: object): string {
-  const encoded = encodeURIComponent(JSON.stringify(payload))
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    return `${process.env['ELECTRON_RENDERER_URL']}/menu.html#payload=${encoded}`
-  }
-  return `file://${join(__dirname, '../renderer/menu.html')}#payload=${encoded}`
-}
-
-// Создаёт оверлей-окно заранее и кладёт в пул, не показывая его.
-// Вызывается при создании основного окна браузера, чтобы первый оверлей
-// открывался мгновенно (без задержки на new BrowserWindow + load).
-// Вешает слушатели, которые закрывают активный оверлей при потере
-// родителя: движение, ресайз, сворачивание и ПЕРЕКЛЮЧЕНИЕ НА ДРУГОЕ ОКНО.
+// Вешает слушатели, закрывающие активный оверлей при потере родителя:
+// движение, ресайз, сворачивание, ПЕРЕКЛЮЧЕНИЕ НА ДРУГОЕ ОКНО и Esc.
 //
-// Отдельный 'blur' обязателен: у minimize/move/resize есть события, а
-// переключение на чужое окно их не стреляет — родитель остаётся на месте
-// и не меняет размеры. Оверлей при этом `alwaysOnTop: true` и висит
-// поверх чужого окна, показывая меню не того приложения. Своим 'blur'
-// поймать нельзя: меню открывается через showInactive(), фокус у
-// оверлея не было, значит и blur не придёт. Ловим по родителю.
+// В пул не выносится: нужны active, focusHandoff и closeOverlay, то есть
+// всё состояние сессий. Пул получает готовую функцию через хук
+// onParentEvent — иначе возник бы циклический импорт.
 function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): void {
   const closeOnParent = () => {
     if (isSystemDialogOpen) return
     // Паркованное окно невидимо: парковка двигает его через setBounds,
     // и без этой проверки каждое движение родителя засоряло бы лог
     // и закрывало активное меню в момент установки bounds.
-    if (contentUnmounted.has(parent.id)) return
+    if (isContentUnmounted(parent.id)) return
     log('lifecycle', 'parent move/resize/minimize -> close', { parentId: parent.id })
     closeOverlay(parent)
   }
   const closeOnBlur = () => {
     if (isSystemDialogOpen) return
-    if (contentUnmounted.has(parent.id)) return
+    if (isContentUnmounted(parent.id)) return
     // Переключение на чужое окно не стреляет ни move, ни resize, ни
     // minimize — ловим только здесь. Иначе оверлей alwaysOnTop висит
     // поверх чужого окна с меню не того приложения.
@@ -433,118 +212,79 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
   })
 }
 
+// Хуки для пула. Замыкание создаётся на каждый вызов: пул знает только
+// parentId, а closeOverlay и attachParentListeners требуют сам объект
+// окна. Создавать один раз нельзя — родитель может быть пересоздан.
+function poolHooks(): PoolHooks {
+  return {
+    onWindowClosed: (parentId: number) => {
+      const parent = BrowserWindow.fromId(parentId)
+      if (parent) closeOverlay(parent)
+    },
+    onParentEvent: (parent: BrowserWindow) => {
+      const win = getPooledOverlay(parent.id)
+      if (win) attachParentListeners(parent, win)
+    }
+  }
+}
+
+// Точка входа для внешнего кода (windowsManager). Внутренняя реализация
+// живёт в пуле.
 export function ensureOverlayWindow(parent: BrowserWindow): void {
-  if (overlayPool.has(parent.id)) return
-  const t0 = mark('overlay:prewarm')
-  log('pool', 'prewarming window', { parentId: parent.id })
-  const overlay = new BrowserWindow({
-    x: 0,
-    y: 0,
-    width: 1,
-    height: 1,
-    parent,
-    show: false,
-    frame: false,
-    transparent: true,    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    hasShadow: false,
-    backgroundColor: '#00000000',
-    focusable: true,
-    webPreferences: {
-      preload: join(__dirname, '../preload/overlay.cjs'),
-      contextIsolation: true,
-      sandbox: false
-    }
-  })
-  overlayPool.set(parent.id, overlay)
+  ensurePooledWindow(parent, poolHooks())
+}
 
-  const cleanup = () => {
-    if (active.get(parent.id)?.overlay === overlay) active.delete(parent.id)
-  }
-  overlay.on('closed', cleanup)
-  overlay.on('blur', () => {
-    if (isSystemDialogOpen) return
-    log('lifecycle', 'blur -> close', { parentId: parent.id })
-    closeOverlay(parent)
-  })
-  attachParentListeners(parent, overlay)
-  // Прогрев завершён, когда страница оверлея загрузилась.
-  overlay.once('ready-to-show', () => {
-    perf('prewarm', 'overlay:prewarm', { parentId: parent.id })
-    // Показываем ровно один раз за жизнь окна, чтобы оно получило
-    // видимость у DWM, и сразу уводим в парк. Дальше show()/hide()
-    // не вызываются НИКОГДА — это и убирает системную анимацию.
-    overlay.showInactive()
-    parkOverlay(overlay, parent.id)
-  })
+// Монотонный счетчик сессий оверлея. Каждое открытие получает новый
+// токен: renderer подтверждает отрисовку именно этого токена, а main
+// игнорирует подтверждения от устаревших сессий (защита от гонок).
+let sessionCounter = 0
+
+// parentId -> { token, resolve }. Пока Promise не разрешён, окно держится
+// прозрачным: показывать старые пункты нового меню нельзя.
+const pendingReady = new Map<number, { token: number; resolve: () => void }>()
+
+
+// parentId -> время, до которого родительский blur не считается
+// переключением на чужое окно. Заполняется noteFocusHandoff.
+const focusHandoff = new Map<number, number>()
+
+// Сколько живёт пометка передачи фокуса. Столько нужно, чтобы focus()
+// оверлея дошёл до него на Linux: там он асинхронный, и в момент blur
+// родителя overlay.isFocused() ещё вернул бы false.
+const FOCUS_HANDOFF_MS = 400
+
+// Оверлей намеренно забирает фокус (панель поиска, автофокус поля в
+// диалоге) — родитель закономерно его теряет. Такой blur пропускаем.
+function noteFocusHandoff(parentId: number): void {
+  focusHandoff.set(parentId, Date.now() + FOCUS_HANDOFF_MS)
+}
+
+const MENU_W = 260
+const MENU_ITEM_H = 40
+const MENU_PAD = 20
+const DIALOG_W = 320
+const DIALOG_H = 190
+// Общий диалог иконки: поле + 4 кнопки, выше обычного диалога.
+const ICON_W = 340
+const ICON_H = 250
+// Панель поиска: ширина как у VS Code, высота под одну строку + отступ.
+const FIND_W = 380
+const FIND_H = 56
+
+function menuHeight(items: OverlayMenuItem[], incognito: boolean): number {
+  return MENU_PAD + items.length * MENU_ITEM_H + (incognito ? 26 : 0)
+}
+
+function overlayUrl(payload: object): string {
+  const encoded = encodeURIComponent(JSON.stringify(payload))
   if (process.env['ELECTRON_RENDERER_URL']) {
-    void overlay.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/menu.html`)
-  } else {
-    void overlay.loadFile(join(__dirname, '../renderer/menu.html'))
+    return `${process.env['ELECTRON_RENDERER_URL']}/menu.html#payload=${encoded}`
   }
+  return `file://${join(__dirname, '../renderer/menu.html')}#payload=${encoded}`
 }
 
-// Паркует оверлей при ЗАКРЫТИИ: гасит всё содержимое и уводит окно за
-// экран. Перемещение здесь безобидно — пользователь ничего не ждёт, а
-// припаркованное окно не торчит на соседнем мониторе.
-//
-// При ПЕРЕКЛЮЧЕНИИ сессии парковка тоже применяется, но обязательно
-// ПОСЛЕ опустошения окна: иначе в промежутке между setBounds и прозрачностью
-// WM успевает показать кадр со старым содержимым, и это видно как моргание.
-function parkOverlay(overlay: BrowserWindow, parentId?: number): void {
-  if (overlay.isDestroyed()) return
-  try {
-    // Порядок обязателен: опустошаем окно, и только потом уводим за
-    // экран. Иначе в промежутке между setBounds и прозрачностью WM
-    // успевает показать кадр со старым содержимым.
-    setContentMounted(overlay, true)
-    overlay.setOpacity(0)
-    // Выключаем ввод: припаркованный кликабельный оверлей перехватывал
-    // клики и слал dismiss в цикл.
-    overlay.setIgnoreMouseEvents(true, { forward: false })
-    // Перемещение окна — отдельный слой. Содержимое уже размонтировано,
-    // прозрачно и некликабельно, поэтому парковка позицией не обязательна.
-    if (PARK_MOVES_WINDOW) {
-      const b = overlay.getBounds()
-      if (parentId !== undefined) {
-        const parent = BrowserWindow.fromId(parentId)
-        if (parent && !parent.isDestroyed()) {
-          if (!parkOnParentDisplay(overlay, parent, b.width, b.height)) {
-            parkOffscreen(overlay, b.width, b.height)
-          }
-        } else {
-          parkOffscreen(overlay, b.width, b.height)
-        }
-      } else {
-        parkOffscreen(overlay, b.width, b.height)
-      }
-    }
-    if (parentId !== undefined) {
-      contentUnmounted.add(parentId)
-      log('lifecycle', 'overlay content unmounted', { parentId })
-    }
-  } catch (err) {
-    logError('failed to park overlay', err)
-  }
-}
 
-// Сообщаем окну, показывать ли содержимое.
-//
-// Отправляем всегда, даже если webContents грузится: сообщение в очереди
-// дойдёт после перезагрузки страницы, а проверка isLoading() оставила бы
-// окно с контентом на экране. В prod loadFile с hash = полный reload,
-// renderer пересоздаётся и его состояние contentUnmounted сбрасывается.
-function setContentMounted(overlay: BrowserWindow, value: boolean): void {
-  try {
-    overlay.webContents.send(CONTENT_CHANNEL, value)
-  } catch (err) {
-    logError('failed to send park state', err)
-  }
-}
+
 
 // Renderer подтвердил, что сессия с токеном отрисована. Разрешаем показ.
 // Токен сверяется: подтверждение от устаревшей сессии игнорируем.
@@ -610,7 +350,7 @@ export function closeOverlay(parent: BrowserWindow): void {
     // бы BrowserWindow, и следующий showOverlay создавал бы новое окно
     // (потеря прогрева и лишние ~60 МБ на каждое открытие).
     if (!entry.overlay.isDestroyed()) {
-      parkOverlay(entry.overlay, parent.id)
+      hideContent(entry.overlay, parent.id)
     }
   } catch {
     // Уже закрыто — игнорим.
@@ -796,62 +536,17 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
 
   // Оверлей-окно уже создано заранее через ensureOverlayWindow.
   // Просто обновляем bounds и загружаем новый payload.
-  let overlay = overlayPool.get(parent.id)
+  let overlay = getPooledOverlay(parent.id)
   const reused = !!overlay && !overlay.isDestroyed()
   log('pool', reused ? 'reusing pooled window' : 'no pooled window, creating', {
     parentId: parent.id,
     kind: request.kind
   })
-  if (!overlay || overlay.isDestroyed()) {
-    // Fallback: если окно не было создано заранее (на всякий случай)
-    overlay = new BrowserWindow({
-      x: Math.round(x),
-      y: Math.round(y),
-      width,
-      height,
-      parent,
-      show: false,
-      frame: false,
-      transparent: true,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      hasShadow: false,
-      backgroundColor: '#00000000',
-      focusable: true,
-      webPreferences: {
-        preload: join(__dirname, '../preload/overlay.cjs'),
-        contextIsolation: true,
-        sandbox: false
-      }
-    })
-    overlayPool.set(parent.id, overlay)
-
-    const cleanup = () => {
-      if (active.get(parent.id)?.overlay === overlay) active.delete(parent.id)
-    }
-    overlay.on('closed', cleanup)
-    overlay.on('blur', () => {
-      if (isSystemDialogOpen) return
-      log('lifecycle', 'blur -> close', { parentId: parent.id })
-      closeOverlay(parent)
-    })
-    attachParentListeners(parent, overlay)
-    // Окно создано лениво (fallback): тот же единственный show() + парк,
-    // что и в ensureOverlayWindow.
-    const fresh = overlay
-    fresh.once('ready-to-show', () => {
-      fresh.showInactive()
-      parkOverlay(fresh, parent.id)
-    })
-    if (process.env['ELECTRON_RENDERER_URL']) {
-      void fresh.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/menu.html`)
-    } else {
-      void fresh.loadFile(join(__dirname, '../renderer/menu.html'))
-    }
+if (!overlay || overlay.isDestroyed()) {
+    // Fallback: окно не было создано заранее (или уничтожено). Создаём
+    // через пул — опции, слушатели и загрузка страницы те же, что при
+    // прогреве. Дублировать их здесь было ошибкой: копии разошлись.
+    overlay = createOverlay(parent, poolHooks())
   } else {
     // Окно из пула, сейчас на экране. Порядок КРИТИЧЕН: сначала
     // опустошаем окно (содержимое, прозрачность, ввод), и только потом
@@ -862,31 +557,18 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     // моргание: в промежутке между setBounds и прозрачностью WM успевал
     // показать кадр со старым содержимым.
     if (!overlay.isDestroyed()) {
-      // 1. Содержимое убираем первым — главный слой защиты.
-      setContentMounted(overlay, true)
-      // 2. Гасим прозрачность: на Linux setOpacity(0) не гарантия, но
-      //    дешевле и убирает most случаев.
-      overlay.setOpacity(0)
-      // 3. Выключаем ввод: припаркованный кликабельный оверлей перехватывал
-      //    клики и слал dismiss в цикл.
-      overlay.setIgnoreMouseEvents(true, { forward: false })
-      // 4. И только теперь уводим за экран, с проверкой результата.
-      if (PARK_MOVES_WINDOW) {
-        if (!parkOnParentDisplay(overlay, parent, width, height)) {
-          parkOffscreen(overlay, width, height)
-        }
-      }
-      contentUnmounted.add(parent.id)
-      // Диагностика: сразу после парковки снимаем ФАКТИЧЕСКИЕ границы.
+      // Порядок обязателен: опустошить окно, и только потом перемещать.
+      // Иначе в промежутке между setBounds и прозрачностью WM успевает
+      // показать кадр со старым содержимым.
+      //
+      // Логика живёт в pool.hideContent. Дубль был второй копией и уже
+      // разошёлся с пулом: флаг размонтирования ставился вручную, минуя
+      // API, из-за чего правки пула не действовали на этот путь.
+      hideContent(overlay, parent.id)
+      // Диагностика: снимаем ФАКТИЧЕСКИЕ границы после скрытия.
       // setBounds — просьба, а не команда: WM может положить окно в
       // рабочую область соседнего дисплея, и это видно только здесь.
-      const after = overlay.getBounds()
-      log('geometry', 'after unmount', {
-        parentId: parent.id,
-        bounds: after,
-        onScreen: intersectsWorkArea(after),
-        displayId: screen.getDisplayMatching(after).id
-      })
+      logBoundsAfterHide(overlay, parent.id)
     }
     log('geometry', 'content unmounted while loading', { x: Math.round(x), y: Math.round(y), width, height })
   }
@@ -898,7 +580,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   // Гасим окно до любых дальнейших действий: с этого момента до
   // подтверждения отрисовки оно не должно быть видимо.
   win.setOpacity(0)
-  contentUnmounted.add(parent.id)
+  markContentUnmounted(parent.id)
   // Токен сессии — до active.set: по нему resolveOverlaySelect отличает
   // свою сессию от новой, открытой из onSelect.
   const sessionToken = ++sessionCounter
@@ -984,7 +666,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     // опустошаем его, и только потом перемещаем — иначе в промежутке
     // между setBounds и прозрачностью WM успевает показать кадр со
     // старым содержимым, и это видно как моргание.
-    setContentMounted(win, true)
+    setContentUnmounted(win, true)
     // Ставим позицию сразу, НЕ уводя за экран. Окно уже пустое (v-if
     // в renderer снял содержимое) и прозрачное, поэтому показывать ему
     // нечего и моргать нечему.
@@ -1021,7 +703,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     // Поэтому ждём подтверждения от renderer и только после него
     // возвращаем прозрачность. Пока окно пустое, моргать нечему, даже
     // если WM его покажет.
-    contentUnmounted.delete(parent.id)
+    markContentShown(parent.id)
     // Позиция уже выставлена до ожидания подтверждения — повторный
     // setBounds здесь был бы лишним вызовом WM без изменения результата.
     // Диагностика фактических границ после установки координат: если
@@ -1038,7 +720,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     win.setIgnoreMouseEvents(false)
     // Содержимое показываем, прозрачность пока НЕ трогаем.
     mark('ov:ready')
-    setContentMounted(win, false)
+    setContentUnmounted(win, false)
     // Ждём, пока renderer применит contentUnmounted=false и отдаст кадр.
     await overlayPainted(win, sessionToken)
     if (win.isDestroyed()) return
@@ -1104,7 +786,7 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
         // выглядело как «Cancel не работает».
         //
         // Старое содержимое тоже не трогаем: размонтит его новая
-        // сессия своим setContentMounted(true), а если она ещё грузится, то
+        // сессия своим setContentUnmounted(true), а если она ещё грузится, то
         // размонтирование покажет пользователю пустое окно вместо
         // прежних пунктов. Поэтому просто выходим — showOverlay новой
         // сессии уже отправил все нужные сообщения.
@@ -1121,7 +803,7 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
         try {
           // hide(), а не close(): родитель уже мёртв, но окно держим
           // в пуле, если оно переиспользуемо.
-          parkOverlay(overlay)
+          hideContent(overlay)
         } catch {
           // Игнорим.
         }
@@ -1140,7 +822,7 @@ export function resolveOverlayDismiss(overlay: BrowserWindow): void {
       else {
         active.delete(parentId)
         try {
-          parkOverlay(overlay)
+          hideContent(overlay)
         } catch {
           // Игнорим.
         }
@@ -1162,7 +844,7 @@ export function resolveOverlaySubmit(overlay: BrowserWindow, raw: string): void 
       else {
         active.delete(parentId)
         try {
-          parkOverlay(overlay)
+          hideContent(overlay)
         } catch {
           // Игнорим.
         }
@@ -1246,7 +928,7 @@ export async function resolveOverlaySubmitIcon(
     else {
       active.delete(parentId)
       try {
-        parkOverlay(overlay)
+        hideContent(overlay)
       } catch {
         // Игнорим.
       }

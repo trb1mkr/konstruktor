@@ -122,21 +122,24 @@ const overlayAPI = {
   // пустой DOM не виден нигде, куда бы оконный менеджер ни положил
   // окно.
   //
+  // Флаг про РАЗМОНТИРОВАНИЕ, а не про монтирование: true = содержимое
+  // убрано из рендера. Имя setContentMounted путало полярностью.
+  //
   // Имя намеренно не про парковку: парковка позицией устарела и
   // отключена (PARK_MOVES_WINDOW = false), а размонтирование осталось и
   // работает. Канал прежний — 'overlay:park'.
-  setContentMounted: (mounted: boolean): void => {
-    ipcRenderer.send(CONTENT_CHANNEL, mounted)
+  setContentUnmounted: (unmounted: boolean): void => {
+    ipcRenderer.send(CONTENT_CHANNEL, unmounted)
   },
-  onContentMounted: (cb: (mounted: boolean) => void): (() => void) => {
+  onContentUnmounted: (cb: (unmounted: boolean) => void): (() => void) => {
     const listener = (_e: Electron.IpcRendererEvent, v: boolean): void => cb(v)
     ipcRenderer.on(CONTENT_CHANNEL, listener)
     return () => ipcRenderer.removeListener(CONTENT_CHANNEL, listener)
   },
 
   // Кадр реально отдан. Main держит окно прозрачным до этого сигнала:
-  // между setContentMounted(false) и применением v-if проходит кадр, и в нём
-  // ещё лежит старое содержимое. Если сразу вернуть прозрачность,
+  // между снятием размонтирования и применением v-if проходит кадр, и в
+  // нём ещё лежит старое содержимое. Если сразу вернуть прозрачность,
   // пользователь увидит вспышку предыдущего меню.
   painted: (token: number): void => {
     ipcRenderer.send(PAINTED_CHANNEL, token)

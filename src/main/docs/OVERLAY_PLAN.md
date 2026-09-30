@@ -4,14 +4,15 @@
 
 **Для нового агента или разработчика:** этот файл самодостаточен. Он содержит всю архитектуру, все найденные грабли, точный статус по шагам и критерии приёмки. Начинать чтение с раздела «Обязательные к соблюдению правила».
 
-## 📌 Статус: шаги 0–2 завершены
+## 📌 Статус: шаги 0–3 завершены
 
 | # | Шаг | Статус | Коммит |
 |---|-----|--------|--------|
 | 0 | Структура и контракт | ✅ | `19c27be` |
 | 1 | Логгер и perf-метки | ✅ | `19c27be` |
 | 2 | Типизированный preload | ✅ | `297a318` |
-| 3 | Пул и прогрев | ⬜ следующий | — |
+| 3 | Пул и прогрев | ✅ | — |
+| 4 | IPC-push вместо URL | ⬜ следующий | — |
 | 4 | IPC-push вместо URL | ⬜ | — |
 | 5 | Сессии и защита от гонок | ⬜ | — |
 | 6 | Runtime-геометрия | ⬜ | — |
@@ -21,7 +22,13 @@
 | 10 | Миграция вызовов | ⬜ | — |
 | 11 | Метрики | ⬜ | — |
 
-Ветка `rf/overlay-menu-system`, шаги 0–2 закоммичены. Рабочее дерево содержит незакоммиченные изменения: переименование `sendParked` → `setContentMounted` и актуализация документации.
+Ветка `rf/overlay-menu-system`, шаги 0–2 закоммичены (`297a318`). Шаг 3 не закоммичен: вынос пула в `pool.ts`, исправление инверсии в переименовании, актуализация документации.
+
+### 🧨 Ошибка шага 2, исправленная на шаге 3
+
+Переименование `sendParked` → `setContentMounted` **инвертировало смысл булева значения**. Канал `overlay:park` несёт флаг `contentUnmounted`, то есть `true` означает размонтировано, но имя `setContentMounted` читалось как «показать». Правильно — `setContentUnmounted`.
+
+Класс ошибки опасный: ни типы, ни логи, ни рантайм её не показывают. Механически правильная замена меняет читаемость кода, не меняя поведения. Та же ошибка была воспроизведена при первом написании `pool.ts` — `hideContent` слал `false`. Предупреждения оставлены в трёх местах кода.
 
 ## 🎯 Цели
 
@@ -66,7 +73,7 @@ flowchart TB
 | Контракт | `src/shared/overlay-types.ts` | Типы сообщений для main, preload, renderer | ✅ создан |
 | Main | `src/main/overlay/logger.ts` | Логи и perf-метки | ✅ создан |
 | Main | `src/main/overlay/index.ts` | Barrel-модуль | ✅ создан |
-| Main | `src/main/overlay/pool.ts` | Окна, прогрев, парковка | ⬜ шаг 3 |
+| Main | `src/main/overlay/pool.ts` | Окна, прогрев, скрытие содержимого | ✅ шаг 3 |
 | Main | `src/main/overlay/session.ts` | Сессии, токены, стек вложенности | ⬜ шаг 5 |
 | Main | `src/main/overlay/geometry.ts` | Позиция и размер с клампом по экрану | ⬜ шаг 6 |
 | Main | `src/main/overlay/service.ts` | Единственная точка входа | ⬜ шаг 4 |
@@ -241,26 +248,26 @@ sequenceDiagram
   M->>M: pop из стека и возврат к нижнему уровню
 ```
 
-## 📐 Что уже реализовано в шагах 0–2
+## 📐 Что уже реализовано в шагах 0–3
 
 **`src/shared/overlay-types.ts`** (141 строка) — контракт без импортов electron и vue, собирается во всех трёх контекстах. Содержит `ViewKind`, `SurfaceAlign`, `Surface`, `MenuItem`, `OverlayModel`, `PushMessage`, `UpdateMessage`, `OverlayCommand`, `MeasureMessage` и константы каналов.
 
 **`src/main/overlay/logger.ts`** — категории, уровни через `OVERLAY_DEBUG`, `mark` и `perf`, `recordOpen` и `dumpStats`, `logError`. Подключён к старому `overlayManager.ts` в точках: создание и переиспользование окна, геометрия, показ, команды, закрытие, жизненный цикл.
 
-**`src/main/overlayManager.ts`** (1257 строк) — работает, но содержит накопленные хаки, которые шаги 3–10 заменят:
+**`src/main/overlayManager.ts`** (939 строк) — работает, но содержит накопленные хаки, которые шаги 4–10 заменят:
 
 | Что | Где | Замена на шаге |
 |-----|-----|----------------|
-| `overlayPool: Map<parentId, BrowserWindow>` | модуль | 3 |
-| `PARK_MOVES_WINDOW`, `parkOverlay()`, парковочные функции | модуль | 3 |
+| ~~`overlayPool: Map<parentId, BrowserWindow>`~~ | `overlay/pool.ts` | ✅ 3 |
+| ~~`PARK_MOVES_WINDOW`, `parkOverlay()`, парковочные функции~~ | `overlay/pool.ts` | ✅ 3 |
 | `sessionCounter` и `pendingReady` | модуль | 5 |
-| `showOverlay(..., request)` и `OverlayRequest` | `export function` | 4 |
-| `loadURL` и `loadFile` с hash | `showOverlay` | 4 |
-| `active: Map` и перебор в `resolveOverlay*` | 4 функции | 4 |
-| `__iconApply` на объекте окна | `showOverlay` | 4 |
-| `MENU_W`, `MENU_ITEM_H`, `MENU_PAD` и прочие константы | модуль | 6 |
-| Расчёт `x` и `y` | тело `showOverlay` | 6 |
-| `executeJavaScript(buildIconErrorScript(...))` | `resolveOverlaySubmitIcon` | 4 |
+| `showOverlay(..., request)` и `OverlayRequest` | `service.ts` | 4 |
+| `loadURL` и `loadFile` с hash | `service.ts` | 4 |
+| `active: Map` и перебор в `resolveOverlay*` | `session.ts` | 4 |
+| `__iconApply` на объекте окна | `service.ts` | 4 |
+| `MENU_W`, `MENU_ITEM_H`, `MENU_PAD` и прочие константы | `geometry.ts` | 6 |
+| Расчёт `x` и `y` | `geometry.ts` | 6 |
+| `executeJavaScript(buildIconErrorScript(...))` | уходит с `executeJavaScript` | 4 |
 
 **14 вызовов `showOverlay`** в 4 файлах — их предстоит мигрировать на шаге 10:
 
@@ -330,10 +337,13 @@ sequenceDiagram
 
 #### 🗑 Парковка позицией — устарела
 
-`PARK_MOVES_WINDOW = false`. Помечены `@deprecated`: `parkPosition`,
-`parkOffscreen`, `parkOnParentDisplay`. Функции остаются в коде до
-шага 3, где пул и парковка выносятся в `pool.ts` — там же решается,
-удалять ли их.
+`PARK_MOVES_WINDOW = false` (теперь локальная константа внутри `pool.ts`).
+Помечены `@deprecated` и живут внутри пула: `parkPosition`, `parkBounds`,
+`parkOffscreen`, `parkBoundsWithinDisplay`, `parkOnParentDisplay`.
+
+Шаг 3 состоялся, и функции **остались**: шаг 4 переходит на IPC-push, и
+часть парковочного кода может оказаться не нужна вовсе. Удалять до
+проверки рискованно — решение принимается на шаге 4.
 
 Причина: переезд окна между дисплеями заставлял композитор пересоздавать
 поверхность, и первый кадр приходил с задержкой ровно в один кадр
@@ -346,11 +356,40 @@ sequenceDiagram
 родитель теряет фокус, и меню закрывается не получив выбора. Сейчас
 это закрыто проверкой `overlay.isFocused()` в обработчике `blur`.
 
-### ⬜ Шаг 3 — пул и прогрев
+### ✅ Шаг 3 — пул и прогрев
 
-Вынести `overlayPool`, `PARK`, `parkOverlay` и `ensureOverlayWindow` в `pool.ts`. Пул возвращает окно, готовое к показу без `load` на первом клике.
+Создан `src/main/overlay/pool.ts` (381 строка). `overlayManager.ts` сократился со 1257 до 939 строк.
 
-**Приёмка:** в DevTools всех окон видно одно скрытое оверлей-окно при старте; первый клик по меню мгновенный.
+| Перенесено | Было | Стало |
+|---|---|---|
+| `overlayPool`, `contentUnmounted` | внутренние карты менеджера | состояние модуля пула |
+| `setContentUnmounted`, `CONTENT_CHANNEL` | в менеджере | `setContentUnmounted` в пуле |
+| `parkOverlay` | в менеджере | `hideContent` |
+| `ensureOverlayWindow` | в менеджере | `createOverlay` + `ensureOverlayWindow` |
+| `parkPosition`, `parkBounds`, `parkOffscreen`, `parkBoundsWithinDisplay`, `parkOnParentDisplay` | в менеджере | внутри пула, `@deprecated` |
+| `PARK_MOVES_WINDOW` | в менеджере | внутри пула, локальная константа |
+| создание окна (опции, слушатели, загрузка страницы) | продублировано дважды | один `createOverlayWindow` |
+
+**Против циклического импорта.** Пул не знает про сессии, а сессиям нужен пул. Поэтому наружу передаются хуки:
+
+```ts
+function poolHooks(): PoolHooks {
+  return {
+    onWindowClosed: (parentId) => closeOverlay(BrowserWindow.fromId(parentId)),
+    onParentEvent: (parent) => attachParentListeners(parent, getPooledOverlay(parent.id))
+  }
+}
+```
+
+Замыкание создаётся на каждый вызов: пул знает только `parentId`, а `closeOverlay` и `attachParentListeners` требуют объект окна. Создать один раз нельзя — родитель пересоздаётся.
+
+**Устранено дублирование.** В `showOverlay` была вторая копия логики размонтирования (те же четыре шага, что в `parkOverlay`), и она уже разошлась с пулом: флаг ставился вручную, минуя API. Из-за этого правки пула не действовали бы на этот путь.
+
+**Мёртвые экспорты удалены:** `PARK_MOVES_WINDOW` (никем не импортировался после выноса) и `revealContent` (вытеснен логикой показа в `showOverlay`, где прозрачностью управляет сессия — она ждёт подтверждения отрисовки).
+
+**Парковочные функции оставлены** как `@deprecated` внутри пула, хотя план предлагал решить это здесь. Причина: шаг 4 переходит на IPC-push, и часть парковочного кода может оказаться не нужна вовсе. Удалять до проверки рискованно.
+
+**Приёмка:** typecheck и build чистые, 10 открытий 6.5–9.0 мс, таймаутов и ошибок нет. Требует ручной проверки.
 
 ### ⬜ Шаг 4 — IPC-push вместо URL
 
@@ -419,6 +458,12 @@ npm run build
 ```
 
 **Правки кириллицы.** Многострочные правки с русским текстом через `replace_string_in_file` способны слить строки или потерять переводы строк. Надёжный способ — одноразовый `patch*.cjs` с заменами и запуск через `node`. Inline-код с кавычками в PowerShell калечит. После таких правок проверять файл скриптом, печатающим строки с номерами.
+
+**`patch*.cjs` удалять сразу, отдельной командой.** Скрипт часто падает с `FAIL` до записи, и если `Remove-Item` идёт в той же цепочке через `;`, он не выполняется. За сессию накопились три забытых файла. Проверять `git status` после шага.
+
+**Восстановление удалённого — через `git show` + node.** `git show HEAD:файл | Out-File` в PowerShell портит кириллицу. Надёжно: `execSync('git show HEAD:...').toString('utf8')` и запись через `fs.writeFileSync(..., 'utf8')`.
+
+**Замена блока по маркерам требует чтения результата.** Новый комментарий может оказаться короче старого: начало заменится, а хвост останется. `typecheck` такой остаток не ловит — это комментарий, а не код.
 
 **`grep_search`** требует обязательный параметр `isRegexp`.
 

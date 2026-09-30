@@ -139,7 +139,7 @@ onMounted(() => {
   // парковке контент РАЗМОНТИРОВАН через v-if: окно пустое и прозрачное,
   // показывать нечего, вспышка старых пунктов физически неоткуда взяться.
   // Если когда-то появится реальная вспышка — возвращать второй rAF.
-  window.overlayAPI?.onContentMounted?.((v: boolean) => {
+  window.overlayAPI?.onContentUnmounted?.((v: boolean) => {
     contentUnmounted.value = v
     if (v) return
     const token = payload.value?.token
