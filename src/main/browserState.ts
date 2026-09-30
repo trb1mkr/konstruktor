@@ -110,3 +110,15 @@ export function parentOfTab(rec: TabData): BrowserWindow | undefined {
   }
   return undefined
 }
+
+// Окно-родитель по webContents. Нужен для sender'ов из WebContentsView:
+// BrowserWindow.fromWebContents на них возвращает undefined, потому что
+// view не принадлежит окну напрямую, а вложен в него через contentView.
+export function parentOfSenderView(sender: Electron.WebContents): BrowserWindow | undefined {
+  for (const ws of windows.values()) {
+    for (const rec of ws.tabs.values()) {
+      if (rec.view.webContents.id === sender.id) return ws.window ?? undefined
+    }
+  }
+  return undefined
+}

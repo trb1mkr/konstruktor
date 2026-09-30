@@ -32,12 +32,21 @@ async function choose(id: string) {
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Enter') void choose('url')
-  if (e.key === 'Escape') void window.overlayAPI.dismiss()
+  // Окно оверлея глобально слушает Escape и вызывает dismiss. Свой
+  // обработчик здесь НЕ нужен и был лишним: на диалоге он срабатывал
+  // дублирующим dismiss вместе с корневым слушателем.
+}
+
+function onBackdrop(e: MouseEvent) {
+  // Клик по подложке (прозрачной области вокруг диалога) — отмена.
+  // Без проверки target любой клик внутри .dialog-root считался бы
+  // отменой, включая клики по самому диалогу.
+  if (e.target === e.currentTarget) void window.overlayAPI.dismiss()
 }
 </script>
 
 <template>
-  <div class="dialog-root">
+  <div class="dialog-root" @mousedown="onBackdrop">
     <div class="dialog" @mousedown.stop>
       <div class="dialog-title">{{ icon.title }}</div>
       <input
@@ -50,10 +59,15 @@ function onKey(e: KeyboardEvent) {
       />
       <div v-if="error" class="dialog-error">{{ error }}</div>
       <div class="dialog-actions">
-        <button class="dialog-btn" title="Use input as image URL" @click="choose('url')">🔗 URL</button>
-        <button class="dialog-btn" title="Pick local image file" @click="choose('file')">📁 File</button>
-        <button class="dialog-btn" title="Use input as emoji" @click="choose('emoji')">😀 Emoji</button>
-        <button class="dialog-btn cancel" @click="choose('__cancel__')">Cancel</button>
+        <div class="dialog-actions-sources">
+          <button class="dialog-btn" title="Use input as image URL" @click="choose('url')">🔗 URL</button>
+          <button class="dialog-btn" title="Pick local image file" @click="choose('file')">📁 File</button>
+          <button class="dialog-btn" title="Use input as emoji" @click="choose('emoji')">😀 Emoji</button>
+        </div>
+        <!-- Отмена отдельной группой справа: визуально отличается от
+             кнопок-источников и попадает в общий стиль панелей,
+             где отмена = приглушенный цвет, без рамки. -->
+        <button class="dialog-btn dialog-btn-ghost" @click="choose('__cancel__')">Cancel</button>
       </div>
     </div>
   </div>
@@ -86,7 +100,15 @@ function onKey(e: KeyboardEvent) {
   outline: none;
 }
 .dialog-error { font-size: 12px; color: #e06c5b; margin-top: 6px; }
-.dialog-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; flex-wrap: wrap; }
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.dialog-actions-sources { display: flex; gap: 6px; flex-wrap: wrap; }
 .dialog-btn {
   background: var(--ov-btn-bg);
   color: var(--ov-text);
@@ -94,7 +116,18 @@ function onKey(e: KeyboardEvent) {
   border-radius: 8px;
   padding: 6px 12px;
   cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
 }
 .dialog-btn:hover { background: var(--ov-btn-hover); }
-.dialog-btn.cancel { opacity: 0.8; }
+/* Отмена: прозрачный фон и приглушённый текст — тот же приём, что у
+   закрывающей кнопки ✕ в панели поиска, вместо серой заливки. */
+.dialog-btn-ghost {
+  background: transparent;
+  color: var(--ov-dim);
+}
+.dialog-btn-ghost:hover {
+  background: var(--ov-hover);
+  color: var(--ov-text);
+}
 </style>

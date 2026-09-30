@@ -14,6 +14,7 @@ import {
   getState,
   getStateBySender,
   findTab,
+  parentOfSenderView,
   NORMAL_PARTITION,
   INCOGNITO_PARTITION,
   type WindowState
@@ -72,6 +73,7 @@ import { dnsServersFor, applySecureDns } from './dnsConfig'
 import {
   showOverlay,
   closeOverlay,
+  closeOverlayIfMenu,
   getActiveOverlay,
   resolveOverlaySelect,
   resolveOverlayDismiss,
@@ -819,6 +821,26 @@ function registerIpc() {
         else if (id === 'incognito') createWindow({ incognito: true })
       }
     })
+  })
+  // Клик по shell или по странице мимо открытого меню. Меню живёт в
+  // отдельном окне, само оно клик не видит. Закрываем ТОЛЬКО меню:
+  // диалоги (icon/dialog) и панель поиска имеют свою логику закрытия
+  // и не должны реагировать на клик мимо.
+  //
+  // Sender бывает двух видов: webContents самого окна (клик по shell) и
+  // webContents WebContentsView (клик по странице) — у второго
+  // BrowserWindow.fromWebContents вернёт undefined, окно ищем по вкладкам.
+  //
+  // source различаем для диагностики: какой именно renderer прислал
+  // гашение. Без этого нельзя понять, эхо это или настоящий клик.
+  ipcMain.on('menu:dismiss-on-shell-click', (e, source?: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender) ?? parentOfSenderView(e.sender)
+    const fromView = !BrowserWindow.fromWebContents(e.sender)
+    log('command', 'shell click', {
+      source: source ?? (fromView ? 'view' : 'shell'),
+      hasWindow: !!win
+    })
+    if (win) closeOverlayIfMenu(win)
   })
   // Оверлей-окно: выбор пункта, submit диалога и dismiss.
   ipcMain.handle('overlay:select', (e, id: string) => {

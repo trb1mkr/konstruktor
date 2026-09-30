@@ -30,12 +30,13 @@ async function close() {
 
 <style scoped>
 .toast-stack {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  justify-content: flex-end;
+  align-items: flex-end;
   padding: 12px;
-  margin-left: auto;
-  max-width: 340px;
 }
 .toast {
   background: var(--ov-bg);
@@ -44,8 +45,28 @@ async function close() {
   padding: 12px 14px;
   cursor: pointer;
   color: var(--ov-text);
+  /* Текст не должен вылезать за пределы карточки: длинный заголовок
+     или URL переносится, а не выходит за правый край. max-width в
+     процентах от родителя (width: 100% + padding) и overflow-wrap
+     рвут неразрывные строки. */
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .toast:hover { background: var(--ov-hover); }
-.toast-title { font-size: 14px; font-weight: 600; }
-.toast-body { font-size: 13px; color: #aaa; margin-top: 4px; }
+/* min-width: 0 позволяет flex-ребёнку сжиматься — без него карточка
+   распирает контейнер длинным словом. */
+.toast > * { min-width: 0; }
+.toast-title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.toast-body {
+  font-size: 13px;
+  color: var(--ov-dim);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
 </style>

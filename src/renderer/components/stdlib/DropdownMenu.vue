@@ -36,7 +36,8 @@ function toggle() {
   <div class="dropdown">
     <button
       ref="btn"
-      class="dropdown-toggle"
+      class="dropdown-toggle menu-trigger"
+      title="Browser menu"
       @click="toggle"
     >{{ title ?? '☰' }}</button>
   </div>

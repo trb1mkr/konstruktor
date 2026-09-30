@@ -1,29 +1,110 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import {
+  OVERLAY_CHANNELS,
+  OVERLAY_PUSH_CHANNEL,
+  OVERLAY_UPDATE_CHANNEL
+} from '../shared/overlay-types'
+import type { MeasureMessage, OverlayCommand, PushMessage, UpdateMessage } from '../shared/overlay-types'
+
+// Канал подтверждения отрисовки. Живёт отдельно от контракта команд:
+// по нему renderer сообщает, что сессия уже в DOM (Правило 2 в
+// OVERLAY_PLAN.md). На шаге 4 сольётся с контрактом сессий.
+const READY_CHANNEL = 'overlay:ready'
+
+// Канал управления парковкой: main сообщает окну, нужно ли убрать
+// содержимое из рендера. Главный механизм скрытия, парковка координатами
+// — вспомогательный.
+const PARK_CHANNEL = 'overlay:park'
+
+// Канал подтверждения отрисовки содержимого после снятия парковки.
+const PAINTED_CHANNEL = 'overlay:painted'
 
 // Preload оверлей-окна (меню, тосты, попапы поверх WebContentsView).
 // Канал overlay:* изолирован от browserAPI основного окна.
+//
+// Формы сообщений — в src/shared/overlay-types.ts. Здесь только транспорт:
+// типизированные подписки на push/update, отправка команд и отчёт о
+// размерах. Разбор и валидация — на стороне main (overlay/ipc.ts,
+// overlay/service.ts) и renderer (OverlayHost).
 const overlayAPI = {
+  // ─── Новый контракт ───────────────────────────────────────────────────
+
+  // Main присылает новую сессию: model, тема, флаги анимаций.
+  // Подписка возвращает функцию отписки — вызывать при размонтировании.
+  onPush: (cb: (msg: PushMessage) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, msg: PushMessage): void => cb(msg)
+    ipcRenderer.on(OVERLAY_PUSH_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(OVERLAY_PUSH_CHANNEL, listener)
+  },
+
+  // Точечный патч живой сессии: счётчик поиска, ошибка валидации.
+  onUpdate: (cb: (msg: UpdateMessage) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, msg: UpdateMessage): void => cb(msg)
+    ipcRenderer.on(OVERLAY_UPDATE_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(OVERLAY_UPDATE_CHANNEL, listener)
+  },
+
+  // Действие пользователя одним объектом. Тип — OverlayCommand,
+  // sessionId проставляет renderer (актуальная сессия).
+  send: (command: OverlayCommand): Promise<boolean> =>
+    ipcRenderer.invoke(OVERLAY_CHANNELS.command, command),
+
+  // Реальные размеры содержимого после монтирования. Main клампит
+  // bounds по экрану, чтобы окно не резало меню (шаг 6).
+  measure: (msg: MeasureMessage): void => {
+    ipcRenderer.send(OVERLAY_CHANNELS.measured, msg)
+  },
+
+  // ─── Старые методы, миграция на шаге 10 ───────────────────────────────
+
+  /**
+   * @deprecated Используйте `send({ type: 'select', id })`.
+   * Вызовы не трогаем до шага 10 — они работают как раньше.
+   */
   select: (id: string): Promise<boolean> => ipcRenderer.invoke('overlay:select', id),
+  /**
+   * @deprecated Используйте `send({ type: 'dismiss' })`.
+   */
   dismiss: (): Promise<boolean> => ipcRenderer.invoke('overlay:dismiss'),
-  // Диалог с полем ввода: значение уходит через overlay:submit.
+  /**
+   * @deprecated Используйте `send({ type: 'submit', value })`.
+   * Диалог с полем ввода: значение уходит через overlay:submit.
+   */
   submit: (value: string): Promise<boolean> => ipcRenderer.invoke('overlay:submit', value),
-  // Общий диалог иконки: кнопка + ввод уходят через overlay:submit-icon.
-  // false = main отклонил источник (ошибка верификации), диалог не закрывается.
+  /**
+   * @deprecated Используйте `send({ type: 'submit-icon', buttonId, value })`.
+   * Общий диалог иконки. false = main отклонил источник (ошибка
+   * верификации), диалог не закрывается.
+   */
   submitIcon: (buttonId: string, value: string): Promise<boolean> =>
     ipcRenderer.invoke('overlay:submit-icon', buttonId, value),
-  // Поиск по странице: запрос, навигация и закрытие панели.
+  /**
+   * @deprecated Используйте `send({ type: 'find-query', opts })`.
+   * Поиск по странице: запрос, навигация и закрытие панели.
+   */
   findQuery: (opts: {
     query: string
     matchCase: boolean
     wholeWord: boolean
     useRegex: boolean
   }): Promise<boolean> => ipcRenderer.invoke('find:query', opts),
+  /**
+   * @deprecated Используйте `send({ type: 'find-next' })`.
+   */
   findNext: (): Promise<boolean> => ipcRenderer.invoke('find:next'),
+  /**
+   * @deprecated Используйте `send({ type: 'find-prev' })`.
+   */
   findPrev: (): Promise<boolean> => ipcRenderer.invoke('find:prev'),
+  /**
+   * @deprecated Используйте `send({ type: 'find-close' })`.
+   */
   findClose: (): Promise<boolean> => ipcRenderer.invoke('find:close'),
-  // Диагностика (шаг 1 рефакторинга): renderer сообщает main о своих
-  // наблюдениях — какая анимация играет, какие классы на элементах.
-  // Канал однонаправленный и безопасный: принимает только строки.
+  /**
+   * Временный канал диагностики (шаг 1 рефакторинга): renderer сообщает
+   * main о своих наблюдениях — какая анимация играет, какие классы на
+   * элементах. Однонаправленный и безопасный: принимает только строки.
+   */
   trace: (message: string): void => {
     ipcRenderer.send('overlay:trace', message)
   },
@@ -33,7 +114,29 @@ const overlayAPI = {
   // старые пункты меню (вспышку предыдущего содержимого).
   // token — идентификатор текущей сессии, чтобы отсечь запоздалые подтверждения.
   ready: (token: number): void => {
-    ipcRenderer.send('overlay:ready', token)
+    ipcRenderer.send(READY_CHANNEL, token)
+  },
+
+  // Парковка. Главный механизм скрытия — не прозрачность окна, а
+  // удаление содержимого из рендера: на Linux с несколькими мониторами
+  // координаты парковки клампятся в рабочую область, и прозрачное окно
+  // всё равно оказывается видимым где-то на экране. Пустой DOM не
+  // виден нигде. setParked — команда main, onParked — подписка.
+  setParked: (parked: boolean): void => {
+    ipcRenderer.send(PARK_CHANNEL, parked)
+  },
+  onParked: (cb: (parked: boolean) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, v: boolean): void => cb(v)
+    ipcRenderer.on(PARK_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(PARK_CHANNEL, listener)
+  },
+
+  // Кадр реально отдан. Main держит окно прозрачным до этого сигнала:
+  // между sendParked(false) и применением v-if проходит кадр, и в нём
+  // ещё лежит старое содержимое. Если сразу вернуть прозрачность,
+  // пользователь увидит вспышку предыдущего меню.
+  painted: (token: number): void => {
+    ipcRenderer.send(PAINTED_CHANNEL, token)
   }
 }
 

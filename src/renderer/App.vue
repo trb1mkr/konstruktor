@@ -75,6 +75,33 @@ onMounted(() => {
   })
 })
 onUnmounted(() => window.removeEventListener('keydown', onKey))
+
+// Клик по shell мимо открытого меню закрывает это меню. Меню живёт в
+// отдельном прозрачном окне поверх WebContentsView, поэтому клик по
+// вкладке или адресной строке его не гасит — а пользователь ждёт, что
+// гасит, как в обычных браузерах.
+//
+// Ловим click, а не mousedown: mousedown, который открыл меню, успевает
+// долететь до shell уже ПОСЛЕ появления окна, и только что открытое меню
+// закрывалось тем же кликом. К моменту click это уже другой момент
+// времени, эха не будет.
+//
+// Клик по САМОМУ триггеру (☰ меню браузера) гасить нельзя — иначе
+// toggle сломался бы: открытие меню и его закрытие пришли бы в одном
+// кадре. Проверяем по классу .menu-trigger на цели клика.
+//
+// Диалоги и панель поиска сюда НЕ попадают: main закрывает только kind
+// 'menu'. В частности клик по shell не сносит открытый диалог иконки.
+onMounted(() => {
+  const onDown = (e: MouseEvent) => {
+    if (e.button !== 0) return
+    const t = e.target
+    if (t instanceof Element && t.closest('.menu-trigger')) return
+    window.browserAPI.dismissMenuOnShellClick()
+  }
+  document.addEventListener('click', onDown, true)
+  onUnmounted(() => document.removeEventListener('click', onDown, true))
+})
 </script>
 
 <template>

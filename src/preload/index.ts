@@ -133,6 +133,14 @@ const browserAPI = {
   // content-области окна — меню открывается вниз из одной точки.
   popupMenu: (anchor: { x: number; y: number }): void =>
     ipcRenderer.send('menu:popup', anchor),
+  // Клик по shell в стороне от открытого меню. Меню живёт в отдельном
+  // окне, поэтому клик по вкладке/адресной строке/панели его не гасит.
+  // Renderer ловит click на document и сообщает сюда; main закрывает
+  // активный оверлей ТОЛЬКО если он меню — диалоги и панель поиска
+  // так закрывать нельзя, они живут своей логикой.
+  // Метка источника уходит в лог main: по ней видно, эхо это или нет.
+  dismissMenuOnShellClick: (): void =>
+    ipcRenderer.send('menu:dismiss-on-shell-click', 'shell'),
   // Тосты поверх сайта (оверлей-окно, темная тема).
   notify: (toast: { title: string; body?: string; timeout?: number }): Promise<boolean> =>
     ipcRenderer.invoke('overlay:notify', toast),
