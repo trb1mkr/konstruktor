@@ -1,16 +1,29 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 
 // Общий диалог иконки для вкладок и групп: одно поле ввода + 4 кнопки
 // (URL, локальный файл, emoji, отмена). В поле вводится любой из трех
 // источников, main верифицирует тип при нажатии (verifyIconSource).
 // Ошибка верификации возвращается через icon-error и поле не закрывается.
+// error приходит из модели (overlay:update). Раньше ошибка верификации
+// возвращалась как false из submitIcon и показывалась локально, а ошибка
+// конвертации файла — отдельным executeJavaScript, который правил
+// .dialog-error по селектору. Два пути для одного значения разошлись, и
+// правка второго ничего не говорила о первом.
 const props = defineProps<{
-  icon: { title: string; placeholder?: string; initial?: string }
+  icon: { title: string; placeholder?: string; initial?: string; error?: string }
 }>()
 
 const value = ref(props.icon.initial ?? '')
-const error = ref('')
+// Локальный текст для отказа верификации: main его не присылает, потому что
+// он зависит только от нажатой кнопки. Ошибка конвертации файла приходит
+// из модели, и оба текста показываются в одном месте.
+const localError = ref('')
+// Ключ, по которому сбрасываем локальный текст: тот же sessionId, что и
+// у overlay:update. Новый вызов submitIcon с тем же текстом ошибки обязан
+// показать его снова, поэтому сброс идёт по смене значения, а не по факту
+// нажатия.
+const error = computed(() => localError.value || props.icon.error || '')
 const input = ref<HTMLInputElement | null>(null)
 
 onMounted(() => {
@@ -24,10 +37,10 @@ async function choose(id: string) {
     await window.overlayAPI.dismiss()
     return
   }
-  error.value = ''
+  localError.value = ''
   const ok = await window.overlayAPI.submitIcon(id, value.value)
   // false = main отклонил источник: показываем ошибку, диалог жив.
-  if (!ok) error.value = 'Enter a URL, file path or emoji'
+  if (!ok) localError.value = 'Enter a URL, file path or emoji'
 }
 
 function onKey(e: KeyboardEvent) {

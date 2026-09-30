@@ -4,7 +4,7 @@
 
 **Для нового агента или разработчика:** этот файл самодостаточен. Он содержит всю архитектуру, все найденные грабли, точный статус по шагам и критерии приёмки. Начинать чтение с раздела «Обязательные к соблюдению правила».
 
-## 📌 Статус: шаги 0–3 завершены
+## 📌 Статус: шаги 0–4 завершены, шаг 4 не закоммичен
 
 | # | Шаг | Статус | Коммит |
 |---|-----|--------|--------|
@@ -12,8 +12,9 @@
 | 1 | Логгер и perf-метки | ✅ | `19c27be` |
 | 2 | Типизированный preload | ✅ | `297a318` |
 | 3 | Пул и прогрев | ✅ | — |
-| 4 | IPC-push вместо URL | ⬜ следующий | — |
-| 4 | IPC-push вместо URL | ⬜ | — |
+| 4a | IPC-push вместо URL | ✅ | — |
+| 4b | Отложенный `overlay:update` | ✅ | — |
+| 4c | Вынос каналов в `ipc.ts` | ✅ | — |
 | 5 | Сессии и защита от гонок | ⬜ | — |
 | 6 | Runtime-геометрия | ⬜ | — |
 | 7 | Универсальные компоненты | ⬜ | — |
@@ -22,7 +23,7 @@
 | 10 | Миграция вызовов | ⬜ | — |
 | 11 | Метрики | ⬜ | — |
 
-Ветка `rf/overlay-menu-system`, шаги 0–2 закоммичены (`297a318`). Шаг 3 не закоммичен: вынос пула в `pool.ts`, исправление инверсии в переименовании, актуализация документации.
+Ветка `rf/overlay-menu-system`, последний коммит `fa149c3` (шаг 3). **Шаги 3 и 4 не закоммичены**: в рабочем дереве шаг 4 целиком плюс девять багфиксов, найденных при ручном тестировании. Разделять их на коммиты решено позже; здесь важно, что состояние кода шире записанного в таблице.
 
 ### 🧨 Ошибка шага 2, исправленная на шаге 3
 
@@ -76,12 +77,12 @@ flowchart TB
 | Main | `src/main/overlay/pool.ts` | Окна, прогрев, скрытие содержимого | ✅ шаг 3 |
 | Main | `src/main/overlay/session.ts` | Сессии, токены, стек вложенности | ⬜ шаг 5 |
 | Main | `src/main/overlay/geometry.ts` | Позиция и размер с клампом по экрану | ⬜ шаг 6 |
-| Main | `src/main/overlay/service.ts` | Единственная точка входа | ⬜ шаг 4 |
-| Main | `src/main/overlay/ipc.ts` | Регистрация каналов | ⬜ шаг 4 |
+| Main | `src/main/overlay/service.ts` | Единственная точка входа | ✅ шаг 4 |
+| Main | `src/main/overlay/ipc.ts` | Регистрация каналов | ✅ шаг 4c |
 | Preload | `src/preload/overlay.ts` | Типизированный мост | ✅ шаг 2 |
-| Renderer | `src/renderer/overlay/OverlayRoot.vue` | Сейчас `v-else-if` роутер, станет `OverlayHost` | ⬜ шаг 4 |
+| Renderer | `src/renderer/overlay/OverlayRoot.vue` | `v-else-if` роутер, станет `OverlayHost` | 🟡 шаг 4 частично |
 | Renderer | `src/renderer/overlay/registry.ts` | Соответствие view и компонента | ⬜ шаг 7 |
-| Renderer | `src/renderer/overlay/hooks/useOverlaySession.ts` | Хук сессии и измерений | ⬜ шаг 4 |
+| Renderer | `src/renderer/overlay/hooks/useOverlaySession.ts` | Хук сессии и измерений | ⬜ шаг 5 |
 | Renderer | `src/renderer/overlay/components/*` | Универсальные компоненты | ⬜ шаг 7 |
 
 ## 💡 Ключевые решения
@@ -118,8 +119,8 @@ Windows анимирует появление и скрытие frameless-окн
 - **Работает только отказ от вызовов.** `showInactive()` вызывается ровно один раз за жизнь окна, на прогреве, сразу с `setOpacity(0)`
 
 ```ts
-// показать: setContentMounted(true), setBounds с реальными координатами, setOpacity(1)
-// скрыть:   setContentMounted(false), setOpacity(0)
+// показать: setContentUnmounted(win, false), setBounds с реальными координатами, setOpacity(1)
+// скрыть:   setContentUnmounted(win, true), setOpacity(0)
 ```
 
 **Координатная парковка отключена** (`PARK_MOVES_WINDOW = false`). Скрытие обеспечивают три независимых слоя: размонтирование содержимого через `v-if`, прозрачность окна и `setIgnoreMouseEvents(true)`. Позиция среди них лишняя — см. раздел «Парковка позицией — устарела».
@@ -129,27 +130,31 @@ Windows анимирует появление и скрытие frameless-окн
 Иначе окно со старым содержимым переедет на новую позицию, и пользователь увидит вспышку предыдущего меню.
 
 ```ts
-win.setOpacity(0)          // сначала погасить
-contentUnmounted.add(parent.id)
-win.setBounds({ x, y, width, height })   // потом переставить
-// ... загрузить payload ...
-await overlayReady(token)  // дождаться подтверждения от renderer
-win.setOpacity(1)          // только теперь видно
+win.setOpacity(0)                 // сначала погасить
+win.setBounds({ x, y, w, h })     // потом переставить
+pushPayload(win, message)         // данные через overlay:push
+setContentUnmounted(win, false)   // renderer снимает v-if
+const painted = await overlayPainted(win, token)
+if (!painted) { abortPresent(win, parent, token); return }  // НЕ показываем
+win.setOpacity(1)                 // и только теперь видно
 ```
 
-Подтверждение от renderer: `hashchange` → `nextTick` → `ipcRenderer.send('overlay:ready', token)`. **`rAF` в этой фазе не нужен**: требуется только факт применения payload в JS, а за отрисовку отвечает отдельная фаза `painted`, где `rAF` остаётся обязательным.
+**Фазы `ready` не существует.** На шаге 4 навигации нет: страница оверлея грузится один раз без payload, данные приходят через `overlay:push`, и отдельного подтверждения применения payload не требуется — renderer уже смонтирован и слушает канал. Осталась одна фаза: `painted`.
 
-Подтверждение отрисовки: main шлёт `setContentMounted(false)` → renderer применяет `v-if` → `nextTick` → один `rAF` → `ipcRenderer.send('overlay:painted', token)`. Без кадра сигнал уходит до фактической отрисовки.
+**Таймауты отменяют показ, а не показывают вслепую.** `waitPageReady` и `overlayPainted` возвращают `boolean`; по `false` вызывается `abortPresent` — прозрачность не возвращается, содержимое размонтируется, сессия снимается. Раньше обе страховки просто показывали окно, и пользователь получал пустое непрозрачное окно **без единой ошибки в логах**: push уходил в `webContents` без документа и молча пропадал.
 
-### 🔔 Правило 3: событие готовности окна различается для dev и prod
+**Буфер `pendingPush` существует и работает.** `pushPayload` вызывается **до** `await waitPageReady` — иначе буферизация недостижима, потому что `waitPageReady` сам выставляет `pageReady = true`. Обратный порядок годами оставлял ветку мёртвым кодом.
 
-| Сценарий | Тип навигации | Событие |
+### 🔔 Правило 3: страница оверлея грузится один раз, слушатель — до `load`
+
+События готовности больше не различаются между dev и prod: на шаге 4 ушла навигация, а с ней и `did-navigate-in-page` / полный reload по `loadFile` с hash. Осталась единственная загрузка за жизнь окна — в `loadOverlayPage` пула.
+
+| Событие | Когда | Зачем |
 |---|---|---|
-| dev: `loadURL` на Vite со сменой hash | same-document | `did-navigate-in-page` |
-| prod: `loadFile` с hash | полный reload | `did-finish-load` |
-| новое окно | первая загрузка | `ready-to-show` |
+| `did-finish-load` страницы оверлея | единственная загрузка | `waitPageReady`, слив `pendingPush` |
+| `ready-to-show` окна | показ окна готовится | `showInactive()` ровно один раз за жизнь |
 
-Слушатели вешать **до** `load` — иначе на быстром кэше событие приходит раньше подписки. **Оба слушателя обязательно снимать в обработчике**: не сработавший `once` висит до следующей навигации, и Electron выдаёт `MaxListenersExceededWarning` при лимите 10 на `WebContents`.
+Подписку на `did-finish-load` вешать **до** `load` — на быстром кэше событие приходит раньше подписки. Обработчики обязательно снимать: не сработавший `once` висит до следующей навигации, и Electron выдаёт `MaxListenersExceededWarning` при лимите 10 на `WebContents`.
 
 ### 📏 Правило 4: флаг `no-anim` ставить на `<html>`, а не на `.overlay-root`
 
@@ -207,14 +212,14 @@ $env:OVERLAY_DEBUG = '2'; npm run dev
 [overlay:lifecycle] overlay parked { parentId: 1 }
 [overlay:pool     ] reusing pooled window { parentId: 1, kind: 'menu' }
 [overlay:geometry ] resolved { x: 351, y: 279, width: 260, height: 340 }
-[overlay:lifecycle] [trace] ready(hashchange) token=1 { windowId: 2 }
+[overlay:lifecycle] [trace] push sessionId=1 no-anim=true anims=[] count=0 { windowId: 2 }
 [overlay:perf     ] open(menu, reused): 30.3ms
 [overlay:session  ] closing { parentId: 1, kind: 'menu' }
 ```
 
-**Осторожно с самодиагностикой.** `document.getAnimations()`, измеренный через `rAF` после `hashchange`, показывает `count=0` — анимация к этому моменту уже завершилась. Это даёт ложный вывод «анимаций нет». Проверять нужно на первом кадре либо сравнением с отключённой системной анимацией Windows.
+**Осторожно с самодиагностикой.** `document.getAnimations()`, измеренный позже применения payload, показывает `count=0` — анимация к этому моменту уже завершилась. Это даёт ложный вывод «анимаций нет». Проверять нужно на первом кадре либо сравнением с отключённой системной анимацией Windows.
 
-**Временный канал `overlay:trace`** (строка от renderer) предназначен для отладки и удаляется после неё. Канал `overlay:ready` нужен постоянно.
+**Временный канал `overlay:trace`** (строка от renderer) предназначен для отладки и удаляется после неё. Канал `overlay:painted` нужен постоянно. `overlay:ready` больше не существует.
 
 ## 🔀 Flow
 
@@ -228,8 +233,9 @@ sequenceDiagram
   R->>M: open(model, align)
   M->>M: session = begin() и token
   M->>W: setOpacity(0) и setBounds
-  M->>W: load(payload) или push
-  W-->>M: overlay:ready с token
+  M->>W: push по overlay:push
+  M->>W: setContentUnmounted(win, false)
+  W-->>M: overlay:painted с token
   M->>W: setOpacity(1)
   M->>M: perf.mark visible
 ```
@@ -278,9 +284,9 @@ sequenceDiagram
 | `src/main/findManager.ts` | 33 |
 | `src/main/overlayManager.ts` | 286 (определение) |
 
-**`src/preload/overlay.ts`** — мост по контракту из `overlay-types.ts`. Новые методы `onPush`, `onUpdate`, `send`, `measure`; старые `select`, `dismiss`, `submit`, `submitIcon`, `find*` помечены `@deprecated` и работают как раньше — вызовы мигрируются на шаге 10. `trace`, `ready`, `painted` без изменений. `setContentMounted` и `onContentMounted` — переименованы на шаге 2 (были `setParked` / `onParked`).
+**`src/preload/overlay.ts`** — мост по контракту из `overlay-types.ts`. Новые методы `onPush`, `onUpdate`, `send`, `measure`; старые `select`, `dismiss`, `submit`, `submitIcon`, `find*` помечены `@deprecated` и работают как раньше — вызовы мигрируются на шаге 10. `trace` и `painted` без изменений; `ready` удалён вместе с фазой готовности. `setContentUnmounted` и `onContentUnmounted` — переименованы на шаге 2 (были `setParked` / `onParked`).
 
-**`src/renderer/overlay/OverlayRoot.vue`** — парсит payload из hash, слушает `hashchange`, шлёт `ready`. Роутер `v-else-if` заменяется на `OverlayHost` с реестром.
+**`src/renderer/overlay/OverlayRoot.vue`** — слушает `onPush`, применяет payload через `applyPayload`, на `contentUnmounted = false` отвечает `painted`. Роутер `v-else-if` заменяется на `OverlayHost` с реестром — это шаг 7.
 
 ## 🪜 Шаги
 
@@ -337,13 +343,10 @@ sequenceDiagram
 
 #### 🗑 Парковка позицией — устарела
 
-`PARK_MOVES_WINDOW = false` (теперь локальная константа внутри `pool.ts`).
-Помечены `@deprecated` и живут внутри пула: `parkPosition`, `parkBounds`,
-`parkOffscreen`, `parkBoundsWithinDisplay`, `parkOnParentDisplay`.
-
-Шаг 3 состоялся, и функции **остались**: шаг 4 переходит на IPC-push, и
-часть парковочного кода может оказаться не нужна вовсе. Удалять до
-проверки рискованно — решение принимается на шаге 4.
+`PARK_MOVES_WINDOW = false`. Помечены `@deprecated`: `parkPosition`,
+`parkOffscreen`, `parkOnParentDisplay`. Функции остаются в коде до
+шага 3, где пул и парковка выносятся в `pool.ts` — там же решается,
+удалять ли их.
 
 Причина: переезд окна между дисплеями заставлял композитор пересоздавать
 поверхность, и первый кадр приходил с задержкой ровно в один кадр
@@ -391,11 +394,71 @@ function poolHooks(): PoolHooks {
 
 **Приёмка:** typecheck и build чистые, 10 открытий 6.5–9.0 мс, таймаутов и ошибок нет. Требует ручной проверки.
 
-### ⬜ Шаг 4 — IPC-push вместо URL
+### ✅ Шаги 4a–4c — IPC-push вместо URL
 
-Переломный шаг. `menu.html` грузится один раз без payload, данные приходят через `overlay:push`. Уходят `loadURL` и `loadFile` с hash, `__iconApply`, перебор `active` в `resolveOverlay*`. Появляются `service.ts` и `ipc.ts`.
+Переломный шаг. `menu.html` грузится один раз без payload, данные приходят через `overlay:push`. Ушли `loadURL` и `loadFile` с hash, `__iconApply`, перебор `active` в `resolveOverlay*` и фаза `ready`. Появились `service.ts` и `ipc.ts`.
 
-**Приёмка:** переключение меню не вызывает перезагрузку страницы, проверяется счётчиком навигаций в DevTools оверлея; все виды меню, диалогов, поиск и тосты работают.
+#### ✅ 4a — IPC-push
+
+| Что | Где |
+|---|---|
+`pushPayload`, `waitPageReady`, `dropPendingPush` | `overlay/pool.ts` |
+`present()`, `abortPresent`, `resolveOverlay*` | `overlay/service.ts` |
+`onPush`, `applyPayload`, `painted` | `OverlayRoot.vue` |
+
+`applyPayload` ставит тему и класс `no-anim` на `document.documentElement` **синхронно, до`` обновления `payload.value`** — иначе анимация проиграет.
+
+Счётчик замеров и статистика: `pageLoads` в `dumpStats()`. Значение `1` означает, что страница грузилась ровно один раз за жизнь окна.
+
+#### ✅ 4b — точечный `overlay:update`
+
+Счётчик совпадений и ошибка валидации иконки едут точечным патчем модели, а не полной сессией. Раньше обе шли через `executeJavaScript(buildScript(...))` — то есть через генерацию строк JS и `querySelector` по селекторам, которые пришлось синхронизировать с разметкой вручную. Счётчик и ошибка не жили в модели вообще: значение приходило из main готовой строкой и ложилось прямо в DOM.
+
+| Что | Где |
+|---|---|
+`find.counter`, `icon.error` в модели | `shared/overlay-types.ts` |
+`updatePayload` с проверкой токена | `overlay/pool.ts` |
+`updateActiveOverlay`, `updateOverlayBySender` | `overlay/service.ts` |
+`mergePatch` и отсечение по `sessionId` | `OverlayRoot.vue` |
+
+Три свойства, без которых патч не работает:
+
+- **Патч мержится в модель, а не заменяет её.** Пришёл счётчик — значит view, тема и запрос прежние. Замена означала бы, что каждый счётчик тащит всю сессию, и преимущество канала над push исчезает.
+- **Патч от устаревшей сессии отбрасывается по `sessionId`.** Окно из пула у всех сессий одно, и без сверки счётчик от прошлого поиска появился бы в текущем.
+- **Патчи не буферизуются**, в отличие от сессии: без сессии патч не имеет смысла, и показывать его всё равно нечему.
+
+Удалены осиротевшие `buildFoundCounterScript`, `buildSetCounterScript` и `buildIconErrorScript`. В `findScripts.ts` остались только скрипты, исполняемые в webContents **вкладки**: собственный поиск по словам и regex, который `findInPage` не умеет.
+
+**Попутно устранено дублирование форм в renderer.** `OverlayRoot.vue` объявлял `OverlayModel` локально с оговоркой «общий тип в бандл не попадает». Оговорка неверна — типы стираются при сборке, и `renderer/core/useTabs.ts` уже импортирует их из preload. Локальная копия разошлась на этом шаге: `counter` и `error` добавились в контракт, а локальный тип остался без них, и `onUpdate` перестал компилироваться. Формы берутся из контракта; плоская форма (все поля опциональны) сохранена, потому что шаблон читает `model.items` и `model.find` напрямую. Переход на union из контракта — задача шага 7 вместе с реестром компонентов.
+
+#### ✅ 4c — вынос каналов
+
+Создан `src/main/overlay/ipc.ts`: 11 каналов — `overlay:select`, `submit`, `submit-icon`, `dismiss`, `notify`, `trace` и пять `find:*`.
+
+Граница проведена по плану, а не буквально: каналы вкладок, истории, загрузок, настроек, окон и ярлыков (45 хендлеров) остались в `index.ts` — они не оверлейные. Внутри `ipc.ts` группы разделены по источнику sender'а, потому что у `overlay:*` sender — само окно оверлея, а у `find:*` — view вкладки; смешивать их нельзя, получится молчаливо неверный родитель.
+
+Попутно устранено два долга, иначе шаг был бы переносом долга, а не шагом:
+
+- **`__iconApply` убран.** Контекст лежал в двух местах сразу и мог устареть раньше сессии. Теперь `apply` берётся из `request` активной сессии, сигнатура `resolveOverlaySubmitIcon` потеряла лишний параметр.
+- **Линейный перебор `active` убран.** Пять мест с `for (const [parentId, entry] of active)`, каждое O(n) и каждое с молчаливым «нашлось первое совпадение». Введена карта `overlayId → parentId` с обёртками `setActiveSession` / `clearActiveSession` — карту нельзя забыть обновить.
+
+**Приёмка:** `loadCount: 1` в логах, открытие 1.8–9 мс, таймаутов нет.
+
+#### 🐞 Баги, найденные при ручном тестировании
+
+Все нашлись уже после шага 4 и в дереве не закоммичены.
+
+| Симптом | Причина | Решение |
+|---|---|---|
+Первый открытие медленнее | страховка показывала окно вслепую | `abortPresent` вместо показа |
+`pendingPush` мёртвый | `waitPageReady` успевал раньше `pushPayload` | `pushPayload` вызывается до ожидания |
+Отменённая сессия доживала | payload оставался в буфере | `dropPendingPush` по `sessionId` |
+Панель поиски не открывалась повторно | фокус оставался в прозрачном оверлее | `restoreFocusToParent` |
+Панель висела поверх чужих окон | `browser-window-blur` не приходил вовсе | `onOverlayBlur` + `closeIfFocusLeftApp` |
+Возврат из Alt+Tab без фокуса | оверлей `focusable: true` в цепочке Alt+Tab | переадресация фокуса в родителя |
+Ctrl+F не работал до клика | **в проекте не было ни одного `webContents.focus()`** | `rec.view.webContents.focus()` в `setActiveTab` |
+
+Последний — самый показательный. Четыре версии причины подряд строились на особенностях Windows, пока не выяснилось, что вкладка — отдельный `WebContentsView` и без явного `focus()` клавиатура в неё не попадает. Мышь работала, потому что клик Chromium трактует как команду сфокусировать.
 
 ### ⬜ Шаг 5 — сессии и защита от гонок
 

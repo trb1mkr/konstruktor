@@ -13,10 +13,10 @@ import {
   showOverlay,
   closeOverlay,
   getActiveOverlay,
-  getParentOfOverlay
+  getParentOfOverlay,
+  updateActiveOverlay
 } from './overlayManager'
 import {
-  buildSetCounterScript,
   buildRunCustomFindScript,
   buildStepCustomFindScript,
   buildClearCustomFindScript,
@@ -52,11 +52,14 @@ export function parentOfOverlaySender(sender: Electron.WebContents): BrowserWind
   return overlay ? getParentOfOverlay(overlay) : undefined
 }
 
+// Счётчик уходит через overlay:update, а не через executeJavaScript. Раньше
+// он правил .find-count по селектору, и значение не жило в модели: приходило
+// из main строкой и ложилось прямо в DOM. Теперь это поле find.counter,
+// поэтому подсчёт не может разойтись с показанным, а renderer не получает
+// исполняемый код от main.
 function setFindCounter(parent: BrowserWindow | undefined, text: string): void {
   if (!parent) return
-  const overlay = getActiveOverlay(parent)
-  if (!overlay || overlay.isDestroyed()) return
-  overlay.webContents.executeJavaScript(buildSetCounterScript(text)).catch(() => undefined)
+  updateActiveOverlay(parent, { find: { counter: text } })
 }
 
 // Собственный поиск для wholeWord/regex: findInPage их не умеет

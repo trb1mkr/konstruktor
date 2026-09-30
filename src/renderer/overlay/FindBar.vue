@@ -5,8 +5,13 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 // кнопки prev/next, флаги Aa (match case), ab (whole word), .* (regex).
 // Живет в оверлей-окне kind 'find' в правом верхнем углу области страницы.
 // Каждый ввод/флаг шлет find:query в main, main гоняет webContents.findInPage.
+// counter приходит из модели (overlay:update), а не пишется в DOM скриптом
+// из main. Раньше main слал executeJavaScript с querySelector по .find-count,
+// и значение не жило в состоянии: пересоздание компонента его теряло, а
+// разметка с данными расходились при переименовании класса.
 const props = defineProps<{
   initial?: string
+  counter?: string
 }>()
 
 const query = ref(props.initial ?? '')
@@ -75,7 +80,7 @@ onUnmounted(() => {
         @input="sendDebounced"
         @keydown="onKey"
       />
-      <span class="find-count">{{ '' }}</span>
+      <span class="find-count">{{ counter }}</span>
       <button
         class="find-btn"
         :class="{ on: matchCase }"

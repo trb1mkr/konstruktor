@@ -108,7 +108,23 @@ export function recordOpen(ms: number): void {
   openStats.samples.push(ms)
 }
 
-// Периодическая сводка: p50/p95/p99/max по всем открытиям.
+// Сколько раз грузилась страница оверлея. Заполняется пулом через
+// setPageLoadCount: счётчик живёт там, а сводка печатается здесь.
+//
+// Приёмка шага 4a: значение равно 1. Рост означает возврат навигации —
+// меню снова перезагружает страницу вместо обновления по IPC.
+let pageLoads = 0
+
+export function setPageLoadCount(count: number): void {
+  pageLoads = count
+}
+
+// Периодическая сводка: p50/p95/p99/max по всем открытиям плюс счётчик
+// загрузок страницы.
+//
+// Счётчик загрузок добавлен не для красоты: без него главный критерий
+// приёмки (страница грузится один раз) не проверяем — lifecycle в
+// terse-режим не входит, а DevTools оверлея недоступны.
 export function dumpStats(): void {
   if (isSilent || openStats.count === 0) return
   const s = [...openStats.samples].sort((a, b) => a - b)
@@ -117,7 +133,7 @@ export function dumpStats(): void {
     'perf',
     `stats { open: ${openStats.count}, p50: ${pct(0.5).toFixed(1)}ms, ` +
       `p95: ${pct(0.95).toFixed(1)}ms, p99: ${pct(0.99).toFixed(1)}ms, ` +
-      `max: ${s[s.length - 1].toFixed(1)}ms }`
+      `max: ${s[s.length - 1].toFixed(1)}ms, pageLoads: ${pageLoads} }`
   )
 }
 

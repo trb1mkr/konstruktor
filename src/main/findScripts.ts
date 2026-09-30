@@ -1,4 +1,9 @@
 // JS-инъекции поиска по странице (п.4 рефакторинга).
+//
+// Здесь остались только скрипты, исполняемые в webContents ВКЛАДКИ:
+// собственный поиск по словам и regex, который findInPage не умеет.
+// Данные, идущие В оверлей, через JS не передаются: счётчик и ошибка
+// валидации едут точечным патчем overlay:update.
 // Раньше строки executeJavaScript жили внутри index.ts рядом с логикой
 // findInPage — теперь все шаблоны в одном файле, main только подставляет
 // параметры через JSON.stringify. Тестировать можно без Electron.
@@ -7,27 +12,6 @@ export interface CustomFindOptions {
   matchCase: boolean
   wholeWord: boolean
   useRegex: boolean
-}
-
-// Счетчик found-in-page -> панель поиска (оверлей kind 'find').
-// Обновляем оба селектора: legacy [data-find-status] и актуальный .find-count.
-export function buildFoundCounterScript(text: string): string {
-  const t = JSON.stringify(text)
-  return (
-    `(() => { const el = document.querySelector('[data-find-status]');` +
-    ` const c = document.querySelector('.find-count');` +
-    ` if (el) el.textContent = ${t};` +
-    ` if (c) c.textContent = ${t}; })()`
-  )
-}
-
-// Счетчик собственного поиска (wholeWord/regex): там только .find-count.
-export function buildSetCounterScript(text: string): string {
-  const t = JSON.stringify(text)
-  return (
-    `(() => { const c = document.querySelector('.find-count');` +
-    ` if (c) c.textContent = ${t}; })()`
-  )
 }
 
 // Живое перекрашивание внутренней страницы без перезагрузки.
@@ -117,15 +101,6 @@ export function buildStepCustomFindScript(forward: boolean): string {
     ` hits[active].scrollIntoView({ block: 'center' });\n` +
     ` return { matches: hits.length, active: active + 1 };\n` +
     ` })()`
-  )
-}
-
-// Ошибка диалога иконки: показать текст в .dialog-error без закрытия.
-export function buildIconErrorScript(text: string): string {
-  const t = JSON.stringify(text)
-  return (
-    `(()=>{const e=document.querySelector('.dialog-error');` +
-    `if(e){e.textContent=${t};e.style.display='block';}return true})()`
   )
 }
 

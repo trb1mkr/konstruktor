@@ -6,34 +6,95 @@ import PromptDialog from './PromptDialog.vue'
 import IconDialog from './IconDialog.vue'
 import FindBar from './FindBar.vue'
 
-// Корень оверлей-окна. Main передает payload через ?payload= в hash URL:
-// { kind: 'menu', anchor, items, incognito } или { kind: 'toast', ... }.
-// Клик по прозрачной области = закрыть без выбора.
-export interface MenuItem {
-  id: string
-  label: string
-  icon: string
-  color?: string
-  disabled?: boolean
+// Формы берёмся из контракта, а не дублируются здесь.
+//
+// Раньше типы были объявлены локально с оговоркой «в бандл renderer общий
+// тип не попадает». Оговорка неверна: типы стираются при сборке, и
+// `renderer/core/useTabs.ts` уже импортирует их из preload. Цена
+// дублирования тут и проявилась: на шаге 4b в модель добавили
+// `find.counter` и `icon.error`, локальная копия осталась без них, и
+// `onUpdate` перестал компилироваться.
+//
+// Модель renderer остаётся плоской (все поля опциональны), а не union из
+// контракта: шаблон читает `model.items` и `model.find` напрямую, и с
+// union пришлось бы сузить тип по `view` в каждом месте. Переход на
+// union — задача шага 7 вместе с реестром компонентов.
+import type {
+  DialogModel,
+  FindModel,
+  IconModel,
+  MenuItem,
+  ToastModel,
+  UpdateMessage
+} from '../../shared/overlay-types'
+
+// `MenuItem` реэкспортируется: его импортирует BrowserMenu.vue. Экспорт
+// из .vue оставлен, чтобы менять потребителей не пришлось.
+export type { MenuItem }
+
+interface OverlayModel {
+  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
+  items?: MenuItem[]
+  badge?: string
+  toast?: ToastModel
+  dialog?: DialogModel
+  icon?: IconModel
+  find?: FindModel
 }
 
+// То, что приходит из main одним сообщением overlay:push. Форма задана
+// контрактом PushMessage, но остаётся локальной копией: см. пояснение выше
+// про дублирование форм.
 interface OverlayPayload {
-  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
-  items?: MenuItem[]
-  incognito?: boolean
-  animations?: boolean
-  theme?: string
-  align?: 'start' | 'end'
-  // Токен сессии от main. Нужен для подтверждения готовности: main держит
-  // окно прозрачным, пока renderer не сообщит, что этот токен отрисован.
-  token?: number
-  toast?: { title: string; body?: string; timeout?: number }
-  dialog?: { title: string; placeholder?: string; initial?: string; buttons: { id: string; label: string }[] }
-  icon?: { title: string; placeholder?: string; initial?: string }
-  find?: { query?: string }
+  // Токен сессии. Он же подтверждение отрисовки: main держит окно
+  // прозрачным, пока renderer не вернёт sessionId через overlay:painted.
+  //
+  // Отдельного поля token не существует намеренно: в main sessionToken
+  // уходит и как sessionId, и как токен. Два поля означали бы два
+  // источника правды, которые однажды разойдутся.
+  sessionId: number
+  model: OverlayModel
+  theme: 'dark' | 'light' | 'slate'
+  animations: boolean
+  // Меню прижато к левому краю якоря (align: 'start' в main).
+  anchorLeft?: boolean
 }
 
 const payload = ref<OverlayPayload | null>(null)
+
+// Типы берём из контракта, а не дублируем локально. Прежний комментарий
+// утверждал, что общий тип в бандл renderer не попадает и его приходится
+// дублировать — это неверно: типы стираются при сборке, и
+// `renderer/core/useTabs.ts` уже импортирует их из preload. Локальная копия
+// разошлась с общей на шаге 4b: counter и error добавились в модель, а
+// локальный OverlayModel молча остался без них.
+type OverlayUpdate = UpdateMessage
+
+// Глубокий мерж патча в модель. Намеренно локальный: патчи всегда плоские
+// (find.counter, icon.error), и общий deep-merge был бы лишней
+// абстракцией.
+//
+// null и undefined НЕ перезаписывают поле — иначе нельзя было бы стереть
+// сообщение об ошибке, не отправляя полную сессию заново.
+function mergePatch<T extends object>(base: T, patch: unknown): T {
+  if (typeof patch !== 'object' || patch === null) return base
+  const out = { ...(base as Record<string, unknown>) }
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (value === null || value === undefined) continue
+    const cur = out[key]
+    const bothPlainObjects =
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      typeof cur === 'object' &&
+      cur !== null &&
+      !Array.isArray(cur)
+    out[key] = bothPlainObjects
+      ? mergePatch(cur as Record<string, unknown>, value)
+      : value
+  }
+  return out as T
+}
 const error = ref('')
 // Парковка: main уводит окно и просит убрать содержимое из рендера.
 // Прозрачности и увода за экран НЕДОСТАТОЧНО: на Linux с несколькими
@@ -41,40 +102,31 @@ const error = ref('')
 // видимым на соседнем мониторе. Пустой DOM не виден нигде, поэтому
 // содержимое убираем через v-if — это основная защита, а не setOpacity.
 const contentUnmounted = ref(true)
-// Парсим синхронно до первого рендера: иначе .no-anim применится
-// после старта анимации и fade при animations off всё равно проиграется.
-// Тему кладем на <html> сразу — оверлей красится до монтирования.
-payload.value = parsePayload()
-// Эффективная тема: 'system' резолвится через matchMedia, остальные как есть.
-const rawTheme = payload.value?.theme ?? 'dark'
-const effTheme =
-  rawTheme === 'system'
-    ? window.matchMedia?.('(prefers-color-scheme: light)').matches
-      ? 'light'
-      : 'dark'
-    : rawTheme === 'slate' || rawTheme === 'light'
-      ? rawTheme
-      : 'dark'
-document.documentElement.dataset.theme = effTheme
-// Флаг анимаций — на <html>, не на .overlay-root. Причина: CSS-анимация
-// overlay-fade на .browser-menu стартует в тот же кадр, когда Vue монтирует
-// компонент. Если вешать no-anim реактивно на .overlay-root, класс успевает
-// примениться ПОСЛЕ старта анимации — и fade проигрывается даже при
-// animations: false. На <html> класс стоит до первой отрисовки, поэтому
-// анимация не начинается вовсе. Работает и при первом открытии (prewarm грузит
-// страницу без payload — флаг сразу false), и при переиспользовании окна.
-document.documentElement.classList.toggle('no-anim', payload.value?.animations === false)
+// На старте данных нет: страница оверлея грузится ОДИН раз без payload,
+// сессия приходит через overlay:push. Ставить тему и флаг анимаций здесь
+// нечего — они применятся в applyPayload, до снятия парковки.
+//
+// До первого push красим в тёмную: так выглядит пустое прозрачное окно
+// на старте, и переключение темы не мигает.
+document.documentElement.dataset.theme = 'dark'
 
-function parsePayload(): OverlayPayload | null {
-  try {
-    const hash = window.location.hash.replace(/^#/, '')
-    const params = new URLSearchParams(hash)
-    const raw = params.get('payload')
-    if (!raw) return null
-    return JSON.parse(decodeURIComponent(raw)) as OverlayPayload
-  } catch {
-    return null
-  }
+// Применяет сессию: данные, тема, флаг анимаций.
+//
+// Тема и no-anim ставятся на <html> СИНХРОННО, до обновления payload.
+// Причина: CSS-анимация overlay-fade стартует в тот же кадр, когда Vue
+// монтирует компонент. Класс на .overlay-root применился бы ПОСЛЕ старта
+// анимации, и fade проигрался бы даже при animations: false.
+//
+// Порядок обязателен: сначала классы на <html>, потом payload — иначе
+// компонент смонтируется со старой темой на кадр.
+function applyPayload(msg: OverlayPayload): void {
+  const html = document.documentElement
+  html.dataset.theme = msg.theme
+  html.classList.toggle('no-anim', msg.animations === false)
+  // error сбрасываем в обе стороны: сессия может прийти с пустой моделью
+  // (тогда показываем ошибку), а может сменить валидную на невалидную.
+  error.value = msg.model ? '' : 'Empty overlay model.'
+  payload.value = msg
 }
 
 // Диагностика анимаций: сообщаем в main, какие CSS-анимации реально
@@ -94,39 +146,12 @@ function traceAnimations(tag: string): void {
   })
 }
 
-// Подтверждает main, что текущий payload применён. Main держит окно
-// прозрачным до этого сигнала — иначе между setOpacity(1) и обновлением
-// DOM пользователь видит пункты предыдущего меню (однокадровая вспышка).
-//
-// Кадра композитора здесь ждать не нужно: за отрисовку отвечает
-// отдельная фаза painted, а от ready требуется только факт применения
-// payload в JS. Раньше здесь стоял requestAnimationFrame, и именно на
-// него приходилась вся разница между первым и последующими открытиями
-// (2–16 мс, при 60 Гц один кадр = 16.7 мс). На первом открытии кадр
-// приходил с задержкой, потому что окно только что переехало между
-// дисплеями и композитор ещё не построил поверхность для целевого.
-function reportReady(tag: string): void {
-  const token = payload.value?.token
-  void nextTick(() => {
-    if (token === undefined) {
-      // Prewarm: payload ещё нет, подтверждать нечего.
-      return
-    }
-    window.overlayAPI?.ready(token)
-    window.overlayAPI?.trace(`ready(${tag}) token=${token}`)
-  })
-}
-
 onMounted(() => {
-  // error ставим только если payload реально отсутствует ПОСЛЕ монтирования.
-  // При prewarm страница грузится без payload — это норма, не ошибка.
-  error.value = payload.value ? '' : 'Empty overlay payload.'
-  traceAnimations('mount')
-  // Prod-путь: loadFile с payload = полный reload, payload уже применён
-  // к моменту монтирования. Dev-путь переподтверждает в hashchange.
-  reportReady('mount')
-  // Парковка от main: содержимое убираем из рендера. Значение по
-  // умолчанию true — окно приходит в парке, а не с готовым меню.
+  // Парковка: main уводит окно и просит убрать содержимое из рендера.
+  // Прозрачности и увода за экран НЕДОСТАТОЧНО: на Linux с несколькими
+  // мониторами координаты клампятся в рабочую область, и оверлей оказывается
+  // видимым на соседнем мониторе. Пустой DOM не виден нигде, поэтому
+  // содержимое убираем через v-if — это основная защита, а не setOpacity.
   //
   // При снятии парковки (false) подтверждаем main, что кадр реально
   // отдан: один requestAnimationFrame после nextTick. Main держит окно
@@ -134,50 +159,61 @@ onMounted(() => {
   // нового содержимого пользователь увидит вспышку предыдущего меню.
   //
   // Раньше здесь стояло два rAF подряд. Второй давал +16.7 мс к каждому
-  // открытию (при 60 Гц кадр = 16.7 мс, и замеры 21–55 мс складывались
-  // именно в эти два кадра). Один rAF здесь достаточен, потому что при
-  // парковке контент РАЗМОНТИРОВАН через v-if: окно пустое и прозрачное,
-  // показывать нечего, вспышка старых пунктов физически неоткуда взяться.
-  // Если когда-то появится реальная вспышка — возвращать второй rAF.
-  window.overlayAPI?.onContentUnmounted?.((v: boolean) => {
-    contentUnmounted.value = v
-    if (v) return
-    const token = payload.value?.token
-    if (token === undefined) return
+  // открытию. Один rAF достаточен, потому что при парковке контент
+  // РАЗМОНТИРОВАН через v-if: окно пустое и прозрачное, показывать нечего.
+  window.overlayAPI?.onContentUnmounted?.((unmounted: boolean) => {
+    contentUnmounted.value = unmounted
+    if (unmounted) return
+    const sessionId = payload.value?.sessionId
+    if (sessionId === undefined) return
     void nextTick(() => {
       requestAnimationFrame(() => {
-        window.overlayAPI?.painted(token)
+        window.overlayAPI?.painted(sessionId)
       })
     })
   })
-  // В dev-режиме (Vite dev server) loadURL с новым hash не перезагружает страницу,
-  // а просто меняет маршрут. Слушаем hashchange и перепарсим payload.
-  // В prod это полный reload, и hashchange не нужен — но лишний слушатель
-  // не мешает, а код остается один.
-  window.addEventListener('hashchange', () => {
-    payload.value = parsePayload()
-    // error сбрасываем в обе стороны: prewarm грузит страницу БЕЗ payload
-    // (error = 'Empty overlay payload.'), потом приходит реальный payload —
-    // иначе v-if="error" перебьёт рендер меню. Обратный случай (payload
-    // есть, потом исчез) — тоже должен показывать ошибку, а не пустоту.
-    error.value = payload.value ? '' : 'Empty overlay payload.'
-    // Обновляем тему, если она изменилась в новом payload
-    const rawTheme = payload.value?.theme ?? 'dark'
-    const effTheme =
-      rawTheme === 'system'
-        ? window.matchMedia?.('(prefers-color-scheme: light)').matches
-          ? 'light'
-          : 'dark'
-        : rawTheme === 'slate' || rawTheme === 'light'
-          ? rawTheme
-          : 'dark'
-    document.documentElement.dataset.theme = effTheme
-    // Синхронизируем флаг анимаций с новым payload — настройку могли
-    // переключить, пока оверлей был в пуле.
-    document.documentElement.classList.toggle('no-anim', payload.value?.animations === false)
-    traceAnimations('hashchange')
-    // Dev-путь: DOM обновлен — подтверждаем main, чтобы он снял прозрачность.
-    reportReady('hashchange')
+
+  // Данные приходят через overlay:push. Страница загружена один раз и
+  // больше не перезагружается, поэтому путь единственный — в отличие от
+  // прежнего кода, где dev шёл через hashchange, а prod через полный
+  // reload с разбором payload при монтировании.
+  //
+  // Ошибку в payload показываем только если main прислал пустую модель.
+  // Отсутствие сессии на старте — норма (окно прогрето и ждёт), ошибкой
+  // это не считается.
+  window.overlayAPI?.onPush?.((msg: OverlayPayload) => {
+    applyPayload(msg)
+    traceAnimations(`push sessionId=${msg.sessionId}`)
+  })
+
+  // Точечные патчи живой сессии: счётчик поиска, ошибка валидации иконки.
+  //
+  // Патч МЕРДЖИТСЯ в текущую модель, а не заменяет её: пришёл счётчик —
+  // значит view, тема и запрос остаются прежними. Замена целиком означала бы,
+  // что каждый счётчик тащит всю сессию, и преимущество канала над push
+  // исчезает.
+  //
+  // Раньше те же значения слались через executeJavaScript с querySelector по
+  // .find-count и .dialog-error. Счётчик и ошибка не жили в модели, приходили
+  // из main готовыми строками, и разметка с данными расходились при любом
+  // переименовании класса. Теперь это поля модели, и изменить их иначе, чем
+  // через патч, нельзя.
+  window.overlayAPI?.onUpdate?.((msg: OverlayUpdate) => {
+    const current = payload.value
+    if (!current) return
+    // Патч от устаревшей сессии отбрасываем: окно из пула у всех сессий
+    // одно, и без сверки токена счётчик от прошлого поиска появился бы в
+    // текуном.
+    if (current.sessionId !== msg.sessionId) {
+      window.overlayAPI?.trace(
+        `STALE update dropped: got ${msg.sessionId}, current ${current.sessionId}`
+      )
+      return
+    }
+    payload.value = {
+      ...current,
+      model: mergePatch(current.model, msg.patch)
+    }
   })
 })
 
@@ -197,7 +233,7 @@ async function onSubmit(value: string) {
 <template>
   <div
     class="overlay-root"
-    :class="{ 'align-start': payload?.align === 'start', live: !contentUnmounted }"
+    :class="{ 'align-start': payload?.anchorLeft, live: !contentUnmounted }"
     @mousedown="onBackdrop">
     <!-- contentUnmounted: содержимое убрано из рендера полностью. Это
          основная защита от «мусорного» оверлея: окно может оказаться в
@@ -206,28 +242,29 @@ async function onSubmit(value: string) {
     <template v-if="!contentUnmounted">
       <div v-if="error" class="overlay-error">{{ error }}</div>
       <BrowserMenu
-        v-else-if="payload?.kind === 'menu'"
-        :items="payload.items ?? []"
-        :incognito="payload.incognito ?? false"
-        :align="payload.align ?? 'end'"
+        v-else-if="payload?.model.view === 'menu'"
+        :items="payload.model.items ?? []"
+        :incognito="payload.model.badge === 'incognito'"
+        :align="payload.anchorLeft ? 'start' : 'end'"
         @select="onSelect"
       />
       <ToastStack
-        v-else-if="payload?.kind === 'toast' && payload.toast"
-        :toast="payload.toast"
+        v-else-if="payload?.model.view === 'toast' && payload.model.toast"
+        :toast="payload.model.toast"
       />
       <PromptDialog
-        v-else-if="payload?.kind === 'dialog' && payload.dialog"
-        :dialog="payload.dialog"
+        v-else-if="payload?.model.view === 'dialog' && payload.model.dialog"
+        :dialog="payload.model.dialog"
         @submit="onSubmit"
       />
       <IconDialog
-        v-else-if="payload?.kind === 'icon' && payload.icon"
-        :icon="payload.icon"
+        v-else-if="payload?.model.view === 'icon' && payload.model.icon"
+        :icon="payload.model.icon"
       />
       <FindBar
-        v-else-if="payload?.kind === 'find'"
-        :initial="payload.find?.query ?? ''"
+        v-else-if="payload?.model.view === 'find'"
+        :initial="payload.model.find?.query ?? ''"
+        :counter="payload.model.find?.counter ?? ''"
       />
     </template>
   </div>

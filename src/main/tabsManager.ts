@@ -13,8 +13,7 @@ import {
 import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from './browserTheme'
 import { ensureStripToken, removeStripToken } from './stripOrder'
 import { openFindOverlay } from './findManager'
-import { buildFoundCounterScript } from './findScripts'
-import { getActiveOverlay, closeOverlay } from './overlayManager'
+import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlayManager'
 import { getSettingsSync, saveSettings } from './settingsStore'
 import { recordVisit, updateMetadata } from './historyStore'
 import { START_URL } from './startPage'
@@ -196,17 +195,20 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
       }
     }
   })
-  // Счетчик совпадений поиска: found-in-page активной view уходит
-  // в панель поиска (оверлей kind 'find') через executeJavaScript.
+  // Счётчик совпадений поиска: found-in-page активной view уходит в панель
+  // поиска (оверлей kind 'find') точечным патчем overlay:update.
+  //
+  // Раньше это был executeJavaScript с querySelector по .find-count и
+  // [data-find-status]. Счётчик не жил в модели, значение приходило из main
+  // строкой, и разметка с данными могли разойтись при любом переименовании
+  // класса. Теперь это поле find.counter, и оно меняется реактивно.
   view.webContents.on('found-in-page', (_e, result) => {
     if (id !== ws.activeTabId || !ws.window) return
-    const overlay = getActiveOverlay(ws.window)
-    if (!overlay || overlay.isDestroyed()) return
     const text =
       result.matches === 0
         ? 'No results'
         : `${result.activeMatchOrdinal} of ${result.matches}`
-    overlay.webContents.executeJavaScript(buildFoundCounterScript(text)).catch(() => undefined)
+    updateActiveOverlay(ws.window, { find: { counter: text } })
   })
 
   if (url !== 'about:blank') {
@@ -229,6 +231,20 @@ export function setActiveTab(ws: WindowState, deps: TabsDeps, id: number): void 
   }
   ws.activeTabId = id
   rec.view.setVisible(true)
+  // Клавиатурный фокус — view, а не окно.
+  //
+  // Замер: при запуске Ctrl+F не вызывал НИ ОДНОЙ подписки, и не
+  // срабатывала ни одна клавиша вообще, при этом мышь работала (страница
+  // прокручивалась), а у окна isFocused() был true. То есть клавиатурный
+  // фокус не принадлежал НИ ОДНОМУ webContents: окно активно, но фокус
+  // внутри него не задан. Мышь работает потому, что клик Chromium
+  // трактует как команду «сфокусируй вид», а клавиатура уходит в
+  // webContents, у которого фокуса нет, — поэтому before-input-event
+  // молчит. Клик по странице чинил симптом, сам фокус ставя.
+  //
+  // setVisible(true) недостаточно: он показывает view, но не передаёт
+  // ей клавиатуру. Нужен явный focus().
+  rec.view.webContents.focus()
   deps.layoutActiveView(ws)
   pushTabsState(ws)
   deps.persistSessionTabs(ws)
