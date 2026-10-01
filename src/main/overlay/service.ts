@@ -2,7 +2,7 @@ import { BrowserWindow, app, dialog, ipcMain, nativeTheme, screen } from 'electr
 import { join } from 'path'
 import { getSettingsSync } from '../settingsStore'
 import { verifyIconSource, verifyEmojiButton, fileToIconDataUrl } from '../iconVerify'
-import { log, mark, perf, recordOpen, logError } from './logger'
+import { log, mark, perf, recordOpen, now, logError } from './logger'
 import {
   createOverlay,
   ensureOverlayWindow as ensurePooledWindow,
@@ -154,6 +154,32 @@ let isSystemDialogOpen = false
 // Renderer сообщает, что применил contentUnmounted=false и кадр отдан.
 // Только после этого main возвращает прозрачность окну.
 const PAINTED_CHANNEL = 'overlay:painted'
+
+// Бюджет «быстрой» отрисовки: пока он не превышен, молчим, потому что
+// такое время — норма. Превышение — уже интересно, но НЕ повод
+// отменять показ (см. PAINT_TIMEOUT_MS).
+const PAINT_BUDGET_MS = 60
+
+// Сколько ждем painted, прежде чем считать renderer не отвечающим.
+//
+// Это НЕ бюджет латентности, а страховка безопасности, и это различие
+// решающее. Пока ждём, окно прозрачно и пусто — пользователь не видит
+// ничего. Значит ожидание не ощущается: ни миллисекунда этого таймаута
+// не попадает во «время открытия» в восприятии, всё оно уходит на паузу
+// ДО появления меню. А вот короткий таймаут вредит: он ловит не поломку,
+// а медленный кадр, и отменяет показ, который вот-вот был бы показан.
+//
+// На шаге 9 измерено на dev: первый paint занимает 67.7 мс, потому что
+// шаблоны Vue компилируются в браузере при первом монтировании. При
+// старом таймауте 120 мс первые два открытия в dev не укладывались и
+// отменялись — меню просто не появлялось, при том что renderer был жив
+// и через несколько кадров присылал painted. В prod тот же путь —
+// 6.7..30.6 мс, отмен не было вовсе.
+//
+// Поэтому таймаут намеренно щедрый: он должен ловить только «renderer
+// не ответит никогда» (упавший preload, разрушенное окно), а не
+// «renderer ответил чуть позже».
+const PAINT_TIMEOUT_MS = 1000
 
 // Вешает слушатели, закрывающие активный оверлей при потере родителя:
 // движение, ресайз, сворачивание, ПЕРЕКЛЮЧЕНИЕ НА ДРУГОЕ ОКНО и Esc.
@@ -857,11 +883,14 @@ function overlayPainted(overlay: BrowserWindow, token: number): Promise<boolean>
   if (paintedSeen.delete(token)) return Promise.resolve(true)
   return new Promise<boolean>((resolve) => {
     let settled = false
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+    const startedAt = now()
     const finish = (ok: boolean): void => {
       if (settled) return
       settled = true
       ipcMain.removeListener(PAINTED_CHANNEL, listener)
-      clearTimeout(timer)
+      clearTimeout(budgetTimer)
+      clearTimeout(fallbackTimer)
       resolve(ok)
     }
     const listener = (_e: Electron.IpcMainEvent, t: number): void => {
@@ -871,10 +900,21 @@ function overlayPainted(overlay: BrowserWindow, token: number): Promise<boolean>
       }
     }
     ipcMain.on(PAINTED_CHANNEL, listener)
-    const timer = setTimeout(() => {
-      log('lifecycle', 'paint timeout, aborting overlay', { token })
-      finish(false)
-    }, 120)
+    // Медленный кадр — не поломка. Пока бюджет не превышен, молчим:
+    // отличить одно от другого можно только по времени, и отменять
+    // показ по медленному кадру — ложное срабатывание (см. PAINT_TIMEOUT_MS).
+    const budgetTimer = setTimeout(() => {
+      log('lifecycle', 'paint budget exceeded, waiting longer', {
+        token,
+        waitedMs: Number((now() - startedAt).toFixed(1))
+      })
+      // Страховка по-прежнему нужна: если renderer не ответит никогда,
+      // показ обязан отмениться, а не висеть вечно.
+      fallbackTimer = setTimeout(() => {
+        log('lifecycle', 'paint timeout, aborting overlay', { token })
+        finish(false)
+      }, PAINT_TIMEOUT_MS)
+    }, PAINT_BUDGET_MS)
   })
 }
 
