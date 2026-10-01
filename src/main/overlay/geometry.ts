@@ -208,6 +208,81 @@ export function boundsFromMeasurement(
   return resolveBounds(parentBounds, workArea, anchor, spec, { width, height: measured.height }, true)
 }
 
+/**
+ * Объединение прямоугольников уровней стека — окно оверлея (вариант B).
+ *
+ * Проблема, которую это решает: уровни выровнены по-разному. Меню у края
+ * экрана разворачивается влево (align-end), диалог стоит по центру, тост —
+ * в правом нижнем углу. Их окна в разных местах, а показать их
+ * одновременно можно только ОДНИМ окном. Значит, окно должно покрывать
+ * все уровни целиком.
+ *
+ * Считаем не «всё окно родителя» (тогда кликабельность перекроет всю
+ * страницу), а прямоугольник, описанный вокруг уровней. Плата варианта B
+ * в том, что union с соседними уровнями растёт, но на практике стек
+ * держится на глубине 1-2, и рамка не уходит за пределы экрана.
+ *
+ * Между уровнями оставляем зазор STACK_GAP: без него карточки разных
+ * уровней примыкали бы друг к другу вплотную, и визуально не было бы
+ * видно, что это две отдельные поверхности.
+ *
+ * @param levels прямоугольники уровней в экранных координатах
+ * @param workArea рабочая область дисплея родителя
+ */
+export function resolveUnionBounds(
+  levels: Rectangle[],
+  workArea: Rectangle
+): { x: number; y: number; width: number; height: number } {
+  if (levels.length === 0) {
+    return { x: workArea.x, y: workArea.y, width: 1, height: 1 }
+  }
+  const left = Math.min(...levels.map((l) => l.x))
+  const top = Math.min(...levels.map((l) => l.y))
+  const right = Math.max(...levels.map((l) => l.x + l.width))
+  const bottom = Math.max(...levels.map((l) => l.y + l.height))
+  // Зазор только между уровнями, а не по краям: иначе отступ от края
+  // экрана плавал бы в зависимости от того, какой уровень крайний.
+  const grow = levels.length > 1 ? STACK_GAP : 0
+  let x = Math.round(left - grow)
+  let y = Math.round(top - grow)
+  let width = Math.round(right - left + grow * 2)
+  let height = Math.round(bottom - top + grow * 2)
+  // Последний кламп: union не должен уходить за экран, иначе край
+  // уровня окажется за рабочей областью и карточка обрежется.
+  const maxX = workArea.x + workArea.width - width
+  const maxY = workArea.y + workArea.height - height
+  const clampedX = Math.min(Math.max(x, workArea.x), Math.max(workArea.x, maxX))
+  const clampedY = Math.min(Math.max(y, workArea.y), Math.max(workArea.y, maxY))
+  if (clampedX !== x || clampedY !== y) {
+    log('geometry', 'union clamped to work area', {
+      want: { x, y, width, height },
+      got: { x: clampedX, y: clampedY },
+      workArea
+    })
+  }
+  x = clampedX
+  y = clampedY
+  return { x, y, width, height }
+}
+
+/**
+ * Локальные координаты уровня внутри окна объединения.
+ *
+ * Renderer рисует уровни в потоке документа, а не в экранных координатах:
+ * окно и есть система отсчёта. Уровень, который main посчитал по
+ * resolveBounds, нужно сдвинуть в начало окна — иначе он оказался бы за
+ * пределами видимой области.
+ */
+export function levelOffsetInUnion(
+  level: Rectangle,
+  union: Rectangle
+): { x: number; y: number } {
+  return { x: level.x - union.x, y: level.y - union.y }
+}
+
+/** Зазор между уровнями стека, чтобы карточки не слипались в одну полосу. */
+const STACK_GAP = 4
+
 /** Рабочая область дисплея, на котором лежит окно. */
 export function workAreaOf(win: Electron.BrowserWindow): Rectangle {
   return screen.getDisplayMatching(win.getBounds()).workArea

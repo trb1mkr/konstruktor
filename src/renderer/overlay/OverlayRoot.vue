@@ -1,31 +1,82 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick } from 'vue'
-
-// Компонент текущего вида и пропы для него.
-//
-// Реестр отвечает за ВЫБОР компонента, это место — за форму пропов.
-// Форма едина для всех видов: каждый компонент объявляет нужные ему поля
-// и игнорирует остальные. Альтернатива — передать всю модель целиком, но
-// тогда компоненты знали бы о видах, которых не касаются, и правка модели
-// в одном виде ломала бы чужие компоненты.
 import { componentFor } from './registry'
 
-const currentComponent = computed(() => {
-  const view = payload.value?.model?.view
-  if (!view) return null
-  return componentFor(view)
+// Стек уровней: нижний рисуется первым, верхний — последним и поверх.
+//
+// Шаг 8. Раньше renderer знал об одной модели: приход новой подменял
+// старую, и «меню -> Change icon -> диалог» выглядел как смена одного
+// окна другим. Теперь renderer получает весь стек и рисует уровни друг
+// над другом, а снятие верхнего (Esc) просто убирает последний.
+//
+// Ключевой момент: уровней в DOM столько же, сколько в стеке, и каждый
+// позиционируется по своему offset из сообщения. Окно — объединение
+// уровней, поэтому система отсчёта у них одна: левый верхний угол окна.
+
+import type {
+  DialogModel,
+  FindModel,
+  IconModel,
+  MenuItem,
+  PushMessage,
+  StackEntry,
+  ToastModel,
+  UpdateMessage
+} from '../../shared/overlay-types'
+
+// `MenuItem` реэкспортируется: его импортирует BrowserMenu.vue. Экспорт
+// из .vue оставлен, чтобы менять потребителей не пришлось.
+export type { MenuItem }
+
+/** Модель уровня — плоская: шаблон читает поля напрямую. */
+interface OverlayModel {
+  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
+  items?: MenuItem[]
+  badge?: string
+  toast?: ToastModel
+  dialog?: DialogModel
+  icon?: IconModel
+  find?: FindModel
+}
+
+// Один уровень стека, ровно как его прислал main. Форма задана
+// контрактом StackEntry, но здесь объявлена отдельно: renderer держит
+// уровни в ref и мержит патчи, а контрактный union пришлось бы сузить в
+// каждом месте.
+interface Level extends Omit<StackEntry, 'model'> {
+  model: OverlayModel
+}
+
+// То, что приходит из main одним сообщением overlay:push.
+interface OverlayPayload {
+  // Стек уровней снизу вверх. Токен каждого уровня лежит в нём самом,
+  // а не в сообщении: при двух уровнях одно общее поле означало бы,
+  // каким оно помечено — верхним или нижним.
+  //
+  // Токен верхнего уровня работает и подтверждением отрисовки: main держит
+  // окно прозрачным, пока renderer не вернёт его через overlay:painted.
+  stack: Level[]
+  theme: 'dark' | 'light' | 'slate'
+  animations: boolean
+}
+
+const payload = ref<OverlayPayload | null>(null)
+
+// Верхний уровень — тот, на который приходят команды. Esc и клик мимо
+// относятся именно к нему, а не ко всему стеку.
+const topLevel = computed<Level | null>(() => {
+  const stack = payload.value?.stack
+  if (!stack || stack.length === 0) return null
+  return stack[stack.length - 1]
 })
 
-const currentProps = computed(() => {
-  const p = payload.value
-  if (!p) return {}
-  const model = p.model
-  // Общие поля для всех видов: токен сессии нужен каждому компоненту
-  // для команд. anchorLeft — только меню, но передаётся всем и
-  // игнорируется лишними.
+// Пропы уровня: форма та же, что была для единственной модели, но
+// sessionId и anchorLeft берутся из самого уровня, а не из сообщения.
+function propsFor(level: Level): Record<string, unknown> | null {
+  const model = level.model
   const base = {
-    sessionId: p.sessionId,
-    anchorLeft: p.anchorLeft
+    sessionId: level.sessionId,
+    anchorLeft: level.anchorLeft
   }
   switch (model.view) {
     case 'menu':
@@ -33,7 +84,7 @@ const currentProps = computed(() => {
         ...base,
         items: model.items ?? [],
         incognito: model.badge === 'incognito',
-        align: p.anchorLeft ? 'start' : 'end'
+        align: level.anchorLeft ? 'start' : 'end'
       }
     case 'toast':
       // Модель может прийти без toast — тогда компонент не рендерим
@@ -52,63 +103,33 @@ const currentProps = computed(() => {
     default:
       return null
   }
+}
+
+const currentComponent = computed(() => {
+  const level = topLevel.value
+  return level ? componentFor(level.model.view) : null
 })
 
-// Формы берёмся из контракта, а не дублируются здесь.
-//
-// Раньше типы были объявлены локально с оговоркой «в бандл renderer общий
-// тип не попадает». Оговорка неверна: типы стираются при сборке, и
-// `renderer/core/useTabs.ts` уже импортирует их из preload. Цена
-// дублирования тут и проявилась: на шаге 4b в модель добавили
-// `find.counter` и `icon.error`, локальная копия осталась без них, и
-// `onUpdate` перестал компилироваться.
-//
-// Модель renderer остаётся плоской (все поля опциональны), а не union из
-// контракта: шаблон читает `model.items` и `model.find` напрямую, и с
-// union пришлось бы сузить тип по `view` в каждом месте. Переход на
-// union — задача шага 7 вместе с реестром компонентов.
-import type {
-  DialogModel,
-  FindModel,
-  IconModel,
-  MenuItem,
-  ToastModel,
-  UpdateMessage
-} from '../../shared/overlay-types'
+const currentProps = computed(() => {
+  const level = topLevel.value
+  return level ? propsFor(level) : null
+})
 
-// `MenuItem` реэкспортируется: его импортирует BrowserMenu.vue. Экспорт
-// из .vue оставлен, чтобы менять потребителей не пришлось.
-export type { MenuItem }
-
-interface OverlayModel {
-  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
-  items?: MenuItem[]
-  badge?: string
-  toast?: ToastModel
-  dialog?: DialogModel
-  icon?: IconModel
-  find?: FindModel
-}
-
-// То, что приходит из main одним сообщением overlay:push. Форма задана
-// контрактом PushMessage, но остаётся локальной копией: см. пояснение выше
-// про дублирование форм.
-interface OverlayPayload {
-  // Токен сессии. Он же подтверждение отрисовки: main держит окно
-  // прозрачным, пока renderer не вернёт sessionId через overlay:painted.
-  //
-  // Отдельного поля token не существует намеренно: в main sessionToken
-  // уходит и как sessionId, и как токен. Два поля означали бы два
-  // источника правды, которые однажды разойдутся.
-  sessionId: number
-  model: OverlayModel
-  theme: 'dark' | 'light' | 'slate'
-  animations: boolean
-  // Меню прижато к левому краю якоря (align: 'start' в main).
-  anchorLeft?: boolean
-}
-
-const payload = ref<OverlayPayload | null>(null)
+// Уровни для отрисовки, снизу вверх. propsFor отдаёт null для модели без
+// содержимого (тост без toast) — такой уровень пропускаем, иначе в DOM
+// появился бы компонент без данных.
+const renderedLevels = computed(() => {
+  const stack = payload.value?.stack ?? []
+  return stack
+    .map((level, index) => ({
+      key: level.sessionId,
+      index,
+      level,
+      component: componentFor(level.model.view),
+      props: propsFor(level)
+    }))
+    .filter((entry) => entry.props !== null)
+})
 
 // Типы берём из контракта, а не дублируем локально. Прежний комментарий
 // утверждал, что общий тип в бандл renderer не попадает и его приходится
@@ -173,7 +194,7 @@ function applyPayload(msg: OverlayPayload): void {
   html.classList.toggle('no-anim', msg.animations === false)
   // error сбрасываем в обе стороны: сессия может прийти с пустой моделью
   // (тогда показываем ошибку), а может сменить валидную на невалидную.
-  error.value = msg.model ? '' : 'Empty overlay model.'
+  error.value = msg.stack && msg.stack.length > 0 ? '' : 'Empty overlay model.'
   payload.value = msg
 }
 
@@ -215,7 +236,7 @@ onMounted(() => {
     // Пока содержимое размонтировано, измерять нечего — и нечего
     // сообщать: в main нет сессии с живым содержимым.
     observer?.disconnect()
-    const sessionId = payload.value?.sessionId
+    const sessionId = topLevel.value?.sessionId
     if (sessionId === undefined) return
     void nextTick(() => {
       // Наблюдатель — после того, как Vue снял v-if и элемент
@@ -247,14 +268,46 @@ onMounted(() => {
     // между отправкой и доставкой, на экране оказались бы пункты
     // предыдущего меню. Токен приходит в каждом push, поэтому сверка
     // точная.
-    const current = payload.value
-    if (current && current.sessionId > msg.sessionId) {
-      window.overlayAPI?.trace(
-        `STALE, dropped push: got ${msg.sessionId}, current ${current.sessionId}`
-      )
-      return
+    //
+    // Сверка по ТОКЕНУ ВЕРХНЕГО уровня, а не по всему стеку. Push несёт
+    // весь стек, и укороченный стек после Esc имеет меньший верхний токен,
+    // чем предыдущий: сравнение «меньше — значит устарел» отбросило бы
+    // возврат к меню как позднее сообщение.
+    //
+    // Сверка устаревших push. Правило НЕ «верхний токен меньше — значит
+    // позднее»: снятие верхнего уровня (Esc) укорачивает стек, и у
+    // возврата к меню верхний токен МЕНЬШЕ, чем у диалога, который только
+    // что показали. Такое сравнение отбрасывало возврат как позднее
+    // сообщение — и это зафиксировано в логе:
+    //
+    //   returned to lower level { popped: 2, depth: 1, kind: 'menu' }
+    //   STALE, dropped push: got stack 1, current 1+2
+    //
+    // Попытка с правилом «укороченный стек — всегда устарел» была хуже:
+    // 15 абортов подряд, приложение переставало открывать меню вовсе.
+    //
+    // Верное правило: токены монотонны, поэтому push, верхний токен
+    // которого МЕНЬШЕ текущего, устарел лишь тогда, когда этого токена нет
+    // НИГДЕ в текущем стеке. У возврата токен меню в стеке есть, и он
+    // устаревшим не является.
+    const currentStack = payload.value?.stack
+    const incomingTop = msg.stack[msg.stack.length - 1]
+    if (currentStack && incomingTop) {
+      const currentTop = currentStack[currentStack.length - 1]
+      const knownSomewhere = currentStack.some((l) => l.sessionId === incomingTop.sessionId)
+      if (!knownSomewhere && incomingTop.sessionId < currentTop.sessionId) {
+        window.overlayAPI?.trace(
+          `STALE, dropped push: got ${incomingTop.sessionId}, current ` +
+            `${currentTop.sessionId} (stack ${msg.stack.map((l) => l.sessionId).join("+")})`
+        )
+        return
+      }
     }
 
+    const wasUnmounted = contentUnmounted.value
+    // Прежняя глубина стека: без неё не отличить возврат (стек короче)
+    // от обычного открытия (стек той же или большей длины).
+    const wasStack = payload.value?.stack ?? []
     applyPayload(msg)
     // Наблюдатель пересоздаётся здесь, а не в onMounted: содержимое
     // сменилось, и старый наблюдатель смотрит на уже размонтированный узел.
@@ -264,7 +317,26 @@ onMounted(() => {
     // см. onContentUnmounted ниже.
     observer?.disconnect()
     observer = null
-    traceAnimations(`push sessionId=${msg.sessionId}`)
+    //
+    // Возврат по Esc/Cancel НЕ проходит через снятие парковки: окно всё
+    // это время показывало стек, contentUnmounted оставался false, и
+    // onContentUnmounted не срабатывал. Значит watchSurface (а с ним и
+    // focusTopLevel) не вызывался — фокус не возвращался, и клавиатура
+    // оставалась мёртвой, хотя меню было кликабельно.
+    //
+    // Поэтому фокус ставится здесь: после applyPayload вершина уже новая,
+    // а следующий кадр — правильное для него место.
+    if (!wasUnmounted) {
+      // Возврат к нижнему уровню: стек укоротился. Меню пересоберётся и
+      // смонтируется заново, и вместе с ним стартует overlay-fade — а
+      // возвращение не открытие, и это выглядит как перезагрузка меню.
+      const wasDeeper = wasStack.length > msg.stack.length
+      if (wasDeeper) suppressAnimationsForFrame()
+      void nextTick(() => {
+        watchSurface()
+      })
+    }
+    traceAnimations(`push sessionId=${msg.stack.map((l) => l.sessionId).join("+")}`)
   })
 
   // Точечные патчи живой сессии: счётчик поиска, ошибка валидации иконки.
@@ -282,19 +354,26 @@ onMounted(() => {
   window.overlayAPI?.onUpdate?.((msg: OverlayUpdate) => {
     const current = payload.value
     if (!current) return
-    // Патч от устаревшей сессии отбрасываем: окно из пула у всех сессий
-    // одно, и без сверки токена счётчик от прошлого поиска появился бы в
-    // текуном.
-    if (current.sessionId !== msg.sessionId) {
+    //
+    // Патч адресован уровню по ЕГО токену, а не верхнему. Патч приходит
+    // для того уровня, чья модель меняется: счётчик поиска — верхнего,
+    // ошибка валидации иконки — тоже верхнего, но если меню лежит под
+    // диалогом и начнёт обновляться, сверка с верхним токеном отбросила
+    // бы его патч молча.
+    const index = current.stack.findIndex((l) => l.sessionId === msg.sessionId)
+    if (index < 0) {
+      const topId = current.stack[current.stack.length - 1]?.sessionId
       window.overlayAPI?.trace(
-        `STALE, dropped update: got ${msg.sessionId}, current ${current.sessionId}`
+        `STALE, dropped update: got ${msg.sessionId}, top ${topId}`
       )
       return
     }
-    payload.value = {
-      ...current,
-      model: mergePatch(current.model, msg.patch)
+    const stack = current.stack.slice()
+    stack[index] = {
+      ...stack[index],
+      model: mergePatch(stack[index].model, msg.patch)
     }
+    payload.value = { ...current, stack }
   })
 })
 
@@ -327,13 +406,15 @@ let lastSent = { w: 0, h: 0 }
 let observer: ResizeObserver | null = null
 
 function measureContent(): void {
-  const sessionId = payload.value?.sessionId
+  const sessionId = topLevel.value?.sessionId
   if (sessionId === undefined) return
   const root = document.querySelector<HTMLElement>('.overlay-root.live')
-  // Первый дочерний элемент — сама поверхность (меню, диалог, тост).
-  // Пока его нет, мерять нечего: размер нулевой, и отправка в main
-  // схлопнула бы окно.
-  const surface = root?.firstElementChild as HTMLElement | null
+  // ВЕРХНИЙ уровень, а не первый дочерний: в стеке их несколько, и
+  // размер окна задаёт тот, кто сейчас на экране. Нижний лежит под ним,
+  // и его размер на окно не влияет.
+  const surface = topLevel
+    ? (document.querySelector<HTMLElement>('.overlay-level--top') ?? null)
+    : (root?.firstElementChild as HTMLElement | null)
   if (!surface) return
   const rect = surface.getBoundingClientRect()
   if (rect.width < 1 || rect.height < 1) return
@@ -359,22 +440,86 @@ function measureContent(): void {
 // Наблюдатель пересоздаётся на каждую сессию: элемент поверхности
 // меняется при смене view (меню -> диалог), и старый наблюдатель
 // остался бы смотать прошлый узел.
+/**
+ * Ставит фокус на элемент верхнего уровня, если он есть и сам себя не
+ * имеет.
+ *
+ * Окно уже в фокусе (focus() из main), но обработчик клавиатуры висит на
+ * элементе внутри renderer. Фокус на окне для него — то же, что фокуса
+ * нет: keydown приходит в document и до обработчика не доходит.
+ *
+ * Проверка activeElement нужна, потому что вызывается дважды: если фокус
+ * уже на списке, второй вызов перевёл бы его на сам элемент и сбросил
+ * подсветку активного пункта.
+ */
+function focusTopLevel(): void {
+  const level = document.querySelector<HTMLElement>('.overlay-level--top')
+  if (!level) return
+  const focusable = level.querySelector<HTMLElement>('[tabindex], button, input')
+  if (!focusable || focusable === document.activeElement) return
+  focusable.focus()
+}
+
 function watchSurface(): void {
   observer?.disconnect()
   observer = null
   lastSent = { w: 0, h: 0 }
   const root = document.querySelector<HTMLElement>('.overlay-root.live')
-  const surface = root?.firstElementChild
+  // Наблюдатель на верхнем уровне — том, чей размер влияет на окно.
+  // При смене стека (Esc снял диалог) вершина меняется, и наблюдатель
+  // пересоздаётся вместе с ней.
+  const surface = topLevel
+    ? (document.querySelector<HTMLElement>('.overlay-level--top') ?? null)
+    : (root?.firstElementChild as HTMLElement | null)
   if (!surface) return
   observer = new ResizeObserver(() => measureContent())
   observer.observe(surface)
+  // Фокус на элемент верхнего уровня.
+  //
+  // После снятия верхнего уровня (Esc, Cancel, клик по подложке) вершина
+  // ПЕРЕСОБИРАЕТСЯ: Vue размонтирует диалог и монтирует меню заново.
+  // Фокус, поставленный при прошлом mount, уехал вместе с диалогом, а
+  // focus() из main приходит уже после и уводит фокус на ОКНО — где
+  // keydown не ловится, потому что обработчик висит на элементе списка.
+  //
+  // Отсюда был симптом: меню кликабельно, стрелки не работают. Ставим
+  // фокус сами, после mount вершины, и повторяем на следующем кадре —
+  // focus() из main может отработать позже нашего вызова.
+  focusTopLevel()
+  requestAnimationFrame(() => focusTopLevel())
+
   // Первый замер сразу: ResizeObserver срабатывает асинхронно, а main
   // ждёт размер для первого кадра.
   measureContent()
 }
 
+
+/**
+ * Подавляет анимацию появления на ОДИН кадр.
+ *
+ * Нужно при возврате к нижнему уровню (Esc, Cancel, клик по подложке):
+ * вершина пересобирается, Vue монтирует меню заново, и вместе с ним
+ * стартует overlay-fade. Возврат — не открытие, и моргание здесь выглядит
+ * как перезагрузка меню.
+ *
+ * Подавление локальное намеренно. Вариант «слать push с animations: false»
+ * залипает: no-anim висит на <html> до следующего сообщения, и если оно
+ * не дойдёт, анимации выключатся навсегда. Здесь класс снимается на
+ * следующем кадре, и второе сообщение не нужно.
+ */
+function suppressAnimationsForFrame(): void {
+  const html = document.documentElement
+  if (html.classList.contains('no-anim')) return
+  html.classList.add('no-anim')
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      html.classList.remove('no-anim')
+    })
+  })
+}
+
 function currentSessionId(): number | undefined {
-  return payload.value?.sessionId
+  return topLevel.value?.sessionId
 }
 
 async function onBackdrop(e: MouseEvent) {
@@ -393,7 +538,7 @@ async function onSubmit(value: string) {
 <template>
   <div
     class="overlay-root"
-    :class="{ 'align-start': payload?.anchorLeft, live: !contentUnmounted }"
+    :class="{ 'align-start': topLevel?.anchorLeft, live: !contentUnmounted }"
     @mousedown="onBackdrop">
     <!-- contentUnmounted: содержимое убрано из рендера полностью. Это
          основная защита от «мусорного» оверлея: окно может оказаться в
@@ -401,19 +546,37 @@ async function onSubmit(value: string) {
          Прозрачности окна для этого недостаточно. -->
     <template v-if="!contentUnmounted">
       <div v-if="error" class="overlay-error">{{ error }}</div>
-      <!-- Один компонент на вид, выбранный по model.view. Пропы
-           единообразные: каждый компонент объявляет нужные ему поля и
-           игнорирует остальные. Раньше здесь стояла цепочка
-           v-else-if на пять компонентов, и добавление вида требовало
-           править шаблон: забытое условие давало пустое окно без
-           ошибок и без логов. -->
-      <component
-        :is="currentComponent"
-        v-else-if="currentComponent"
-        v-bind="currentProps"
-        @select="onSelect"
-        @submit="onSubmit"
-      />
+      <!--
+           Стек уровней, снизу вверх. Каждый уровень позиционируется по
+           своему offset из сообщения: окно — объединение уровней, и
+           система отсчёта у них одна (левый верхний угол окна).
+
+           Порядок важен как для отрисовки, так и для кликов: верхний
+           уровень идёт последним, поэтому лежит поверх и ловит мышь
+           первым. Нижний (меню под диалогом) остаётся видимым, но кликнуть
+           его нельзя — это правильно: пока открыт диалог, меню не должно
+           принимать выбор.
+
+           v-for по уровням вместо одного <component :is> — тот рисовал
+           бы ровно один компонент, то есть верхний.
+      -->
+      <div
+        v-for="entry in renderedLevels"
+        :key="entry.key"
+        class="overlay-level"
+        :class="{ 'overlay-level--top': entry.level.sessionId === topLevel?.sessionId }"
+        :style="{
+          left: entry.level.offset.x + 'px',
+          top: entry.level.offset.y + 'px'
+        }"
+      >
+        <component
+          :is="entry.component"
+          v-bind="entry.props"
+          @select="onSelect"
+          @submit="onSubmit"
+        />
+      </div>
     </template>
   </div>
 </template>
@@ -436,6 +599,34 @@ async function onSubmit(value: string) {
   /* В парке кликабельность выключена; при показе включается (см. шаблон). */
   pointer-events: none;
 }
+/* Уровень стека. Позиционируется по offset из сообщения: окно
+   — объединение уровней, поэтому координаты уровня задаются относительно
+   левого верхнего угла ОКНА, а не родительского окна браузера.
+
+   Размер ЗАДАЁТСЯ СОДЕРЖИМОМ, и это не стилистика, а условие работы шага 6.
+   Рамка уровня обтекает карточку, а ResizeObserver (единственный источник
+   правды по размеру) наблюдает именно рамку. Если задать ей width/height
+   из сообщения, рамка станет ровно той же, что и запасной размер, и
+   наблюдатель перестанет срабатывать: main не получит измерение, окно
+   останется запасным, и меню будет выглядеть пустым снизу.
+
+   Ширину/высоту из сообщения поэтому НЕ применяем. */
+.overlay-level {
+  position: absolute;
+  /* Ширина не задаётся: без неё рамка обтекает карточку, и длинное
+     название группы переносится по содержимому, а не растягивает
+     уровень. Иначе подпись уезжала бы за край окна, посчитанного main
+     по предыдущему замеру. */
+  width: max-content;
+  max-width: 100%;
+  /* Нижние уровни не принимают мышь: пока открыт верхний (диалог),
+     кликнуть лежащее под ним меню нельзя. */
+  pointer-events: none;
+}
+.overlay-level--top {
+  pointer-events: auto;
+}
+
 /* Показанное меню снова кликабельно, иначе пункты не нажать. */
 .overlay-root.live {
   pointer-events: auto;

@@ -72,6 +72,7 @@ import {
   type OverlayMenuItem
 } from './overlayManager'
 import { registerOverlayIpc } from './overlay/ipc'
+import { watchPaintedOnce } from './overlay/service'
 import { dumpStats as dumpOverlayStats, log } from './overlay/logger'
 
 // Кастомная схема должна стать privileged ДО ready, иначе WebContentsView ее не отрендерит.
@@ -848,6 +849,11 @@ function registerIpc() {
   // overlay/ipc.ts — шаг 4 плана. Здесь остались только каналы
   // приложения: вкладки, история, загрузки, настройки, окна, ярлыки.
   registerOverlayIpc()
+  // Учёт подтверждений отрисовки оверлея. Слушатель должен стоять ДО
+  // первого показа: иначе подтверждение, пришедшее между отправкой push
+  // и подпиской ожидания, улетело бы в пустоту, и показ завершился бы
+  // аварийным гашением по таймауту.
+  watchPaintedOnce()
 }
 
 void app.whenReady().then(() => {

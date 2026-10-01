@@ -17,17 +17,27 @@ import {
 } from './pool'
 import { pushPayload, waitPageReady, dropPendingPush, updatePayload } from './pool'
 import type { PoolHooks } from './pool'
-import { boundsFromMeasurement, resolveBounds, surfaceFor } from './geometry'
+import {
+  boundsFromMeasurement,
+  levelOffsetInUnion,
+  resolveBounds,
+  resolveUnionBounds,
+  surfaceFor
+} from './geometry'
 import type { SurfaceSpec } from './geometry'
 import {
   clearSession,
   isCurrentSession,
+  isTopSession,
   nextSessionId,
   parentIdOfOverlay,
+  sessionById,
   sessionOf,
-  setSession
+  setSession,
+  stackDepth,
+  stackOf
 } from './session'
-import type { OverlayModel, PushMessage } from '../../shared/overlay-types'
+import type { OverlayModel, PushMessage, StackEntry } from '../../shared/overlay-types'
 
 // Сервис оверлеев: единственная точка входа для показа, закрытия и
 // разрешения команд поверхности.
@@ -159,7 +169,10 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     // и закрывало активное меню в момент установки bounds.
     if (isContentUnmounted(parent.id)) return
     log('lifecycle', 'parent move/resize/minimize -> close', { parentId: parent.id })
-    closeOverlay(parent)
+    // Весь стек, а не верхний уровень: после перемещения окна невалидна
+    // и вложенная сессия, а оставить её значило бы оставить диалог
+    // висящим над пустым местом.
+    closeStack(parent)
   }
   const closeOnBlur = (): void => {
     if (isSystemDialogOpen) return
@@ -208,9 +221,13 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     // гаснет на 60 мс позже, что в кадре не воспринимается.
     setTimeout(() => {
       if (isSystemDialogOpen) return
-      // Сессия могла закрыться или смениться, пока ждали: blur мог
+      // Сессия могла закрыться или уйти вниз стека, пока ждали: blur мог
       // прийти от другой поверхности, и гасить текущую нельзя.
-      if (!isCurrentSession(parent.id, token)) return
+      // Именно ВЕРХНЯ: isCurrentSession в стеке отвечает на вопрос «есть
+      // ли она вообще», и пропустил бы проверку, когда поверх меню лежит
+      // диалог — тогда blur меню закрыл бы диалог вместо того, чтобы его
+      // игнорировать.
+      if (!isTopSession(parent.id, token)) return
       if (isContentUnmounted(parent.id)) return
       if (overlay.isDestroyed()) return
       // Фокус у нашего окна — значит это не уход из приложения, а
@@ -246,7 +263,8 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     const token = entry.sessionId
     setTimeout(() => {
       if (isSystemDialogOpen) return
-      if (!isCurrentSession(parent.id, token)) return
+      // Верхняя, а не «где угодно в стеке»: см. замечание в closeOnBlur.
+      if (!isTopSession(parent.id, token)) return
       if (isContentUnmounted(parent.id)) return
       if (overlay.isDestroyed()) return
       // Родитель мог уже забрать фокус себе (например, по
@@ -485,7 +503,9 @@ function closeIfFocusLeftApp(
     parentId,
     holderId: holder.id
   })
-  closeOverlay(parent)
+  // Весь стек: приложение ушло в фон, и оставшийся уровень наверху
+  // висел бы поверх чужого окна.
+  closeStack(parent)
   return true
 }
 
@@ -537,17 +557,111 @@ const MENU_ROW_FALLBACK_H = 46
 const MAX_PROVISIONAL_H = 600
 
 /** Что нужно для пересчёта позиции после измерения содержимого. */
-interface PendingGeometry {
+// Описание уровня: прямоугольник в экранных координатах плюс всё, чем
+// он был получен. spec и anchor лежат РЯДОМ с прямоугольником, а не
+// отдельно на весь показ: после возврата по Esc измерение приходит от
+// нижнего уровня (меню), а spec последнего показа принадлежит верхнему
+// (диалогу). Общий spec пересчитывал меню по ширине диалога — в логе это
+// было видно как 'w: 340' у пункта меню, тогда как его ширина 224.
+interface LevelGeometry {
+  // Токен уровня. По нему замер находит свой уровень в стеке: после
+  // возврата по Esc измерение приходит от нижнего (меню), а не от
+  // последнего в списке.
+  sessionId: number
+  rect: Electron.Rectangle
   spec: SurfaceSpec
   anchor: { x: number; y: number }
+  flipped: boolean
+}
+
+interface PendingGeometry {
   parentBounds: Electron.Rectangle
   workArea: Electron.Rectangle
-  flipped: boolean
+  // Границы окна, под которые посчитаны offset'ы уровней. Union НЕ
+  // сжимается при возврате уровня, и это поле хранит прежнее значение:
+  // без него offset'ы прыгали бы вместе с окном, а меню смещалось бы
+  // внутри окна (см. restoreStackAfterPop).
+  union: Electron.Rectangle
+  //
+  // Окно «заморожено» на время укороченного стека. Пока стек короче
+  // последнего полного объединения, размеры окна не пересчитываются по
+  // измерению: иначе замер от ResizeObserver'а оставшегося уровня снова
+  // сжал бы окно до его размеров, и меню снова прыгнуло бы. Именно это
+  // и было единственным оставшимся морганием.
+  //
+  // Снимается при новом полном показе (showOverlay) и при закрытии стека.
+  frozen: boolean
+  // Уровни стека снизу вверх. Каждый со своим spec и anchor: пересчёт по
+  // измерению обязан опираться на описание того уровня, который измерили.
+  levels: LevelGeometry[]
 }
 
 // Родитель -> геометрия последнего показа. Живёт до прихода измерения:
 // без него applyMeasured не знает, что пересчитывать.
 const pendingGeometry = new Map<number, PendingGeometry>()
+
+/**
+ * Собирает PushMessage по стеку сессий и прямоугольникам уровней.
+ *
+ * Общая точка для трёх мест: showOverlay, возврат по Esc
+ * (restoreStackAfterPop) и повторный push после измерения
+ * (pushStackGeometry). Три копии разъедутся при первом изменении формы
+ * StackEntry, а проект уже переживал ровно это с локальной копией
+ * OverlayPayload в renderer.
+ *
+ * Уровни и сессии сопоставляются по индексу: обе структуры наполняются
+ * снизу вверх одним и тем же showOverlay. Токен в прямоугольнике не
+ * хранится, искать по нему бессмысленно.
+ */
+function buildPushMessage(
+  parent: BrowserWindow,
+  levels: LevelGeometry[],
+  union: Electron.Rectangle
+): PushMessage {
+  const entries = stackOf<OverlayRequest>(parent.id)
+  const settings = getSettingsSync()
+  const theme =
+    settings.theme === 'system'
+      ? nativeTheme.shouldUseDarkColors
+        ? 'dark'
+        : 'light'
+      : settings.theme === 'slate' || settings.theme === 'light'
+        ? settings.theme
+        : 'dark'
+  const stack: StackEntry[] = entries.map((entry, ix) => {
+    const rect = levels[ix]?.rect ?? union
+    return {
+      sessionId: entry.sessionId,
+      model: overlayModel(entry.request),
+      // Контракт называет это anchorLeft: 'start' -> прижать к левому
+      // краю якоря. Раньше поле называлось align и ехало в payload URL,
+      // теперь форма задана контрактом.
+      anchorLeft: entry.request.align === 'start',
+      offset: levelOffsetInUnion(rect, union)
+    }
+  })
+  return { stack, theme, animations: settings.animations !== false }
+}
+
+/**
+ * Сообщает renderer новую геометрию уровней без смены сессий.
+ *
+ * Вызывается после измерения содержимого: окно пересобрано по новому
+ * объединению, и сдвиги всех уровней внутри него изменились. Без этого
+ * push renderer рисовал бы по старым координатам, и после сжатия меню
+ * карточка уехала бы за край окна.
+ */
+function pushStackGeometry(
+  parent: BrowserWindow,
+  overlay: BrowserWindow,
+  levels: LevelGeometry[],
+  union: Electron.Rectangle
+): void {
+  if (overlay.isDestroyed()) return
+  const message = buildPushMessage(parent, levels, union)
+  if (message.stack.length === 0) return
+  pushPayload(overlay, message)
+}
 
 /**
  * Пересчитывает bounds по фактическому размеру содержимого.
@@ -567,6 +681,9 @@ export function applyMeasured(
   sessionId: number,
   size: { width: number; height: number }
 ): boolean {
+  // Замер относится к конкретному уровню, и уровень может быть уже не
+  // в стеке: снятая сессия (Esc) успевает дослать измерение от своего
+  // ResizeObserver. Проверка обязательна, и она остаётся.
   if (!isCurrentSession(parent.id, sessionId)) {
     log('geometry', 'STALE, dropped measurement', {
       parentId: parent.id,
@@ -588,13 +705,58 @@ export function applyMeasured(
     return false
   }
 
-  const next = boundsFromMeasurement(
+  //
+  // Шаг 8: измерение приходит для ВЕРХНЕГО уровня, и пересчитывается он
+  // один — через boundsFromMeasurement, как и до стека. Прямоугольник
+  // уровня заменяется на последнем месте в pending.levels: измерение
+  // приходит от того, кто сейчас на экране, а он по определению вершина.
+  //
+  // Union пересобирается из ВСЕХ уровней. Без этого окно осталось бы
+  // прежним, и либо обрезало бы измеренный уровень, либо оставляло бы
+  // пустое поле при сжатии меню.
+  //
+  // Уровень ищется по ТОКЕНУ измерения, а не «последний в стеке».
+  // Измерение может прийти от любого уровня: после возврата по Esc
+  // вершиной стал нижний (меню), и его ResizeObserver прислал замер уже
+  // после снятия верхнего. Взять «последний» значило бы пересчитать не
+  // тот уровень.
+  //
+  // spec и anchor берутся У ЭТОГО ЖЕ уровня. Раньше они лежали на всём
+  // показе, и меню пересчитывалось по spec'у диалога — в логе это было
+  // видно как 'w: 340' у пункта меню при его настоящей ширине 224, и
+  // объединение раздувалось, а меню уезжало вверх.
+  const index = pending.levels.findIndex((l) => l.sessionId === sessionId)
+  const target = index >= 0 ? index : pending.levels.length - 1
+  const level = pending.levels[target]
+  const measured = boundsFromMeasurement(
     pending.parentBounds,
     pending.workArea,
-    pending.anchor,
-    pending.spec,
+    level.anchor,
+    level.spec,
     size
   )
+  const levels = pending.levels.slice()
+  levels[target] = {
+    ...level,
+    rect: { x: measured.x, y: measured.y, width: measured.width, height: measured.height }
+  }
+  //
+  // Окно пересчитывается по объединению уровней — но ТОЛЬКО если стек не
+  // укорочен. После возврата по Esc стек короче, и пересчёт сжал бы окно
+  // до размеров оставшегося меню: в логе это было видно как
+  // 'stack popped, window kept { w: 348 }' и следом
+  // 'bounds from measurement { w: 224 }'. Меню при этом прыгало внутри
+  // окна — это и было последнее моргание.
+  //
+  // Прямоугольник уровня уточняется всегда: он нужен следующему полному
+  // показу, и именно по нему считается union при открытии диалога.
+  const next = pending.frozen
+    ? pending.union
+    : resolveUnionBounds(
+        levels.map((l) => l.rect),
+        pending.workArea
+      )
+  pendingGeometry.set(parent.id, { ...pending, levels, union: next })
   // Меняем только размеры: позиция пересчитана, но если она не изменилась
   // (а обычно не меняется), лишний setBounds не нужен — он вызывает
   // перерисовку поверхности композитором.
@@ -615,6 +777,10 @@ export function applyMeasured(
     now: { x: next.x, y: next.y, w: next.width, h: next.height },
     measured: size
   })
+  // Геометрия уровня изменилась — сообщаем renderer новые сдвиги. Иначе
+  // после сжатия меню до 220 px уровень остался бы на прежнем месте,
+  // то есть за краем нового окна.
+  pushStackGeometry(parent, overlay, levels, next)
   return true
 }
 
@@ -663,8 +829,32 @@ function overlayModel(request: OverlayRequest): OverlayModel {
  * непрозрачным без содержимого — тихо и без ошибок в логах. Теперь
  * вызывающий код по false отменяет показ.
  */
+// Постоянный учёт подтверждений отрисовки.
+//
+// overlayPainted подписывается на painted ПОСЛЕ того, как push уже ушёл в
+// renderer. Между отправкой и подпиской подтверждение может прийти — и
+// улететь в пустоту, после чего main ждёт до таймаута и аварийно гасит
+// окно. На прогоне это дало 15 абортов подряд.
+//
+// Слушатель стоит всегда и просто запоминает токены. Ожидание по
+// конкретному токену по-прежнему ведёт overlayPainted.
+export function watchPaintedOnce(): void {
+  if (watchPaintedOnce.done) return
+  watchPaintedOnce.done = true
+  ipcMain.on(PAINTED_CHANNEL, (_e: Electron.IpcMainEvent, t: number): void => {
+    paintedSeen.add(t)
+  })
+}
+watchPaintedOnce.done = false
+
+// Токены, для которых painted уже пришёл ДО подписки.
+const paintedSeen = new Set<number>()
+
 function overlayPainted(overlay: BrowserWindow, token: number): Promise<boolean> {
   if (overlay.isDestroyed()) return Promise.resolve(false)
+  // Подтверждение могло прийти раньше: до этой функции слушателя не
+  // было, и painted улетал в пустоту. Смотрим на факт получения.
+  if (paintedSeen.delete(token)) return Promise.resolve(true)
   return new Promise<boolean>((resolve) => {
     let settled = false
     const finish = (ok: boolean): void => {
@@ -717,10 +907,12 @@ function abortPresent(win: BrowserWindow, parent: BrowserWindow, sessionToken: n
   } catch (err) {
     logError('failed to abort overlay', err)
   }
-  // Снимаем сессию, только если она всё ещё наша: за время ожидания
-  // мог открыться другой оверлей, и его трогать нельзя.
-  const entry = sessionOf<OverlayRequest>(parent.id)
-  if (entry && isCurrentSession(parent.id, sessionToken)) clearSession(parent.id)
+  // Снимаем ТОЛЬКО свою сессию, по её токену. clearSession без токена
+  // снимает весь стек: если пока ждали подтверждения поверх открылся
+  // вложенный уровень, он был бы снесён вместе с нашим. Раньше стека не
+  // было и полное снятие было единственным вариантом.
+  const entry = sessionById<OverlayRequest>(parent.id, sessionToken)
+  if (entry) clearSession(parent.id, sessionToken)
   log('lifecycle', 'overlay aborted, nothing shown', { parentId: parent.id, sessionId: sessionToken })
 }
 
@@ -789,10 +981,147 @@ function restoreFocusToParent(
   }
 }
 
+/**
+ * Возврат к нижнему уровню стека после Esc.
+ *
+ * Esc снимает верхний уровень (см. closeOverlay), но окно остаётся на
+ * экране: под диалогом лежит меню, и оно должно выглядеть как до
+ * открытия диалога.
+ *
+ * Что здесь происходит, по порядку:
+ *
+ * 1. Геометрия пересчитывается по ОСТАВШИМСЯ уровням. Окно было объединением
+ *    меню и диалога; снятие диалога оставляет окно вдвое больше нужного.
+ *    Новое объединение — снова по прямоугольникам оставшихся уровней.
+ *
+ * 2. В renderer уходит push укороченного стека. Renderer не знает, что
+ *    уровень снят, — без сообщения он продолжил бы рисовать диалог.
+ *
+ * 3. Ничего не гасится: прозрачность, размонтирование и возврат фокуса
+ *    здесь были бы лишними. Окно мигало бы, а фокус ушёл бы на родителя
+ *    вместо меню.
+ *
+ * Токен снятой сессии обязателен: из пула приходит сообщение для всех
+ * уровней, и без сверки укороченный стек применился бы к уже закрытой
+ * сессии.
+ */
+function restoreStackAfterPop(parent: BrowserWindow, poppedSessionId: number): void {
+  const overlay = getPooledOverlay(parent.id)
+  if (!overlay) return
+  const remaining = stackOf<OverlayRequest>(parent.id)
+  if (remaining.length === 0) return
+
+  const pending = pendingGeometry.get(parent.id)
+  if (!pending) return
+  // Уровень снятой сессии ищется по ТОКЕНУ. Срез по длине стека
+  // оставлял бы в геометрии уровень, которого в стеке уже нет, и union
+  // после возврата считался бы по снятой карточке.
+  const index = pending.levels.findIndex((l) => l.sessionId === poppedSessionId)
+  if (index < 0) return
+  const levels = pending.levels.filter((_, ix) => ix !== index)
+  if (levels.length === 0) return
+  // Геометрия ОСТАВШЕГОСЯ уровня могла устареть: пока лежал диалог, его
+  // измерение пересчитало union и записало сюда прямоугольник меню заново.
+  // Этот прямоугольник — актуальный, трогать его нельзя.
+
+  //
+  // РАЗМЕР ОКНА ПРИ ВОЗВРАТЕ НЕ МЕНЯЕТСЯ — и это главное решение шага.
+  //
+  // Первый вариант считал union заново по оставшимся уровням, и окно
+  // сжималось с прямоугольника «меню + диалог» до прямоугольника меню.
+  // Меню при этом не двигалось — ДВИГАЛСЯ ЕГО СДВИГ ВНУТРИ ОКНА, на 73 px
+  // влево. Это и было моргание:
+  //
+  //   union after pop  was: { x: 270, y: 104, w: 348, h: 312 }
+  //                    now: { x: 343, y: 108, w: 224, h: 304 }
+  //
+  // Меню прыгало внутри окна, а не двигалось по экрану. Счёт setBounds
+  // был ровно один — моргание давал не он, а смена сдвига уровня.
+  //
+  // Теперь окно и сдвиги не трогаются: меню стоит там же, где стояло.
+  // При следующем открытии диалога union считается заново по тем же
+  // уровням и даёт ПРЕЖНЕЕ значение, поэтому прыжка не будет и там.
+  //
+  //
+  // ПОРЯДОК КРИТИЧЕН: сначала push, потом setBounds.
+  //
+  // Обратный порядок (сначала двигаем окно, потом сообщаем renderer) давал
+  // моргание: окно сжималось под двухуровневым стеком, а renderer ещё
+  // рисовал в нём диалог. Секунду карточка вылезала за границу окна —
+  // это и было видно как «меню иконки моргает».
+  //
+  // Теперь renderer узнаёт об укорочении стека ДО того, как окно
+  // изменит размер, и к моменту сжатия на экране остаётся только меню.
+  //
+  // Анимации при возврате не трогаем: настройка одна на приложение, и
+  // гасить её в push значило бы рисковать залипанием no-anim, если
+  // следующее сообщение не дойдёт. Подавление на один кадр делает
+  // renderer (см. suppressAnimationsForFrame).
+  //
+  // Заморозка окна. Стек укорочен, и пересчитывать окно по нему нельзя:
+  // единственный оставшийся уровень (меню) задал бы окну свои размеры,
+  // и меню снова прыгнуло бы внутри него.
+  //
+  // Снимается при следующем полном показе (showOverlay) и при закрытии
+  // стека (closeStack удаляет pendingGeometry).
+  pendingGeometry.set(parent.id, { ...pending, levels, frozen: true })
+  const union = pending.union
+  pushPayload(overlay, buildPushMessage(parent, levels, union))
+  log('session', 'stack popped, window kept', {
+    parentId: parent.id,
+    popped: poppedSessionId,
+    depth: remaining.length,
+    union: { x: union.x, y: union.y, w: union.width, h: union.height }
+  })
+  //
+  // Фокус: win.focus() ниже ставит фокус на ОКНО, а обработчик keydown
+  // висит на элементе списка внутри renderer. Меню после возврата — новая
+  // компонентная копия, и оно пересоздаётся, поэтому нативного
+  // autofocus у него нет: фокус надо поставить после кадра, в котором
+  // элемент появится.
+  //
+  // Раньше фокус просто не возвращался, и навигация умирала: меню было
+  // кликабельно, но стрелки не двигали подсветку.
+  // Окно возвращаем в фокус: без focus() клавиатура в него не попадёт,
+  // потому что открыто оно через showInactive(). Фокус на ЭЛЕМЕНТ внутри
+  // ставит renderer — здесь вершина уже смонтирована, и одной копии
+  // логики достаточно.
+  try {
+    overlay.focus()
+  } catch (err) {
+    logError('overlay focus failed after stack pop', err)
+  }
+  //
+  // Фокус возвращаем на ОКНО, а не на родителя. Пользователь снял диалог
+  // и вернулся к меню — уводить клавиатуру из него означало бы, что
+  // стрелки не работают, пока он снова не кликнет.
+  //
+  // DOM-фокус при этом уехал вместе со снятым уровнем (диалог), и
+  // renderer ставит его заново сам: MenuList фокусирует себя в
+  // onMounted, а контент верхнего уровня пересоздаётся при укорочении
+  // стека.
+  try {
+    overlay.focus()
+  } catch (err) {
+    logError('overlay focus failed after stack pop', err)
+  }
+  log('session', 'returned to lower level', {
+    parentId: parent.id,
+    popped: poppedSessionId,
+    depth: remaining.length,
+    kind: remaining[remaining.length - 1].request.kind
+  })
+}
+
 export function closeOverlay(parent: BrowserWindow): void {
   const entry = sessionOf<OverlayRequest>(parent.id)
   if (!entry) return
-  log('session', 'closing', { parentId: parent.id, kind: entry.request.kind })
+  const depth = stackDepth(parent.id)
+  log('session', 'closing', {
+    parentId: parent.id,
+    kind: entry.request.kind,
+    depth
+  })
   // Запоминаем закрытое меню с его триггером: следующий вызов showOverlay
   // с тем же ключом в пределах TOGGLE_ECHO_MS — это эхо открывающего клика,
   // а не намерение открыть заново (см. ветку toggle в showOverlay).
@@ -802,7 +1131,22 @@ export function closeOverlay(parent: BrowserWindow): void {
       at: Date.now()
     })
   }
-  clearSession(parent.id)
+  // Шаг 8: снимаем только ВЕРХНИЙ уровень. Пока в стеке есть что лежать
+  // под ним, окно остаётся на экране, а пользователь возвращается к
+  // нижнему уровню — это и есть «Esc возвращает к меню».
+  //
+  // Гасить окно целиком при непустом стеке нельзя: под диалогом лежит
+  // меню, и закрытие верхнего уровня погасило бы и его.
+  const isTopOnly = depth <= 1
+  clearSession(parent.id, isTopOnly ? undefined : entry.sessionId)
+  if (!isTopOnly) {
+    // Возврат к нижнему уровню: окно уже на месте и показывает стек
+    // целиком, поэтому достаточно убрать верхний уровень из push и
+    // дождаться кадра. Подсветку и фокус не трогаем — фокус на окне уже
+    // стоит, и переводить его на родителя пользователь не просил.
+    restoreStackAfterPop(parent, entry.sessionId)
+    return
+  }
   try {
     // Тот же случай, что и в abortPresent: сессию закрыли, пока страница
     // ещё грузилась, и payload лежит в буфере. Без сброса он применится
@@ -875,10 +1219,74 @@ export function closeOverlayOnTabChange(parent: BrowserWindow, tabId: number): v
     kind: entry.request.kind,
     tabId
   })
-  closeOverlay(parent)
+  // Весь стек: комментарий функции прямо говорит, что оставшаяся сессия
+  // бессмысленна при любом виде, а closeOverlay снял бы только верх.
+  closeStack(parent)
+}
+
+/**
+ * Закрывает ВЕСЬ стек сессий родителя.
+ *
+ * closeOverlay снимает верхний уровень — это нужно для Esc и Cancel.
+ * Но есть случаи, когда стек должен уйти целиком:
+ *
+ *   - клик по shell при открытом меню (closeOverlayIfMenu): клик должен
+ *     убирать меню, а не лежащий поверх диалог;
+ *   - смена активной вкладки, перемещение и сворачивание окна, уход из
+ *     приложения: оставшаяся сессия бессмысленна при любом виде.
+ *
+ * Без отдельной функции каждый такой случай вызывал бы closeOverlay в
+ * цикле по глубине, и при глубине 1 тот же цикл вёл себя иначе, чем при
+ * глубине 2 — расхождение проявилось бы только на вложенных диалогах.
+ */
+export function closeStack(parent: BrowserWindow): void {
+  const depth = stackDepth(parent.id)
+  if (depth === 0) return
+  if (depth === 1) {
+    closeOverlay(parent)
+    return
+  }
+  log('session', 'closing whole stack', { parentId: parent.id, depth })
+  // Меню в корне запоминаем с его триггером — тот же смысл, что и при
+  // закрытии верхнего уровня: следующий клик по тому же триггеру должен
+  // распознаться как эхо, а не открыть меню заново.
+  const root = stackOf<OverlayRequest>(parent.id)[0]
+  if (root.request.kind === 'menu') {
+    lastClosed.set(parent.id, {
+      toggleKey: root.request.toggleKey,
+      at: Date.now()
+    })
+  }
+  const overlay = getPooledOverlay(parent.id)
+  // pendingGeometry снимаем ДО сессий: иначе восстановление после снятия
+  // сессии найдёт геометрию уже несуществующего стека.
+  // Стек снят целиком: заморозка и геометрия больше не нужны, и
+  // следующий показ посчитает окно заново с нуля.
+  pendingGeometry.delete(parent.id)
+  for (const entry of stackOf<OverlayRequest>(parent.id)) {
+    dropPendingPush(entry.overlay, entry.sessionId)
+  }
+  clearSession(parent.id)
+  if (!overlay) return
+  try {
+    if (!overlay.isDestroyed()) {
+      hideContent(overlay, parent.id)
+      noteFocusHandoff(parent.id)
+      restoreFocusToParent(overlay, parent, Date.now())
+    }
+  } catch {
+    // Уже закрыто — игнорим.
+  }
 }
 
 export function closeOverlayIfMenu(parent: BrowserWindow): void {
+  // Меню — КОРЕНЬ стека: клик по shell должен убирать его целиком, а не
+  // верхний уровень. Без этой проверки клик по панели при открытом
+  // «Change icon» закрыл бы диалог и оставил меню — ровно наоборот.
+  if (stackDepth(parent.id) > 1) {
+    closeStack(parent)
+    return
+  }
   const entry = sessionOf<OverlayRequest>(parent.id)
   if (!entry) return
   if (entry.request.kind !== 'menu') return
@@ -891,7 +1299,8 @@ export function closeOverlayIfMenu(parent: BrowserWindow): void {
     return
   }
   log('session', 'closing on shell click', { parentId: parent.id, ageMs: age })
-  closeOverlay(parent)
+  // Весь стек: клик по shell убирает меню, а не лежащий поверх диалог.
+  closeStack(parent)
 }
 
 // Активный оверлей родителя (для проброса found-in-page в панель поиска).
@@ -1038,6 +1447,53 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     contentBounds: parentBounds
   })
 
+  //
+  // ВЛОЖЕННОСТЬ ОТКЛЮЧЕНА ПО РЕШЕНИЮ ПОЛЬЗОВАТЕЛЯ.
+  //
+  // Шаг 8 строил стек уровней, и «Change icon» из меню вкладки открывал
+  // диалог ПОВЕРХ меню, оставляя меню видимым под ним. Проверка на
+  // живом прогоне показала, что это не целевое поведение: у пользователя
+  // это выглядит как два наложенных окна, а не как переход «меню ->
+  // диалог».
+  //
+  // Механика стека оставлена в коде целиком: session.ts, union,
+  // LevelGeometry, frozen, реестр уровней в renderer. Она стоит
+  // включённой одной строкой (isNested), и включение её обратно — одна
+  // правка, а не восстановление с нуля.
+  //
+  // Что при этом работает:
+  //   - меню иконки ВЫТЕСНЯЕТ меню вкладки, как до шага 8;
+  //   - стек глубиной 1 — это ровно прежнее поведение, а все проверки
+  //     по токену, геометрии уровней и фокусу работают как надо.
+  //
+  // Что пришлось чинить, пока механику включали, и что нужно помнить при
+  // возврате к вложенности:
+  //   - обратная карта «окно оверлея -> родитель» общая для всех уровней,
+  //     и снимать её можно только при пустом стеке (session.ts);
+  //   - isTopSession, а не isCurrentSession, в resolveOverlaySelect и в
+  //     blur-обработчиках;
+  //   - spec и anchor лежат на КАЖДОМ уровне, а не на показе;
+  //   - сверка устаревших push сравнивает стеки, а не верхние токены.
+  const existing = stackOf<OverlayRequest>(parent.id)
+  //
+  // Рубрильник вложенности. Возвращается к true вместе с описанием
+  // уровня в requests: условие восстанавливает стек ровно в том виде, в
+  // каком он был до отката.
+  const NESTED_DIALOGS = false
+  const isNested =
+    NESTED_DIALOGS &&
+    existing.length > 0 &&
+    existing[existing.length - 1].request.kind === 'menu' &&
+    (request.kind === 'icon' || request.kind === 'dialog')
+  if (!isNested) {
+    // Новый корень: старый стек снимаем целиком. closeOverlay здесь не
+    // годится — он гасит окно, а нам нужно показать новое содержимое
+    // поверх старого, иначе между setContentUnmounted и отрисовкой
+    // пользователь увидит пустое окно.
+    for (const old of existing) dropPendingPush(old.overlay, old.sessionId)
+    clearSession(parent.id)
+  }
+
   const resolved = resolveBounds(
     parentBounds,
     workArea,
@@ -1046,17 +1502,47 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     provisional,
     false
   )
-  const { x, y, width, height } = resolved
+  //
+  // Прямоугольник этого уровня в экранных координатах.
+  const level: Electron.Rectangle = {
+    x: resolved.x,
+    y: resolved.y,
+    width: resolved.width,
+    height: resolved.height
+  }
+  //
+  // Уровни, уже лежащие в стеке, и новый — окно должно покрывать их все
+  // (вариант B шага 8). Прямоугольники нижних уровней берём из прошлой
+  // геометрии: pendingGeometry хранит их именно для этого.
+  const carried: LevelGeometry[] = []
+  if (isNested) {
+    const prev = pendingGeometry.get(parent.id)
+    if (prev) carried.push(...prev.levels)
+  }
+  const { x, y, width, height } = resolveUnionBounds(
+    [...carried.map((l) => l.rect), level],
+    workArea
+  )
 
-  // Геометрия запоминается для последующей коррекции по измерению:
-  // applyMeasured нужен якорь, границы родителя и описание поверхности,
-  // иначе он повторил бы позицию первого кадра вместо пересчёта.
+  // Геометрия запоминается для последующей коррекции по измерению.
+  // Описание поверхности и якорь лежат на КАЖДОМ уровне, а не на показе:
+  // после возврата по Esc замер приходит от нижнего уровня, и общий spec
+  // пересчитывал меню по ширине диалога.
   pendingGeometry.set(parent.id, {
-    spec,
-    anchor: request.anchor,
     parentBounds,
     workArea,
-    flipped: resolved.flipped
+    // Union последнего показа. При возврате уровня он НЕ пересчитывается
+    // (см. restoreStackAfterPop), и offset'ы остаются в тех же границах.
+    union: { x, y, width, height },
+    // Полный показ: окно снова считается по всем уровням.
+    frozen: false,
+    levels: [
+      ...carried,
+      // Токен проставляется сразу после nextSessionId() ниже: на этом
+      // месте сессия ещё не создана. Пока он 0, уровень не найдётся по
+      // токену — но и не должен: возврата до конца показа не бывает.
+      { sessionId: 0, rect: level, spec, anchor: request.anchor, flipped: resolved.flipped }
+    ]
   })
 
 
@@ -1110,6 +1596,24 @@ if (!overlay || overlay.isDestroyed()) {
   // Токен сессии — до active.set: по нему resolveOverlaySelect отличает
   // свою сессию от новой, открытой из onSelect.
   const sessionToken = nextSessionId()
+  // Токен последнего уровня проставляется здесь: в pendingGeometry он
+  // был записан с заглушкой, потому что на том месте сессии ещё не было.
+  // Без этого возврат по Esc не нашёл бы снятый уровень по токену.
+  {
+    const geo = pendingGeometry.get(parent.id)
+    if (geo && geo.levels.length > 0) {
+      const last = geo.levels[geo.levels.length - 1]
+      if (last.sessionId === 0) {
+        geo.levels[geo.levels.length - 1] = { ...last, sessionId: sessionToken }
+      }
+    }
+  }
+  // Подтверждения отрисовки для прошлых показов больше не нужны: к этому
+  // моменту они либо приняты, либо сессии давно нет. Без чистки множество
+  // росло всю жизнь процесса.
+  for (const seen of paintedSeen) {
+    if (seen < sessionToken) paintedSeen.delete(seen)
+  }
   setSession(parent.id, { overlay, request, sessionId: sessionToken, openedAt: Date.now() })
   // Показ окна. Страница уже загружена (пул сделал это при создании
   // окна), навигации нет — ждать остаётся только отрисовку.
@@ -1167,16 +1671,13 @@ if (!overlay || overlay.isDestroyed()) {
     // в очередь pendingPush и уйдёт при did-finish-load. Обратный порядок
     // был бессмысленным: waitPageReady выставляет pageReady = true, и
     // буферизация становилась недостижимой.
-    const message: PushMessage = {
-      sessionId: sessionToken,
-      model: overlayModel(request),
-      theme,
-      animations,
-      // Контракт называет это anchorLeft: 'start' -> прижать к левому
-      // краю якоря. Раньше поле называлось align и ехало в payload URL,
-      // теперь форма задана контрактом.
-      anchorLeft: request.align === 'start'
-    }
+    // Шаг 8: шлём весь стек, а не только верхний уровень. При одном
+    // уровне его offset равен нулю — поведение не отличается от прежнего.
+    const message = buildPushMessage(
+      parent,
+      pendingGeometry.get(parent.id)?.levels ?? [],
+      { x, y, width, height }
+    )
     pushPayload(win, message)
     mark('ov:nav')
     // Ожидаем, что сообщение применится и renderer подтвердит отрисовку.
@@ -1280,8 +1781,14 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
     // из пула у всех сессий одно и то же, сравнение всегда истинно,
     // и проверка не срабатывала НИКОГДА. Из-за этого диалог иконки
     // открывался только со второго раза.
-    const stillSame = isCurrentSession(parentId, entry.sessionId)
-    if (!stillSame) {
+    // Именно ВЕРХНЯ ЛИ СЕССИЯ. isCurrentSession тут не годится: в стеке
+    // он отвечает на вопрос «есть ли сессия в стеке вообще», а нужен
+    // другой — «не открыла ли onSelect новую сессию поверх меня». После
+    // шага 8 проверка на isCurrentSession давала «та же самая», и
+    // closeOverlay закрывал только что открытый диалог вместо того, чтобы
+    // его оставить.
+    const stillTop = isTopSession(parentId, entry.sessionId)
+    if (!stillTop) {
         // onSelect открыл новую сессию поверх текущей (меню -> диалог
         // иконки). active уже указывает на неё, и её закрывать нельзя:
         // диалог жил бы ноль времени — открылся и тут же исчез, что и
@@ -1318,6 +1825,10 @@ export function resolveOverlayDismiss(overlay: BrowserWindow): void {
   const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return
   const parent = BrowserWindow.fromId(parentId)
+  // closeOverlay, а не closeStack: клик по подложке и Esc означают одно и
+  // то же — «снять верхний уровень». Снимать весь стек было бы
+  // неожиданностью: подложка диалога не должна убирать лежащее под ним
+  // меню.
   if (parent) closeOverlay(parent)
   else {
     clearSession(parentId)
