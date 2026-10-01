@@ -3,19 +3,24 @@ import { onMounted } from 'vue'
 
 // Стек уведомлений: тосты поверх сайта в том же оверлей-окне.
 // Автозакрытие по timeout, клик — dismiss.
+//
+// sessionId — токен сессии для команд. Нужен и здесь: таймер автозакрытия
+// может сработать уже после смены сессии, и без токена он закрыл бы новый
+// оверлей вместо своего.
 const props = defineProps<{
   toast: { title: string; body?: string; timeout?: number }
+  sessionId?: number
 }>()
 
 onMounted(() => {
   const ms = props.toast.timeout ?? 4000
   if (ms > 0) {
-    window.setTimeout(() => void window.overlayAPI.dismiss(), ms)
+    window.setTimeout(() => void window.overlayAPI.dismiss(props.sessionId), ms)
   }
 })
 
 async function close() {
-  await window.overlayAPI.dismiss()
+  await window.overlayAPI.dismiss(props.sessionId)
 }
 </script>
 

@@ -67,6 +67,7 @@ import {
   showOverlay,
   closeOverlay,
   closeOverlayIfMenu,
+  closeOverlayOnTabChange,
   getActiveOverlay,
   type OverlayMenuItem
 } from './overlayManager'
@@ -110,6 +111,18 @@ function createTab(ws: WindowState, url = START_URL): number {
 }
 
 function setActiveTab(ws: WindowState, id: number): void {
+  // Активный оверлей принадлежит ПРЕЖНЕЙ вкладке: его пункты (контекстное
+  // меню вкладки, диалог иконки, панель поиска) рассчитаны на неё.
+  // Раньше смена вкладки про оверлей ничего не знала, и меню висело уже
+  // над другой страницей.
+  //
+  // Порядок: сначала закрыть, потом переключать. Обратный порядок отдавал
+  // бы фокус не той вкладке: closeOverlay возвращает фокус ОКНУ (это его
+  // работа после панели поиска и автофокуса поля), а setActiveTabRaw сразу
+  // после этого отдаёт фокус VIEW новой вкладки — то есть последним
+  // решением остаётся правильный. Наоборот, view не смог бы забрать
+  // фокус: после closeOverlay он был бы перебит window.focus().
+  if (ws.window) closeOverlayOnTabChange(ws.window, id)
   setActiveTabRaw(ws, tabsDeps, id)
 }
 

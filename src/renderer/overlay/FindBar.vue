@@ -9,9 +9,13 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 // из main. Раньше main слал executeJavaScript с querySelector по .find-count,
 // и значение не жило в состоянии: пересоздание компонента его теряло, а
 // разметка с данными расходились при переименовании класса.
+// sessionId приходит от корня: команды find:* несут токен сессии,
+// и без него main не может отличить ввод из текущей панели от
+// запоздалого ввода из предыдущей (окно оверлея у всех сессий одно).
 const props = defineProps<{
   initial?: string
   counter?: string
+  sessionId?: number
 }>()
 
 const query = ref(props.initial ?? '')
@@ -27,7 +31,7 @@ function send() {
     matchCase: matchCase.value,
     wholeWord: wholeWord.value,
     useRegex: useRegex.value
-  })
+  }, props.sessionId)
 }
 
 function sendDebounced() {
@@ -36,15 +40,15 @@ function sendDebounced() {
 }
 
 function next() {
-  void window.overlayAPI.findNext()
+  void window.overlayAPI.findNext(props.sessionId)
 }
 
 function prev() {
-  void window.overlayAPI.findPrev()
+  void window.overlayAPI.findPrev(props.sessionId)
 }
 
 async function close() {
-  await window.overlayAPI.findClose()
+  await window.overlayAPI.findClose(props.sessionId)
 }
 
 function onKey(e: KeyboardEvent) {

@@ -13,6 +13,7 @@ export {
   showOverlay,
   closeOverlay,
   closeOverlayIfMenu,
+  closeOverlayOnTabChange,
   getActiveOverlay,
   getActiveRequest,
   getParentOfOverlay,

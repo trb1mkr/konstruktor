@@ -181,7 +181,24 @@ onMounted(() => {
   // Ошибку в payload показываем только если main прислал пустую модель.
   // Отсутствие сессии на старте — норма (окно прогрето и ждёт), ошибкой
   // это не считается.
+  // Тело обработчика вынесено в функцию, а не осталось в анонимной
+  // стрелке: отладочная инъекция ниже вызывает его РЕКУРСИВНО, чтобы
+  // сыграть роль запоздавшего сообщения из прошлой сессии.
   window.overlayAPI?.onPush?.((msg: OverlayPayload) => {
+    // Запоздалый push от устаревшей сессии игнорируем. Окно из пула
+    // одно, и main шлёт данные прямо в него: если сессия успела смениться
+    // между отправкой и доставкой, на экране оказались бы пункты
+    // предыдущего меню. Токен приходит в каждом push, поэтому сверка
+    // точная.
+    const current = payload.value
+    if (current && current.sessionId > msg.sessionId) {
+      window.overlayAPI?.trace(
+        `STALE, dropped push: got ${msg.sessionId}, current ${current.sessionId}`
+      )
+      return
+    }
+
+
     applyPayload(msg)
     traceAnimations(`push sessionId=${msg.sessionId}`)
   })
@@ -206,7 +223,7 @@ onMounted(() => {
     // текуном.
     if (current.sessionId !== msg.sessionId) {
       window.overlayAPI?.trace(
-        `STALE update dropped: got ${msg.sessionId}, current ${current.sessionId}`
+        `STALE, dropped update: got ${msg.sessionId}, current ${current.sessionId}`
       )
       return
     }
@@ -217,16 +234,28 @@ onMounted(() => {
   })
 })
 
+// Токен сессии, для которой отправляется команда.
+//
+// Именно ТЕКУЩИЙ, а не тот, что пришёл с последним push: между кликом и
+// ответом сессия могла смениться, и команда с новым токеном была бы
+// отвергнута как запоздалая. С другой стороны, и со старым токеном команда
+// бессмысленна — она относится к содержимому, которого на экране уже
+// нет. Поэтому шлём текущий и полагаемся на main: он отсечёт команду, если
+// её сессия уже не активна.
+function currentSessionId(): number | undefined {
+  return payload.value?.sessionId
+}
+
 async function onBackdrop(e: MouseEvent) {
-  if (e.target === e.currentTarget) await window.overlayAPI.dismiss()
+  if (e.target === e.currentTarget) await window.overlayAPI.dismiss(currentSessionId())
 }
 
 async function onSelect(id: string) {
-  await window.overlayAPI.select(id)
+  await window.overlayAPI.select(id, currentSessionId())
 }
 
 async function onSubmit(value: string) {
-  await window.overlayAPI.submit(value)
+  await window.overlayAPI.submit(value, currentSessionId())
 }
 </script>
 
@@ -251,20 +280,24 @@ async function onSubmit(value: string) {
       <ToastStack
         v-else-if="payload?.model.view === 'toast' && payload.model.toast"
         :toast="payload.model.toast"
+        :session-id="payload.sessionId"
       />
       <PromptDialog
         v-else-if="payload?.model.view === 'dialog' && payload.model.dialog"
         :dialog="payload.model.dialog"
+        :session-id="payload.sessionId"
         @submit="onSubmit"
       />
       <IconDialog
         v-else-if="payload?.model.view === 'icon' && payload.model.icon"
         :icon="payload.model.icon"
+        :session-id="payload.sessionId"
       />
       <FindBar
         v-else-if="payload?.model.view === 'find'"
         :initial="payload.model.find?.query ?? ''"
         :counter="payload.model.find?.counter ?? ''"
+        :session-id="payload.sessionId"
       />
     </template>
   </div>

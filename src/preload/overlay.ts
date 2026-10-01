@@ -39,8 +39,12 @@ const overlayAPI = {
     return () => ipcRenderer.removeListener(OVERLAY_UPDATE_CHANNEL, listener)
   },
 
-  // Действие пользователя одним объектом. Тип — OverlayCommand,
-  // sessionId проставляет renderer (актуальная сессия).
+  // Действие пользователя одним объектом. Тип — OverlayCommand.
+  //
+  // sessionId в команде НЕ подставляется автоматически: его знает
+  // renderer (он держит текущую сессию), а не preload. Подстановка здесь
+  // означала бы, что подтверждать нечего — всегда «текущая», и защита
+  // от запоздалых команд исчезала бы именно там, где нужна.
   send: (command: OverlayCommand): Promise<boolean> =>
     ipcRenderer.invoke(OVERLAY_CHANNELS.command, command),
 
@@ -55,24 +59,31 @@ const overlayAPI = {
   /**
    * @deprecated Используйте `send({ type: 'select', id })`.
    * Вызовы не трогаем до шага 10 — они работают как раньше.
+   *
+   * sessionId — токен сессии, по которому main отсекает запоздалые
+   * команды. Не передавать его можно только до шага 10: тогда main
+   * сверяет токен лишь когда он есть, и защита дырами.
    */
-  select: (id: string): Promise<boolean> => ipcRenderer.invoke('overlay:select', id),
+  select: (id: string, sessionId?: number): Promise<boolean> =>
+    ipcRenderer.invoke('overlay:select', id, sessionId),
   /**
    * @deprecated Используйте `send({ type: 'dismiss' })`.
    */
-  dismiss: (): Promise<boolean> => ipcRenderer.invoke('overlay:dismiss'),
+  dismiss: (sessionId?: number): Promise<boolean> =>
+    ipcRenderer.invoke('overlay:dismiss', sessionId),
   /**
    * @deprecated Используйте `send({ type: 'submit', value })`.
    * Диалог с полем ввода: значение уходит через overlay:submit.
    */
-  submit: (value: string): Promise<boolean> => ipcRenderer.invoke('overlay:submit', value),
+  submit: (value: string, sessionId?: number): Promise<boolean> =>
+    ipcRenderer.invoke('overlay:submit', value, sessionId),
   /**
    * @deprecated Используйте `send({ type: 'submit-icon', buttonId, value })`.
    * Общий диалог иконки. false = main отклонил источник (ошибка
    * верификации), диалог не закрывается.
    */
-  submitIcon: (buttonId: string, value: string): Promise<boolean> =>
-    ipcRenderer.invoke('overlay:submit-icon', buttonId, value),
+  submitIcon: (buttonId: string, value: string, sessionId?: number): Promise<boolean> =>
+    ipcRenderer.invoke('overlay:submit-icon', buttonId, value, sessionId),
   /**
    * @deprecated Используйте `send({ type: 'find-query', opts })`.
    * Поиск по странице: запрос, навигация и закрытие панели.
@@ -82,19 +93,22 @@ const overlayAPI = {
     matchCase: boolean
     wholeWord: boolean
     useRegex: boolean
-  }): Promise<boolean> => ipcRenderer.invoke('find:query', opts),
+  }, sessionId?: number): Promise<boolean> => ipcRenderer.invoke('find:query', opts, sessionId),
   /**
    * @deprecated Используйте `send({ type: 'find-next' })`.
    */
-  findNext: (): Promise<boolean> => ipcRenderer.invoke('find:next'),
+  findNext: (sessionId?: number): Promise<boolean> =>
+    ipcRenderer.invoke('find:next', sessionId),
   /**
    * @deprecated Используйте `send({ type: 'find-prev' })`.
    */
-  findPrev: (): Promise<boolean> => ipcRenderer.invoke('find:prev'),
+  findPrev: (sessionId?: number): Promise<boolean> =>
+    ipcRenderer.invoke('find:prev', sessionId),
   /**
    * @deprecated Используйте `send({ type: 'find-close' })`.
    */
-  findClose: (): Promise<boolean> => ipcRenderer.invoke('find:close'),
+  findClose: (sessionId?: number): Promise<boolean> =>
+    ipcRenderer.invoke('find:close', sessionId),
   /**
    * Временный канал диагностики (шаг 1 рефакторинга): renderer сообщает
    * main о своих наблюдениях — какая анимация играет, какие классы на

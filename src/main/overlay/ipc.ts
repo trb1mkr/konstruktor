@@ -34,6 +34,7 @@ import {
 } from './service'
 import { getStateBySender } from '../browserState'
 import { openFindOverlay, queryFind, nextFind, prevFind, closeFind } from '../findManager'
+import { isCommandCurrent } from './session'
 
 /**
  * Окно оверлея по sender'у, либо undefined, если sender — не оверлей.
@@ -48,32 +49,64 @@ function overlayOf(e: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): Brow
   return BrowserWindow.fromWebContents(e.sender) ?? undefined
 }
 
+/**
+ * Принимает ли main команду от этого окна.
+ *
+ * Окно оверлея переиспользуется из пула, поэтому команда, отправленная
+ * для ПРОШЛОЙ сессии, вполне может прийти, когда активна следующая:
+ * renderer отправил click, сессия сменилась, click долетел. Без сверки
+ * токена команда исполнилась бы против нового содержимого — например,
+ * клик по пункту старого меню закрыл бы новое.
+ *
+ * Токен опционален только до шага 10: устаревшие вызовы из внешнего кода
+ * его не передают, и без него проверять нечего. Когда приходит сессия с
+ * токеном — сверка обязательна.
+ */
+function accept(e: Electron.IpcMainInvokeEvent, overlay: BrowserWindow, sessionId?: number): boolean {
+  if (sessionId === undefined) return true
+  return isCommandCurrent(overlay, sessionId)
+}
+
 export function registerOverlayIpc(): void {
   // Выбор пункта меню. Значение true в ответе — сигнал renderer'у, что
   // команда принята; сам оверлей к этому моменту уже может быть закрыт.
-  ipcMain.handle('overlay:select', (e, id: string) => {
+  //
+  // false означает, что команда от устаревшей сессии и НЕ исполнена:
+  // renderer должен трактовать это как «меню уже не то» и не закрывать
+  // себя по локальной логике.
+  ipcMain.handle('overlay:select', (e, id: string, sessionId?: number) => {
     const overlay = overlayOf(e)
-    if (overlay) resolveOverlaySelect(overlay, id)
+    if (!overlay) return false
+    if (!accept(e, overlay, sessionId)) return false
+    resolveOverlaySelect(overlay, id)
     return true
   })
   // Submit диалога с полем ввода: значение "buttonId::text".
-  ipcMain.handle('overlay:submit', (e, raw: string) => {
+  ipcMain.handle('overlay:submit', (e, raw: string, sessionId?: number) => {
     const overlay = overlayOf(e)
-    if (overlay) resolveOverlaySubmit(overlay, raw)
+    if (!overlay) return false
+    if (!accept(e, overlay, sessionId)) return false
+    resolveOverlaySubmit(overlay, raw)
     return true
   })
   // Общий диалог иконки: верификация источника и apply.
   // Контекст (вкладка/группа) лежит в request активной сессии, который
   // service находит сам — передавать apply сюда больше не нужно.
-  ipcMain.handle('overlay:submit-icon', async (e, buttonId: string, value: string) => {
+  ipcMain.handle(
+    'overlay:submit-icon',
+    async (e, buttonId: string, value: string, sessionId?: number) => {
+      const overlay = overlayOf(e)
+      if (!overlay) return false
+      if (!accept(e, overlay, sessionId)) return false
+      return resolveOverlaySubmitIcon(overlay, buttonId, value)
+    }
+  )
+  // Закрытие оверлея по Escape, клику мимо или таймеру тоста.
+  ipcMain.handle('overlay:dismiss', (e, sessionId?: number) => {
     const overlay = overlayOf(e)
     if (!overlay) return false
-    return resolveOverlaySubmitIcon(overlay, buttonId, value)
-  })
-  // Закрытие оверлея по Escape, клику мимо или таймеру тоста.
-  ipcMain.handle('overlay:dismiss', (e) => {
-    const overlay = overlayOf(e)
-    if (overlay) resolveOverlayDismiss(overlay)
+    if (!accept(e, overlay, sessionId)) return false
+    resolveOverlayDismiss(overlay)
     return true
   })
   // Тосты поверх сайта: notify(title, body) из любого renderer-компонента.
@@ -102,16 +135,37 @@ export function registerOverlayIpc(): void {
   // Панель поиска (Ctrl+F) — оверлей kind 'find', но управляется вкладкой.
   // Опции как в VS Code: matchCase, wholeWord, useRegex. Состояние и
   // DOM-инъекции — в findManager/findScripts.
+  //
+  // Токен сессии здесь проверяется по той же причине, что и в overlay:*:
+  // панель поиска живёт в том же переиспользуемом окне, и запоздалый ввод
+  // из прошлой сессии применился бы к текущей вкладке.
   ipcMain.handle(
     'find:query',
     (
       e,
-      opts: { query: string; matchCase: boolean; wholeWord: boolean; useRegex: boolean }
-    ) => queryFind(e.sender, opts)
+      opts: { query: string; matchCase: boolean; wholeWord: boolean; useRegex: boolean },
+      sessionId?: number
+    ) => {
+      const overlay = overlayOf(e)
+      if (overlay && !accept(e, overlay, sessionId)) return false
+      return queryFind(e.sender, opts)
+    }
   )
-  ipcMain.handle('find:next', (e) => nextFind(e.sender))
-  ipcMain.handle('find:prev', (e) => prevFind(e.sender))
-  ipcMain.handle('find:close', (e) => closeFind(e.sender))
+  ipcMain.handle('find:next', (e, sessionId?: number) => {
+    const overlay = overlayOf(e)
+    if (overlay && !accept(e, overlay, sessionId)) return false
+    return nextFind(e.sender)
+  })
+  ipcMain.handle('find:prev', (e, sessionId?: number) => {
+    const overlay = overlayOf(e)
+    if (overlay && !accept(e, overlay, sessionId)) return false
+    return prevFind(e.sender)
+  })
+  ipcMain.handle('find:close', (e, sessionId?: number) => {
+    const overlay = overlayOf(e)
+    if (overlay && !accept(e, overlay, sessionId)) return false
+    return closeFind(e.sender)
+  })
   // Открыть панель: Ctrl+F из renderer или before-input-event view.
   ipcMain.handle('find:open', (e, query?: string) => {
     const ws = getStateBySender(e.sender)

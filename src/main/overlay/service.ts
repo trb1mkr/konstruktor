@@ -17,6 +17,14 @@ import {
 } from './pool'
 import { pushPayload, waitPageReady, dropPendingPush, updatePayload } from './pool'
 import type { PoolHooks } from './pool'
+import {
+  clearSession,
+  isCurrentSession,
+  nextSessionId,
+  parentIdOfOverlay,
+  sessionOf,
+  setSession
+} from './session'
 import type { OverlayModel, PushMessage } from '../../shared/overlay-types'
 
 // Сервис оверлеев: единственная точка входа для показа, закрытия и
@@ -35,13 +43,6 @@ import type { OverlayModel, PushMessage } from '../../shared/overlay-types'
 // работают через него. Шаг 10 переведёт их напрямую сюда, а
 // overlayManager.ts будет удалён.
 
-
-// в них DOM-меню/тосты/попапы любой темы. Замена системному Menu.popup,
-// который на Windows всегда светлый и не стилизуется.
-//
-// Жизненный цикл: showOverlay создает окно, select/dismiss закрывают.
-// Одновременно жив только один оверлей на родителя — новый вытесняет старый.
-// Родитель moved/resized/minimized/blurred — оверлей закрывается сам.
 
 export interface OverlayMenuItem {
   id: string
@@ -103,72 +104,12 @@ interface OverlayRequest {
   toggleKey?: string
 }
 
-// Активная сессия оверлея: parentId -> { overlay, request, sessionId }.
-// sessionId — токен сессии, по нему проверяется, что активна именно та
-// сессия, а не другая (см. resolveOverlaySelect).
-// openedAt — момент открытия: по нему отсекается эхо открывающего
-// клика (см. closeOverlayIfMenu).
-interface ActiveOverlay {
-  overlay: BrowserWindow
-  request: OverlayRequest
-  sessionId: number
-  openedAt: number
-}
+// Активная сессия оверлея. Состояние живёт в session.ts: записи,
+// обратная карта overlayId -> parentId и сверка токена. Здесь остались
+// только обёртки над ней и логика показа.
 
-const active = new Map<number, ActiveOverlay>()
-
-// Обратная карта: id окна оверлея -> id его родителя. Нужна, потому что
-// команды приходят от renderer оверлея, а сессия адресована по родителю.
-// Раньше.parentId находился перебором active, и таких мест было пять —
-// каждое O(n) и каждое с молчаливым «нашлось первое совпадение».
-// Оверлеев мало, но перебор был неуместен и мешал убрать его вообще.
-const parentOfOverlayId = new Map<number, number>()
-
-/**
- * Родитель по id окна оверлея, либо undefined, если оверлей не активен.
- * Замена перебора active по entry.overlay.
- */
-function findParentIdByOverlay(overlay: BrowserWindow): number | undefined {
-  const parentId = parentOfOverlayId.get(overlay.id)
-  if (parentId === undefined) return undefined
-  // Пара может разъехаться: сессию сняли в обход (например, отмена по
-  // таймауту раньше успела снять активную, а карту забыли). Сверяем, что
-  // запись всё ещё указывает на это окно, иначе считаем оверлей чужим.
-  const entry = active.get(parentId)
-  if (!entry || entry.overlay !== overlay) {
-    parentOfOverlayId.delete(overlay.id)
-    return undefined
-  }
-  return parentId
-}
-
-/**
- * Регистрирует сессию и синхронно ведёт обратную карту.
- *
- * Обёртка существует, чтобы карту нельзя было забыть обновить: вся
- * беда линейного перебора как раз из-за того, что истина о родителе
- * жила в активной сессии. Держим обе структуры в одном месте.
- */
-function setActiveSession(parentId: number, entry: ActiveOverlay): void {
-  active.set(parentId, entry)
-  parentOfOverlayId.set(entry.overlay.id, parentId)
-}
-
-/**
- * Снимает сессию и убирает обратную запись.
- *
- * Важно: снимается только сессия ИМЕННО этого родителя. Повторный
- * показ того же оверлея на другого родителя (окно переиспользуется
- * из пула) перезапишет карту, и старый вызов не должен был бы снести
- * новую запись.
- */
-function clearActiveSession(parentId: number): void {
-  const entry = active.get(parentId)
-  if (entry && parentOfOverlayId.get(entry.overlay.id) === parentId) {
-    parentOfOverlayId.delete(entry.overlay.id)
-  }
-  active.delete(parentId)
-}
+// Команды приходят от renderer'а оверлея, а адресованы родителю. Родителя
+// находим через обратную карту сессий (session.ts), а не перебором.
 
 // parentId -> { toggleKey, at } последнего ЗАКРЫТОГО меню. Нужно, чтобы
 // отличить эхо открывающего клика от настоящего повторного клика по
@@ -182,7 +123,6 @@ const TOGGLE_ECHO_MS = 250
 
 // Флаг: открыт ли системный диалог (файл/сохранение) — чтобы игнорировать blur/move/resize
 let isSystemDialogOpen = false
-
 
 // Оверлейное окно живёт постоянно: мы НИКОГДА не вызываем show()/hide().
 // Причина: DWM (Desktop Window Manager) на Windows анимирует появление и
@@ -198,7 +138,6 @@ let isSystemDialogOpen = false
 // Окно всегда существует и всегда «видимо» для OS, но в парке оно за
 // пределами экрана и прозрачно — пользователь его не видит и не может
 // кликнуть. Ни одного вызова show/hide → ни одной системной анимации.
-
 
 // Renderer сообщает, что применил contentUnmounted=false и кадр отдан.
 // Только после этого main возвращает прозрачность окну.
@@ -220,15 +159,21 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     log('lifecycle', 'parent move/resize/minimize -> close', { parentId: parent.id })
     closeOverlay(parent)
   }
-  const closeOnBlur = () => {
+  const closeOnBlur = (): void => {
     if (isSystemDialogOpen) return
     if (isContentUnmounted(parent.id)) return
+    const entry = sessionOf<OverlayRequest>(parent.id)
+    if (!entry) return
+    // Токен сессии: пока ждём проверки ниже, сессия могла закрыться или
+    // смениться. Тогда blur относится к другой поверхности, и гасить
+    // текущую нельзя.
+    const token = entry.sessionId
     // Переключение на чужое окно не стреляет ни move, ни resize, ни
-    // minimize. Раньше ловили это здесь, по blur'у родителя, но поверх
+    // minimize. Ловим это здесь, по blur'у родителя, но поверх
     // работает только один guard: оверлей лежит под курсором (парковка
-    // больше не уводит его за экран), клик по родителю активирует наше
-    // окно, и blur родителя — не уход пользователя, а побочный эффект
-    // нажатия. Отличить это от ухода можно было только по isFocused() оверлея.
+    // больше не уводит его за экран), клик по нему активирует наше окно,
+    // и blur родителя — не уход пользователя, а побочный эффект
+    // нажатия. Отличить это от ухода можно только по фокусу оверлея.
     //
     // Проблема в том, что оверлей САМ забирает фокус (панель поиска через
     // focus(), диалоги — автофокусом поля ввода). Тогда родитель теряет
@@ -242,27 +187,72 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     // только клик по родителю, который тоже приводит к blur'у.
     const until = focusHandoff.get(parent.id) ?? 0
     if (Date.now() < until) return
-    if (process.platform === 'win32' && overlay.isFocused()) {
-      log('lifecycle', 'parent blur by own overlay, ignored', { parentId: parent.id })
-      return
-    }
-    // Фокус ушёл не в оверлей — значит приложение покинуто (Alt+Tab), и
-    // оверлей обязан скрыться. Проверку делает closeIfFocusLeftApp.
-    closeIfFocusLeftApp(parent, parent.id)
+    // Проверка отложенная на всех платформах, и это не оптимизация.
+    //
+    // На Windows isFocused() синхронен, и ответ приходит сразу. На Linux
+    // активация окна АСИНХРОННА: в момент blur родителя WM ещё не
+    // успел перевести фокус на оверлей, и getFocusedWindow() возвращает
+    // null. Проверка на этом кадре говорила бы «ушли из приложения» —
+    // и меню закрывалось бы тем самым кликом, которым выбирают пункт.
+    // Живой прогон это подтвердил: в логах шло
+    //   app left focus -> close overlay { holderId: 1 }
+    //   closing
+    //   focus landed on hidden overlay -> parent { overlayId: 2 }
+    // то есть blur пришёл первым, а фокус оверлею передан уже после
+    // закрытия, и клик по пункту ушёл в размонтированное содержимое.
+    //
+    // Через BLUR_SETTLE_MS активация успевает завершиться, и оверлей
+    // виден как держащий фокус. Задержка незаметна: на Alt+Tab оверлей
+    // гаснет на 60 мс позже, что в кадре не воспринимается.
+    setTimeout(() => {
+      if (isSystemDialogOpen) return
+      // Сессия могла закрыться или смениться, пока ждали: blur мог
+      // прийти от другой поверхности, и гасить текущую нельзя.
+      if (!isCurrentSession(parent.id, token)) return
+      if (isContentUnmounted(parent.id)) return
+      if (overlay.isDestroyed()) return
+      // Фокус у нашего окна — значит это не уход из приложения, а
+      // активация оверлея кликом по нему же.
+      if (overlay.isFocused() || parent.isFocused()) {
+        log('lifecycle', 'parent blur by own overlay, ignored', {
+          parentId: parent.id,
+          sessionId: token,
+          overlayFocused: overlay.isFocused(),
+          parentFocused: parent.isFocused()
+        })
+        return
+      }
+      // Фокус ушёл не в оверлей — значит приложение покинуто (Alt+Tab),
+      // и оверлей обязан скрыться.
+      closeIfFocusLeftApp(parent, parent.id)
+    }, BLUR_SETTLE_MS)
   }
   // Тот же признак, но со стороны оверлея. Нужен потому, что при
   // открытой панели поиска ФОКУС ДЕРЖИТ ОВЕРЛЕЙ: родитель потерял его
   // ещё при открытии, и blur родителя при Alt+Tab не приходит вовсе.
   // Без этого слушателя панель поиска и диалог иконки висели бы поверх
   // чужого окна (проверено: воспроизводилось на живом Alt+Tab).
+  // Проверка отложенная по той же причине, что в closeOnBlur: активация
+  // окна на Linux асинхронна, и мгновенная проверка isFocused() сказала бы
+  // «ушли из приложения» в тот самый кадр, когда фокус как раз ПЕРЕХОДИТ
+  // оверлею.
   const onOverlayBlur = (): void => {
     if (isSystemDialogOpen) return
     if (isContentUnmounted(parent.id)) return
-    if (!active.has(parent.id)) return
-    // Родитель мог уже забрать фокус себе (например, по restoreFocusToParent
-    // после закрытия) — тогда это не уход из приложения.
-    if (!overlay.isDestroyed() && parent.isFocused()) return
-    closeIfFocusLeftApp(overlay, parent.id)
+    const entry = sessionOf<OverlayRequest>(parent.id)
+    if (!entry) return
+    const token = entry.sessionId
+    setTimeout(() => {
+      if (isSystemDialogOpen) return
+      if (!isCurrentSession(parent.id, token)) return
+      if (isContentUnmounted(parent.id)) return
+      if (overlay.isDestroyed()) return
+      // Родитель мог уже забрать фокус себе (например, по
+      // restoreFocusToParent после закрытия) — тогда это не уход из
+      // приложения.
+      if (parent.isFocused()) return
+      closeIfFocusLeftApp(overlay, parent.id)
+    }, BLUR_SETTLE_MS)
   }
   // Esc закрывает активный оверлей. Ловим на родителе, потому что сам
   // оверлей открыт через showInactive() и клавиши не получает — Esc уходит
@@ -276,7 +266,7 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     input: Electron.Input
   ): void => {
     if (input.type !== 'keyDown' || input.key !== 'Escape') return
-    const entry = active.get(parent.id)
+    const entry = sessionOf<OverlayRequest>(parent.id)
     if (!entry) return
     if (entry.request.kind === 'toast') return
     event.preventDefault()
@@ -328,16 +318,14 @@ export function ensureOverlayWindow(parent: BrowserWindow): void {
   ensurePooledWindow(parent, poolHooks())
 }
 
-// Монотонный счетчик сессий оверлея. Каждое открытие получает новый
-// токен: renderer подтверждает отрисовку именно этого токена, а main
-// игнорирует подтверждения от устаревших сессий (защита от гонок).
-let sessionCounter = 0
+// Счётчик сессий и реестр активных сессий живут в session.ts: ими
+// пользуются и сервис, и будущий стек вложенности (шаг 8), поэтому
+// держать их здесь означало бы копить импорт в сторону шага 8.
 
 // Фаза ready исчезла вместе с навигацией: раньше main ждал, пока
 // renderer применит payload из URL, и держал окно прозрачным. Теперь
 // данные приходят через overlay:push в уже готовый renderer, поэтому
 // ждать нечего — достаточно подтверждения отрисовки (overlayPainted).
-
 
 // parentId -> время, до которого родительский blur не считается
 // переключением на чужое окно. Заполняется noteFocusHandoff.
@@ -348,6 +336,15 @@ const focusHandoff = new Map<number, number>()
 // родителя overlay.isFocused() ещё вернул бы false.
 const FOCUS_HANDOFF_MS = 400
 
+// Сколько ждать, прежде чем признавать blur родителя уходом из
+// приложения. Нужно, чтобы на Linux успела завершиться асинхронная
+// активация окна оверлея: в момент blur она ещё не началась, и
+// isFocused() вернул бы false на клике по самому меню.
+//
+// 60 мс — с запасом больше типичного времени активации окна в WM,
+// но меньше времени, за которое человек успевает переключиться на
+// другое приложение и заметить оставшийся оверлей.
+const BLUR_SETTLE_MS = 60
 
 // Уже поднят ли слушатель потери фокуса приложения. Слушатель глобальный,
 // а сессии заводятся и умирают, поэтому регистрируем один раз на весь
@@ -424,10 +421,29 @@ function closeIfFocusLeftApp(
   if (isSystemDialogOpen) return false
   const parent = BrowserWindow.fromId(parentId)
   if (!parent || parent.isDestroyed()) return false
-  // Фокус ушёл в другое наше окно: это переключение внутри приложения.
+  // Фокус ушёл в ЧУЖОЕ окно — оверлей обязан скрыться, иначе он останется
+  // висеть поверх окна, которое пользователь открыл вместо нашего.
+  //
+  // Раньше здесь стояло исключение «фокус ушёл в другое наше окно, это
+  // переключение внутри приложения, не трогаем». Оно работало только
+  // потому, что проверка была МГНОВЕННОЙ: в момент blur ни одно наше окно
+  // ещё не успело получить фокус, и условие не срабатывало. С переводом
+  // проверки на отложенную (BLUR_SETTLE_MS, ради бага с кликом по пункту
+  // меню) вторая окно браузера к этому моменту УЖЕ в фокусе — исключение
+  // начало срабатывать, и оверлей первого окна оставался висеть поверх
+  // второго. Живой прогон это подтвердил.
+  //
+  // Исключение остаётся, но только для НАШЕЙ поверхности: фокус в
+  // самом оверлее или в его родителе — это не уход из приложения.
+  // Всё остальное (чужое приложение, ДРУГОЕ окно браузера) означает, что
+  // наше окно больше не сверху, и оверлей надо гасить.
   const focused = BrowserWindow.getFocusedWindow()
-  if (focused && !focused.isDestroyed() && focused.id !== holder.id) {
-    log('lifecycle', 'focus moved to own window', {
+  if (
+    focused &&
+    !focused.isDestroyed() &&
+    (focused.id === holder.id || focused.id === parent.id)
+  ) {
+    log('lifecycle', 'focus moved to own surface, ignored', {
       parentId,
       holderId: holder.id,
       focusedId: focused.id
@@ -500,11 +516,6 @@ function overlayModel(request: OverlayRequest): OverlayModel {
   return { view: 'toast', toast: request.toast ?? { title: '' } }
 }
 
-
-
-
-
-
 /**
  * Renderer подтвердил, что сессия с токеном отрисована. Разрешаем показ.
  * Токен сверяется: подтверждение от устаревшей сессии игнорируем.
@@ -570,12 +581,10 @@ function abortPresent(win: BrowserWindow, parent: BrowserWindow, sessionToken: n
   }
   // Снимаем сессию, только если она всё ещё наша: за время ожидания
   // мог открыться другой оверлей, и его трогать нельзя.
-  const entry = active.get(parent.id)
-  if (entry && entry.sessionId === sessionToken) clearActiveSession(parent.id)
+  const entry = sessionOf<OverlayRequest>(parent.id)
+  if (entry && isCurrentSession(parent.id, sessionToken)) clearSession(parent.id)
   log('lifecycle', 'overlay aborted, nothing shown', { parentId: parent.id, sessionId: sessionToken })
 }
-
-
 
 /**
  * Возвращает фокус родителю после закрытия оверлея.
@@ -643,7 +652,7 @@ function restoreFocusToParent(
 }
 
 export function closeOverlay(parent: BrowserWindow): void {
-  const entry = active.get(parent.id)
+  const entry = sessionOf<OverlayRequest>(parent.id)
   if (!entry) return
   log('session', 'closing', { parentId: parent.id, kind: entry.request.kind })
   // Запоминаем закрытое меню с его триггером: следующий вызов showOverlay
@@ -655,7 +664,7 @@ export function closeOverlay(parent: BrowserWindow): void {
       at: Date.now()
     })
   }
-  clearActiveSession(parent.id)
+  clearSession(parent.id)
   try {
     // Тот же случай, что и в abortPresent: сессию закрыли, пока страница
     // ещё грузилась, и payload лежит в буфере. Без сброса он применится
@@ -695,8 +704,39 @@ export function closeOverlay(parent: BrowserWindow): void {
 // страницы оверлея.
 const OPEN_SETTLE_MS = 350
 
+/**
+ * Закрыть сессию при смене активной вкладки.
+ *
+ * Приёмка шага 5: «при быстром переключении вкладок с открытым меню
+ * пункты соответствуют текущей вкладке». Пока вкладка менялась, оверлей
+ * оставался прежним: setActiveTab про него ничего не знает, и пункты
+ * контекстного меню вкладки висели уже над другой страницей.
+ *
+ * Закрываем ЛЮБУЮ сессию, а не только меню. Утверждение приёмки про меню,
+ * но оставшаяся сессия после переключения вкладки бессмысленна в любом
+ * виде: диалог иконки привязан к вкладке (onIconApply замыкание
+ * конкретной записи), панель поиска — к webContents страницы, тост тем
+ * более. Исключение делалось бы ради симметрии с closeOverlayIfMenu, но
+ * там клик по shell гасит только меню, потому что у диалога есть кнопка
+ * Отмена и он не должен исчезать от чужого клика. Переключение вкладки —
+ * не чужой клик, это другая задача целиком.
+ *
+ * Порядок важен: снимаем сессию и только потом гасим окно. Иначе renderer
+ * успеет применить патч от уже неактуальной сессии.
+ */
+export function closeOverlayOnTabChange(parent: BrowserWindow, tabId: number): void {
+  const entry = sessionOf<OverlayRequest>(parent.id)
+  if (!entry) return
+  log('session', 'active tab changed -> close overlay', {
+    parentId: parent.id,
+    kind: entry.request.kind,
+    tabId
+  })
+  closeOverlay(parent)
+}
+
 export function closeOverlayIfMenu(parent: BrowserWindow): void {
-  const entry = active.get(parent.id)
+  const entry = sessionOf<OverlayRequest>(parent.id)
   if (!entry) return
   if (entry.request.kind !== 'menu') return
   const age = Date.now() - entry.openedAt
@@ -713,12 +753,12 @@ export function closeOverlayIfMenu(parent: BrowserWindow): void {
 
 // Активный оверлей родителя (для проброса found-in-page в панель поиска).
 export function getActiveOverlay(parent: BrowserWindow): BrowserWindow | undefined {
-  const entry = active.get(parent.id)
+  const entry = sessionOf<OverlayRequest>(parent.id)
   return entry && !entry.overlay.isDestroyed() ? entry.overlay : undefined
 }
 
 export function getActiveRequest(parent: BrowserWindow): OverlayRequest | undefined {
-  return active.get(parent.id)?.request
+  return sessionOf<OverlayRequest>(parent.id)?.request
 }
 
 /**
@@ -735,7 +775,7 @@ export function getActiveRequest(parent: BrowserWindow): OverlayRequest | undefi
  * сверки токена счётчик от прошлого поиска появился бы в следующем.
  */
 export function updateActiveOverlay(parent: BrowserWindow, patch: unknown): boolean {
-  const entry = active.get(parent.id)
+  const entry = sessionOf<OverlayRequest>(parent.id)
   if (!entry) return false
   if (entry.overlay.isDestroyed()) return false
   return updatePayload(entry.overlay, entry.sessionId, entry.sessionId, patch)
@@ -761,7 +801,7 @@ export function updateOverlayBySender(sender: Electron.WebContents, patch: unkno
 // Родитель оверлея: sender find:query/next/prev/close — это webContents
 // самого оверлея, по нему находим окно-родитель и активную view.
 export function getParentOfOverlay(overlay: BrowserWindow): BrowserWindow | undefined {
-  const parentId = findParentIdByOverlay(overlay)
+  const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return undefined
   return BrowserWindow.fromId(parentId) ?? undefined
 }
@@ -775,7 +815,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   // открыто меню вкладки, клик по ☰ закрыл бы его вместо показа меню
   // браузера. Диалоги и поиск ключа не имеют и всегда просто показываются.
   if (request.toggleKey && request.kind === 'menu') {
-    const cur = active.get(parent.id)
+    const cur = sessionOf<OverlayRequest>(parent.id)
     const same = cur && !cur.overlay.isDestroyed() && cur.request.toggleKey === request.toggleKey
     if (same) {
       log('session', 'toggle: same trigger, closing', {
@@ -940,8 +980,8 @@ if (!overlay || overlay.isDestroyed()) {
   markContentUnmounted(parent.id)
   // Токен сессии — до active.set: по нему resolveOverlaySelect отличает
   // свою сессию от новой, открытой из onSelect.
-  const sessionToken = ++sessionCounter
-  setActiveSession(parent.id, { overlay, request, sessionId: sessionToken, openedAt: Date.now() })
+  const sessionToken = nextSessionId()
+  setSession(parent.id, { overlay, request, sessionId: sessionToken, openedAt: Date.now() })
   // Показ окна. Страница уже загружена (пул сделал это при создании
   // окна), навигации нет — ждать остаётся только отрисовку.
   async function present(): Promise<void> {
@@ -1077,9 +1117,9 @@ if (!overlay || overlay.isDestroyed()) {
 
 export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
   log('command', `select: ${id}`)
-  const parentId = findParentIdByOverlay(overlay)
+  const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return
-  const entry = active.get(parentId)
+  const entry = sessionOf<OverlayRequest>(parentId)
   if (!entry) return
   {
     const parent = BrowserWindow.fromId(parentId)
@@ -1093,7 +1133,7 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
     // из пула у всех сессий одно и то же, сравнение всегда истинно,
     // и проверка не срабатывала НИКОГДА. Из-за этого диалог иконки
     // открывался только со второго раза.
-    const stillSame = active.get(parentId)?.sessionId === entry.sessionId
+    const stillSame = isCurrentSession(parentId, entry.sessionId)
     if (!stillSame) {
         // onSelect открыл новую сессию поверх текущей (меню -> диалог
         // иконки). active уже указывает на неё, и её закрывать нельзя:
@@ -1108,13 +1148,13 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
       log('command', 'select opened new session, keeping it open', {
         parentId,
         closed: entry.sessionId,
-        current: active.get(parentId)?.sessionId
+        current: sessionOf<OverlayRequest>(parentId)?.sessionId
       })
       return
     }
     if (parent) closeOverlay(parent)
     else {
-      clearActiveSession(parentId)
+      clearSession(parentId)
       try {
         // hide(), а не close(): родитель уже мёртв, но окно держим
         // в пуле, если оно переиспользуемо.
@@ -1128,12 +1168,12 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
 
 export function resolveOverlayDismiss(overlay: BrowserWindow): void {
   log('command', 'dismiss')
-  const parentId = findParentIdByOverlay(overlay)
+  const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return
   const parent = BrowserWindow.fromId(parentId)
   if (parent) closeOverlay(parent)
   else {
-    clearActiveSession(parentId)
+    clearSession(parentId)
     try {
       hideContent(overlay)
     } catch {
@@ -1146,15 +1186,15 @@ export function resolveOverlayDismiss(overlay: BrowserWindow): void {
 // через тот же onSelect — main разобрает префикс сам.
 export function resolveOverlaySubmit(overlay: BrowserWindow, raw: string): void {
   log('command', `submit: ${raw.slice(0, 40)}`)
-  const parentId = findParentIdByOverlay(overlay)
+  const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return
-  const entry = active.get(parentId)
+  const entry = sessionOf<OverlayRequest>(parentId)
   if (!entry) return
   const parent = BrowserWindow.fromId(parentId)
   entry.request.onSelect?.(raw)
   if (parent) closeOverlay(parent)
   else {
-    clearActiveSession(parentId)
+    clearSession(parentId)
     try {
       hideContent(overlay)
     } catch {
@@ -1179,9 +1219,9 @@ export async function resolveOverlaySubmitIcon(
   value: string
 ): Promise<boolean> {
   log('command', `submit-icon: ${buttonId} (${value.slice(0, 30)})`)
-  const parentId = findParentIdByOverlay(overlay)
+  const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return false
-  const entry = active.get(parentId)
+  const entry = sessionOf<OverlayRequest>(parentId)
   if (!entry) return false
   const apply = entry.request.onIconApply
   if (!apply) return false
@@ -1249,7 +1289,7 @@ export async function resolveOverlaySubmitIcon(
     const parent = BrowserWindow.fromId(parentId)
     if (parent) closeOverlay(parent)
     else {
-      clearActiveSession(parentId)
+      clearSession(parentId)
       try {
         hideContent(overlay)
       } catch {

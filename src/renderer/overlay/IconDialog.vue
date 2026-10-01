@@ -10,8 +10,12 @@ import { ref, computed, onMounted, watch } from 'vue'
 // конвертации файла — отдельным executeJavaScript, который правил
 // .dialog-error по селектору. Два пути для одного значения разошлись, и
 // правка второго ничего не говорила о первом.
+// sessionId — токен сессии для команд. Диалог иконки меняет favicon
+// ЗАМКНАНИЕМ конкретной вкладки, поэтому запоздалая команда из
+// устаревшей сессии опасна: применила бы иконку к уже другой записи.
 const props = defineProps<{
   icon: { title: string; placeholder?: string; initial?: string; error?: string }
+  sessionId?: number
 }>()
 
 const value = ref(props.icon.initial ?? '')
@@ -34,11 +38,11 @@ onMounted(() => {
 async function choose(id: string) {
   // Отмена — просто закрыть без submit.
   if (id === '__cancel__') {
-    await window.overlayAPI.dismiss()
+    await window.overlayAPI.dismiss(props.sessionId)
     return
   }
   localError.value = ''
-  const ok = await window.overlayAPI.submitIcon(id, value.value)
+  const ok = await window.overlayAPI.submitIcon(id, value.value, props.sessionId)
   // false = main отклонил источник: показываем ошибку, диалог жив.
   if (!ok) localError.value = 'Enter a URL, file path or emoji'
 }
@@ -54,7 +58,7 @@ function onBackdrop(e: MouseEvent) {
   // Клик по подложке (прозрачной области вокруг диалога) — отмена.
   // Без проверки target любой клик внутри .dialog-root считался бы
   // отменой, включая клики по самому диалогу.
-  if (e.target === e.currentTarget) void window.overlayAPI.dismiss()
+  if (e.target === e.currentTarget) void window.overlayAPI.dismiss(props.sessionId)
 }
 </script>
 

@@ -4,7 +4,9 @@ import { ref, onMounted } from 'vue'
 // Модальный диалог с полем ввода в оверлей-окне: центрируется
 // overlayManager (kind 'dialog'), значение уходит через overlay:submit.
 // Кнопки присылает main (например URL / Local file / Cancel).
+// sessionId — токен сессии для команд.
 const props = defineProps<{
+  sessionId?: number
   dialog: { title: string; placeholder?: string; initial?: string; buttons: { id: string; label: string }[] }
 }>()
 
@@ -23,7 +25,7 @@ onMounted(() => {
 async function choose(id: string) {
   // Кнопка Cancel — просто закрыть без submit.
   if (id === '__cancel__') {
-    await window.overlayAPI.dismiss()
+    await window.overlayAPI.dismiss(props.sessionId)
     return
   }
   emit('submit', `${id}::${value.value}`)
@@ -31,7 +33,7 @@ async function choose(id: string) {
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Enter') void choose(props.dialog.buttons[0]?.id ?? '__cancel__')
-  if (e.key === 'Escape') void window.overlayAPI.dismiss()
+  if (e.key === 'Escape') void window.overlayAPI.dismiss(props.sessionId)
 }
 </script>
 
