@@ -50,10 +50,9 @@ import type { OverlayModel, PushMessage, StackEntry } from '../../shared/overlay
 // Одновременно жив только один оверлей на родителя — новый вытесняет старый.
 // Родитель moved/resized/minimized/blurred — оверлей закрывается сам.
 //
-// Миграция идёт шаг за шагом (см. docs/OVERLAY_PLAN.md). Шаг 4b вынес
-// сюда логику из overlayManager.ts; тот остался фасадом, и все 14 вызовов
-// работают через него. Шаг 10 переведёт их напрямую сюда, а
-// overlayManager.ts будет удалён.
+// Импортировать этот модуль следует из './overlay' — точки входа, а не
+// отсюда: внутренние файлы папки не должны становиться контрактом для
+// потребителей.
 
 
 export interface OverlayMenuItem {
@@ -394,7 +393,7 @@ export function ensureOverlayWindow(parent: BrowserWindow): void {
 }
 
 // Счётчик сессий и реестр активных сессий живут в session.ts: ими
-// пользуются и сервис, и будущий стек вложенности (шаг 8), поэтому
+// пользуются и сервис, и стек вложенности, поэтому
 // держать их здесь означало бы копить импорт в сторону шага 8.
 
 // Фаза ready исчезла вместе с навигацией: раньше main ждал, пока
@@ -732,7 +731,7 @@ export function applyMeasured(
   }
 
   //
-  // Шаг 8: измерение приходит для ВЕРХНЕГО уровня, и пересчитывается он
+  // Измерение приходит для ВЕРХНЕГО уровня, и пересчитывается он
   // один — через boundsFromMeasurement, как и до стека. Прямоугольник
   // уровня заменяется на последнем месте в pending.levels: измерение
   // приходит от того, кто сейчас на экране, а он по определению вершина.
@@ -872,6 +871,65 @@ export function watchPaintedOnce(): void {
   })
 }
 watchPaintedOnce.done = false
+
+// id окон, для которых подтверждение размонтирования уже пришло, но ещё
+// не востребовано. Renderer отвечает на каждое park-сообщение, в том
+// числе на те, что main шлёт мимо awaitUnmounted, — иначе подтверждение
+// опережало бы подписку и терялось.
+const unmountedSeen = new Set<number>()
+
+// Ожидающие подтверждения: id окна оверлея -> резолвер.
+const unmountWaiters = new Map<number, () => void>()
+
+// Сколько ждём подтверждения, прежде чем показать окно в любом случае.
+// Пока ждём, пользователь видит прежнее содержимое на прежнем месте:
+// картинка не портится, показ просто начинается чуть позже.
+const UNMOUNT_TIMEOUT_MS = 250
+
+/** Подтверждение размонтирования пришло от renderer. */
+export function confirmUnmounted(overlay: BrowserWindow): void {
+  unmountedSeen.add(overlay.id)
+  unmountWaiters.get(overlay.id)?.()
+}
+
+/**
+ * Ждёт, пока renderer подтвердит, что содержимое убрано из DOM.
+ *
+ * Вызывается перед setBounds при смене содержимого поверх ЖИВОГО окна.
+ * На Linux setOpacity — no-op, поэтому единственная защита от кадра со
+ * старым содержимым — размонтирование, и без ожидания окно успевало
+ * переехать на новые координаты, пока прежнее меню ещё было на экране:
+ * пользователь видел на месте диалога иконки пункт меню вкладок.
+ *
+ * На типичном показе ожидания нет: окно и так пустое, renderer молчит,
+ * потому что подтверждать нечего. Ожидание включается только когда
+ * показать реально есть что стирать — то есть вызывается лишь из ветки
+ * «живое окно», а не из пула.
+ *
+ * @returns сколько ждали, мс. Для лога.
+ */
+export function awaitUnmounted(overlay: BrowserWindow): Promise<number> {
+  const id = overlay.id
+  // Подтверждение могло прийти ДО подписки — renderer отвечает на каждое
+  // park-сообщение, а не только на те, что main ждёт.
+  if (unmountedSeen.delete(id)) return Promise.resolve(0)
+  const started = now()
+  return new Promise<number>((resolve) => {
+    const done = (): void => {
+      if (unmountWaiters.get(id) !== done) return
+      unmountWaiters.delete(id)
+      clearTimeout(timer)
+      resolve(now() - started)
+    }
+    unmountWaiters.set(id, done)
+    const timer = setTimeout(() => {
+      // Renderer не ответил. Показываем всё равно: отсутствие ответа
+      // означает риск одного кадра, а не поломку.
+      log('lifecycle', 'unmount confirm timeout, showing anyway', { overlayId: id })
+      done()
+    }, UNMOUNT_TIMEOUT_MS)
+  })
+}
 
 // Токены, для которых painted уже пришёл ДО подписки.
 const paintedSeen = new Set<number>()
@@ -1171,7 +1229,7 @@ export function closeOverlay(parent: BrowserWindow): void {
       at: Date.now()
     })
   }
-  // Шаг 8: снимаем только ВЕРХНИЙ уровень. Пока в стеке есть что лежать
+  // Снимаем только ВЕРХНИЙ уровень. Пока в стеке есть что лежать
   // под ним, окно остаётся на экране, а пользователь возвращается к
   // нижнему уровню — это и есть «Esc возвращает к меню».
   //
@@ -1490,7 +1548,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   //
   // ВЛОЖЕННОСТЬ ОТКЛЮЧЕНА ПО РЕШЕНИЮ ПОЛЬЗОВАТЕЛЯ.
   //
-  // Шаг 8 строил стек уровней, и «Change icon» из меню вкладки открывал
+  // Признано: стек уровней строит «Change icon» из меню вкладки, открывая
   // диалог ПОВЕРХ меню, оставляя меню видимым под ним. Проверка на
   // живом прогоне показала, что это не целевое поведение: у пользователя
   // это выглядит как два наложенных окна, а не как переход «меню ->
@@ -1590,6 +1648,14 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   // Просто обновляем bounds и загружаем новый payload.
   let overlay = getPooledOverlay(parent.id)
   const reused = !!overlay && !overlay.isDestroyed()
+  // Окно было ЖИВЫМ — на экране, с видимым содержимым. Определяем ДО
+  // hideContent: тот снимает флаг размонтирования, и после него признак
+  // уже не различить.
+  //
+  // Признак нужен в present(): у живого окна есть что стирать, и перед
+  // setBounds надо дождаться подтверждения от renderer. У припаркованного
+  // содержимое уже убрано, ждать нечего.
+  const wasLive = !isContentUnmounted(parent.id)
   log('pool', reused ? 'reusing pooled window' : 'no pooled window, creating', {
     parentId: parent.id,
     kind: request.kind
@@ -1688,6 +1754,26 @@ if (!overlay || overlay.isDestroyed()) {
     // между setBounds и прозрачностью WM успевает показать кадр со
     // старым содержимым, и это видно как моргание.
     setContentUnmounted(win, true)
+    // Ждём подтверждения размонтирования, но только если стирать есть
+    // что: у припаркованного окна содержимое уже убрано (renderer молчит,
+    // потому что подтверждать нечего), и ожидание лишь задержало бы
+    // открытие. У ЖИВОГО окна на экране прежнее содержимое — его надо
+    // сначала убрать из DOM, иначе окно переезжает на новые координаты,
+    // а прежнее меню ещё на экране: на месте диалога иконки пользователь
+    // видел пункт меню вкладок.
+    //
+    // На Linux setOpacity — no-op, поэтому размонтирование здесь не
+    // «дополнительная» защита, а единственная.
+    if (wasLive) {
+      const waited = await awaitUnmounted(win)
+      if (win.isDestroyed()) return
+      if (waited > 0) {
+        log('lifecycle', 'waited for unmount confirm', {
+          parentId: parent.id,
+          waitedMs: Number(waited.toFixed(1))
+        })
+      }
+    }
     // Ставим позицию сразу, НЕ уводя за экран. Окно уже пустое (v-if
     // в renderer снял содержимое) и прозрачное, поэтому показывать ему
     // нечего и моргать нечему.
@@ -1711,7 +1797,7 @@ if (!overlay || overlay.isDestroyed()) {
     // в очередь pendingPush и уйдёт при did-finish-load. Обратный порядок
     // был бессмысленным: waitPageReady выставляет pageReady = true, и
     // буферизация становилась недостижимой.
-    // Шаг 8: шлём весь стек, а не только верхний уровень. При одном
+    // Шлём весь стек, а не только верхний уровень. При одном
     // уровне его offset равен нулю — поведение не отличается от прежнего.
     const message = buildPushMessage(
       parent,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Кнопка меню браузера. Само меню — DOM-оверлей в прозрачном окне
-// поверх всего (см. src/main/overlayManager.ts + src/renderer/overlay/).
+// поверх всего (см. src/main/overlay/ + src/renderer/overlay/).
 // Системный Menu.popup не используем: на Windows он светлый и не стилизуется.
 import { ref } from 'vue'
 

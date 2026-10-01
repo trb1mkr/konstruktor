@@ -49,9 +49,22 @@ const overlayAPI = {
     ipcRenderer.invoke(OVERLAY_CHANNELS.command, command),
 
   // Реальные размеры содержимого после монтирования. Main клампит
-  // bounds по экрану, чтобы окно не резало меню (шаг 6).
+  // bounds по экрану, чтобы окно не резало меню.
   measure: (msg: MeasureMessage): void => {
     ipcRenderer.send(OVERLAY_CHANNELS.measured, msg)
+  },
+
+  // Подтверждение, что содержимое убрано из DOM (v-if снят).
+  //
+  // Main ждёт его ПЕРЕД перемещением окна. Без такого ожидания на Linux
+  // окно показывало прежнее содержимое в новых координатах на долю кадра:
+  // setOpacity там no-op, и единственная защита — размонтирование, а
+  // сообщение о нём асинхронно.
+  //
+  // Вызывать из onMounted НЕЛЬЗЯ: нужно после того, как Vue реально
+  // снял v-if, поэтому подтверждение шлёт обработчик park, а не onMounted.
+  unmounted: (): void => {
+    ipcRenderer.send(OVERLAY_CHANNELS.unmounted)
   },
 
   // ─── Старые методы, миграция на шаге 10 ───────────────────────────────
@@ -110,7 +123,7 @@ const overlayAPI = {
   findClose: (sessionId?: number): Promise<boolean> =>
     ipcRenderer.invoke('find:close', sessionId),
   /**
-   * Временный канал диагностики (шаг 1 рефакторинга): renderer сообщает
+   * Временный канал диагностики: renderer сообщает
    * main о своих наблюдениях — какая анимация играет, какие классы на
    * элементах. Однонаправленный и безопасный: принимает только строки.
    */

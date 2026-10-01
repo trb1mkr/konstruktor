@@ -15,7 +15,7 @@ import {
   getActiveOverlay,
   getParentOfOverlay,
   updateActiveOverlay
-} from './overlayManager'
+} from './overlay'
 import {
   buildRunCustomFindScript,
   buildStepCustomFindScript,

@@ -7,7 +7,7 @@ import { join } from 'path'
 import { windows, type WindowState } from './browserState'
 import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { openFindOverlay } from './findManager'
-import { ensureOverlayWindow } from './overlayManager'
+import { ensureOverlayWindow } from './overlay'
 import { readFileSync, existsSync } from 'fs'
 
 // NOTE: dev = не упакованное приложение.

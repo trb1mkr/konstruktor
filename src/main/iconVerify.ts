@@ -1,5 +1,5 @@
 // Верификация источника иконки: нормализует ввод к хранимому виду.
-// Выделено из overlayManager.ts: чистая функция без зависимостей от окон,
+// Выделено из сервиса оверлеев: чистая функция без зависимостей от окон,
 // тестируется без Electron. Возвращает { ok: true, icon } или { ok: false, error }.
 export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok: false; error: string } {
   const text = raw.trim()

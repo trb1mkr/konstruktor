@@ -1,8 +1,8 @@
 // Регистрация IPC-каналов оверлея.
 //
-// Шаг 4 плана (docs/OVERLAY_PLAN.md) выносит сюда всё, что относится к
-// оверлеям. Раньше эти хендлеры жили в index.ts вперемешку с вкладками,
-// историей и настройками, и править их можно было только там.
+// Здесь собраны все каналы оверлеев. Раньше эти хендлеры жили в index.ts
+// вперемешку с вкладками, историей и настройками, и править их можно
+// было только там.
 //
 // ГРАНИЦА: файл про оверлеи, а не про приложение. Каналы вкладок,
 // истории, загрузок, настроек, окон и ярлыков остаются в index.ts —
@@ -35,7 +35,7 @@ import {
 import { getStateBySender } from '../browserState'
 import { openFindOverlay, queryFind, nextFind, prevFind, closeFind } from '../findManager'
 import { isCommandCurrent } from './session'
-import { applyMeasured, getParentOfOverlay } from './service'
+import { applyMeasured, confirmUnmounted, getParentOfOverlay } from './service'
 import { OVERLAY_CHANNELS } from '../../shared/overlay-types'
 import type { MeasureMessage } from '../../shared/overlay-types'
 
@@ -138,7 +138,7 @@ export function registerOverlayIpc(): void {
   // Измерение содержимого: renderer сообщает реальные размеры после
   // монтирования, main пересчитывает bounds по ним.
   //
-  // Шаг 6. До этого размеры считались в main формулой
+  // Размеры НЕ считаются в main формулой
   // MENU_PAD + N * MENU_ITEM_H, где MENU_ITEM_H = 40 не имело отношения
   // к CSS: пункт в реальности занимал 46 px, и каждый пункт «съедал»
   // 6 px. Хардкод удалён, единственный источник правды по размеру —
@@ -153,6 +153,19 @@ export function registerOverlayIpc(): void {
     const parent = getParentOfOverlay(overlay)
     if (!parent) return
     applyMeasured(parent, msg.sessionId, { width: msg.width, height: msg.height })
+  })
+
+  // Подтверждение, что содержимое убрано из DOM.
+  //
+  // Main ждёт его перед setBounds при смене содержимого поверх живого
+  // окна. На Linux setOpacity — no-op, поэтому единственная защита от
+  // кадра со старым содержимым — размонтирование, а setContentUnmounted
+  // уходит в renderer асинхронным IPC. Без этого ожидания окно успевало
+  // переехать на новые координаты, пока старое меню ещё было на экране.
+  ipcMain.on(OVERLAY_CHANNELS.unmounted, (e) => {
+    const overlay = overlayOf(e)
+    if (!overlay) return
+    confirmUnmounted(overlay)
   })
 
   // Панель поиска (Ctrl+F) — оверлей kind 'find', но управляется вкладкой.

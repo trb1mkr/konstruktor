@@ -70,7 +70,7 @@ import {
   closeOverlayOnTabChange,
   getActiveOverlay,
   type OverlayMenuItem
-} from './overlayManager'
+} from './overlay'
 import { registerOverlayIpc } from './overlay/ipc'
 import { watchPaintedOnce } from './overlay/service'
 import { dumpStats as dumpOverlayStats, log } from './overlay/logger'
@@ -788,7 +788,7 @@ function registerIpc() {
   // включая WebContentsView. Системный Menu.popup не используем:
   // на Windows он всегда светлый и не стилизуется.
   // Renderer шлет якорь ПРАВОГО НИЖНЕГО угла кнопки относительно
-  // content-области окна. Оверлей позиционируется в overlayManager.
+  // content-области окна. Оверлей позиционируется в overlay/service.
   ipcMain.on('menu:popup', (e, anchor: { x: number; y: number }) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     const ws = win ? getState(win) : undefined
@@ -846,7 +846,7 @@ function registerIpc() {
     if (win) closeOverlayIfMenu(win)
   })
   // Оверлейные каналы (overlay:*, find:*) зарегистрированы в
-  // overlay/ipc.ts — шаг 4 плана. Здесь остались только каналы
+  // Оверлейные каналы вынесены в overlay/ipc.ts. Здесь остались только каналы
   // приложения: вкладки, история, загрузки, настройки, окна, ярлыки.
   registerOverlayIpc()
   // Учёт подтверждений отрисовки оверлея. Слушатель должен стоять ДО

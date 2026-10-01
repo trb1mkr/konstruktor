@@ -13,7 +13,7 @@ import {
 import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from './browserTheme'
 import { ensureStripToken, removeStripToken } from './stripOrder'
 import { openFindOverlay } from './findManager'
-import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlayManager'
+import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlay'
 import { getSettingsSync, saveSettings } from './settingsStore'
 import { recordVisit, updateMetadata } from './historyStore'
 import { START_URL } from './startPage'

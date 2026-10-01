@@ -10,7 +10,7 @@ import {
   updateSavedGroup,
   deleteSavedGroup
 } from './groupsStore'
-import { showOverlay, type OverlayMenuItem } from './overlayManager'
+import { showOverlay, type OverlayMenuItem } from './overlay'
 import { START_URL } from './startPage'
 import {
   allocInstance,
