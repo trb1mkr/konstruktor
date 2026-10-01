@@ -17,6 +17,8 @@ import {
 } from './pool'
 import { pushPayload, waitPageReady, dropPendingPush, updatePayload } from './pool'
 import type { PoolHooks } from './pool'
+import { boundsFromMeasurement, resolveBounds, surfaceFor } from './geometry'
+import type { SurfaceSpec } from './geometry'
 import {
   clearSession,
   isCurrentSession,
@@ -464,20 +466,127 @@ function noteFocusHandoff(parentId: number): void {
   focusHandoff.set(parentId, Date.now() + FOCUS_HANDOFF_MS)
 }
 
-const MENU_W = 260
-const MENU_ITEM_H = 40
-const MENU_PAD = 20
-const DIALOG_W = 320
-const DIALOG_H = 190
-// Общий диалог иконки: поле + 4 кнопки, выше обычного диалога.
-const ICON_W = 340
-const ICON_H = 250
-// Панель поиска: ширина как у VS Code, высота под одну строку + отступ.
-const FIND_W = 380
-const FIND_H = 56
+// Размеры поверхностей живут в geometry.ts. Хардкод вида
+// MENU_PAD + N * MENU_ITEM_H удалён на шаге 6: число 40 не имело
+// отношения к CSS (пункт в реальности занимал 46 px), и каждый пункт
+// съедал 6 px. Теперь размер приходит из renderer через
+// overlay:measured, а до измерения берётся запасной размер из
+// описания поверхности.
 
-function menuHeight(items: OverlayMenuItem[], incognito: boolean): number {
-  return MENU_PAD + items.length * MENU_ITEM_H + (incognito ? 26 : 0)
+/**
+ * Размер для первого кадра, до измерения в renderer.
+ *
+ * Для диалогов, иконы и поиска он точный: содержимое не влияет на
+ * высоту. Для меню — потолок: настоящая высота зависит от числа
+ * пунктов и приходит из `overlay:measured`.
+ *
+ * Меню в первом кадре получает минимальную вместимость, а не полную:
+ * брать «ожидаемую» высоту значило бы угадывать число пунктов, а
+ * ошибиться в меньшую сторону безопаснее — окно пустое и прозрачное,
+ * лишние 200 px просто не видны.
+ */
+function provisionalSize(request: OverlayRequest): { width: number; height: number } {
+  const spec = surfaceFor(request.kind, request.align)
+  if (spec.height !== null) return { width: spec.width, height: spec.height }
+  // Меню: хватает на шесть пунктов, дальше окно дорастёт по измерению.
+  const rows = request.kind === 'menu' ? (request.items?.length ?? 0) : 1
+  const estimated = Math.max(rows, 6)
+  return { width: spec.width, height: Math.min(estimated * MENU_ROW_FALLBACK_H, MAX_PROVISIONAL_H) }
+}
+
+// Запасная высота пункта меню для первого кадра.
+//
+// Это НЕ высота пункта в CSS и не должна ею быть: единственный источник
+// правды по высоте — измерение в renderer. Значение нужно только чтобы
+// окно было осмысленного размера до `overlay:measured`, и завышенная
+// высота безопаснее заниженной: лишняя пустота в прозрачном окне не
+// видна, а обрезанный пункт виден.
+const MENU_ROW_FALLBACK_H = 46
+
+// Потолок для первого кадра: очень длинное меню не должно занимать
+// весь экран, пока не пришло измерение.
+const MAX_PROVISIONAL_H = 600
+
+/** Что нужно для пересчёта позиции после измерения содержимого. */
+interface PendingGeometry {
+  spec: SurfaceSpec
+  anchor: { x: number; y: number }
+  parentBounds: Electron.Rectangle
+  workArea: Electron.Rectangle
+  flipped: boolean
+}
+
+// Родитель -> геометрия последнего показа. Живёт до прихода измерения:
+// без него applyMeasured не знает, что пересчитывать.
+const pendingGeometry = new Map<number, PendingGeometry>()
+
+/**
+ * Пересчитывает bounds по фактическому размеру содержимого.
+ *
+ * Вызывается из `overlay:measured`. Первая версия брала только ширину,
+ * и меню недотягивало по высоте; теперь учитываются оба размера.
+ *
+ * Токен сессии обязателен: измерение приходит из общего окна пула, и без
+ * сверки патч от предыдущей сессии передвинул бы текущую.
+ *
+ * @param sessionId токен сессии, к которой относится измерение.
+ * @param size фактический размер содержимого после монтирования.
+ * @returns true, если bounds обновлены.
+ */
+export function applyMeasured(
+  parent: BrowserWindow,
+  sessionId: number,
+  size: { width: number; height: number }
+): boolean {
+  if (!isCurrentSession(parent.id, sessionId)) {
+    log('geometry', 'STALE, dropped measurement', {
+      parentId: parent.id,
+      sessionId,
+      current: sessionOf<OverlayRequest>(parent.id)?.sessionId
+    })
+    return false
+  }
+  const pending = pendingGeometry.get(parent.id)
+  if (!pending) return false
+  const overlay = getPooledOverlay(parent.id)
+  if (!overlay || overlay.isDestroyed()) return false
+
+  // Нулевой или огромный размер — признак того, что измеряли не то
+  // (например, скрытый элемент с display:none). Применять такое нельзя:
+  // окно схлопнется или уедет за экран.
+  if (size.width < 1 || size.height < 1 || size.height > MAX_PROVISIONAL_H * 2) {
+    logError('implausible overlay measurement', new Error(JSON.stringify(size)))
+    return false
+  }
+
+  const next = boundsFromMeasurement(
+    pending.parentBounds,
+    pending.workArea,
+    pending.anchor,
+    pending.spec,
+    size
+  )
+  // Меняем только размеры: позиция пересчитана, но если она не изменилась
+  // (а обычно не меняется), лишний setBounds не нужен — он вызывает
+  // перерисовку поверхности композитором.
+  const current = overlay.getBounds()
+  if (
+    current.width === next.width &&
+    current.height === next.height &&
+    current.x === next.x &&
+    current.y === next.y
+  ) {
+    return false
+  }
+  overlay.setBounds(next)
+  log('geometry', 'bounds from measurement', {
+    parentId: parent.id,
+    sessionId,
+    was: { x: current.x, y: current.y, w: current.width, h: current.height },
+    now: { x: next.x, y: next.y, w: next.width, h: next.height },
+    measured: size
+  })
+  return true
 }
 
 // Переводит внутренний запрос в модель контракта для IPC-push.
@@ -675,6 +784,11 @@ export function closeOverlay(parent: BrowserWindow): void {
     // (потеря прогрева и лишние ~60 МБ на каждое открытие).
     if (!entry.overlay.isDestroyed()) {
       hideContent(entry.overlay, parent.id)
+      // Метка передачи фокуса обновляется перед возвратом: оверлей
+      // держит фокус прямо сейчас, и без свежей метки
+      // restoreFocusToParent на Linux решит, что метка протухла, и
+      // оставит клавиатуру в закрытом окне.
+      noteFocusHandoff(parent.id)
       // Фокус возвращаем после hideContent, но не потому что тот его
       // меняет (setOpacity/setIgnoreMouseEvents фокуса не трогают), а
       // чтобы окно уже было пустым на момент возврата: если между
@@ -874,62 +988,48 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     workArea: display.workArea,
     contentBounds: parentBounds
   })
-  const width =
-    request.kind === 'menu'
-      ? MENU_W
-      : request.kind === 'dialog'
-        ? DIALOG_W
-      : request.kind === 'icon'
-        ? ICON_W
-      : request.kind === 'find'
-        ? FIND_W
-        : 360
-  const height =
-    request.kind === 'menu'
-      ? menuHeight(request.items ?? [], request.incognito ?? false)
-      : request.kind === 'dialog'
-        ? DIALOG_H
-      : request.kind === 'icon'
-        ? ICON_H
-      : request.kind === 'find'
-        ? FIND_H
-        : 120
+  // Описание поверхности: размеры и выравнивание одним объектом.
+  // Хардкод вида MENU_PAD + N * MENU_ITEM_H удалён на шаге 6: число 40
+  // не имело отношения к CSS, и каждый пункт меню съедал 6 px.
+  //
+  // До измерения берётся размер из описания поверхности — этого хватает
+  // для первого кадра. Настоящий размер приходит из renderer через
+  // overlay:measured и корректирует bounds, см. applyMeasured.
+  const spec = surfaceFor(request.kind, request.align)
+  const provisional = provisionalSize(request)
 
-  // Диалог и диалог иконки — по центру родителя. Поиск — правый верхний угол ОБЛАСТИ
-  // СТРАНИЦЫ (ниже верхней панели UI): anchor несет uiInsets.top.
-  // Меню — от якоря (align end/start). Клампим в границы родителя.
-  const align = request.align ?? 'end'
-  const centered = request.kind === 'dialog' || request.kind === 'icon'
-  const isFind = request.kind === 'find'
-  // Тост — правый нижний угол с отступом. Раньше он брал координаты
-  // из anchor, и высота окна (120) отличалась от переданного отступа,
-  // из-за чего карточка плавала выше низа. Положение считаем сами:
-  // anchor тоста — устаревшее значение, на мигание оно не влияет.
-  const isToast = request.kind === 'toast'
-  const TOAST_GAP = 16
-  const x = centered
-    ? parentBounds.x + Math.max(0, Math.round((parentBounds.width - width) / 2))
-    : isFind
-      ? parentBounds.x + Math.max(0, parentBounds.width - width - 16)
-      : isToast
-        ? parentBounds.x + Math.max(0, parentBounds.width - width - TOAST_GAP)
-        : Math.min(
-            Math.max(
-              parentBounds.x + request.anchor.x - (request.kind === 'menu' && align === 'end' ? width - 40 : 0),
-              parentBounds.x
-            ),
-            parentBounds.x + parentBounds.width - width
-          )
-  const y = centered
-    ? parentBounds.y + Math.max(0, Math.round((parentBounds.height - height) / 2))
-    : isFind
-      ? parentBounds.y + request.anchor.y + 12
-      : isToast
-        ? parentBounds.y + Math.max(0, parentBounds.height - height - TOAST_GAP)
-        : Math.min(
-            parentBounds.y + request.anchor.y,
-            parentBounds.y + parentBounds.height - height
-          )
+  // Рабочая область дисплея РОДИТЕЛЯ, а не объединённая. При раскладке
+  // с окном на левом мониторе workArea.x отрицателен, и арифметика в
+  // положительных координатах уводит окно на соседний дисплей.
+  const workArea = display.workArea
+  log('geometry', 'parent display', {
+    parentId: parent.id,
+    displayId: display.id,
+    workArea,
+    contentBounds: parentBounds
+  })
+
+  const resolved = resolveBounds(
+    parentBounds,
+    workArea,
+    request.anchor,
+    spec,
+    provisional,
+    false
+  )
+  const { x, y, width, height } = resolved
+
+  // Геометрия запоминается для последующей коррекции по измерению:
+  // applyMeasured нужен якорь, границы родителя и описание поверхности,
+  // иначе он повторил бы позицию первого кадра вместо пересчёта.
+  pendingGeometry.set(parent.id, {
+    spec,
+    anchor: request.anchor,
+    parentBounds,
+    workArea,
+    flipped: resolved.flipped
+  })
+
 
   // Оверлей-окно уже создано заранее через ensureOverlayWindow.
   // Просто обновляем bounds и загружаем новый payload.

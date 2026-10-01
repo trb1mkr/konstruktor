@@ -164,9 +164,19 @@ onMounted(() => {
   window.overlayAPI?.onContentUnmounted?.((unmounted: boolean) => {
     contentUnmounted.value = unmounted
     if (unmounted) return
+    // Пока содержимое размонтировано, измерять нечего — и нечего
+    // сообщать: в main нет сессии с живым содержимым.
+    observer?.disconnect()
     const sessionId = payload.value?.sessionId
     if (sessionId === undefined) return
     void nextTick(() => {
+      // Наблюдатель — после того, как Vue снял v-if и элемент
+      // поверхности появился в DOM. Раньше он ставился по факту push,
+      // когда контента ещё не было: измерение возвращало 0, и окно
+      // оставалось с запасным размером до следующего изменения.
+      // Для окна у края экрана это значит мигание содержимого,
+      // потому что размер менялся на кадр позже, чем стал виден.
+      watchSurface()
       requestAnimationFrame(() => {
         window.overlayAPI?.painted(sessionId)
       })
@@ -182,8 +192,7 @@ onMounted(() => {
   // Отсутствие сессии на старте — норма (окно прогрето и ждёт), ошибкой
   // это не считается.
   // Тело обработчика вынесено в функцию, а не осталось в анонимной
-  // стрелке: отладочная инъекция ниже вызывает его РЕКУРСИВНО, чтобы
-  // сыграть роль запоздавшего сообщения из прошлой сессии.
+
   window.overlayAPI?.onPush?.((msg: OverlayPayload) => {
     // Запоздалый push от устаревшей сессии игнорируем. Окно из пула
     // одно, и main шлёт данные прямо в него: если сессия успела смениться
@@ -198,8 +207,15 @@ onMounted(() => {
       return
     }
 
-
     applyPayload(msg)
+    // Наблюдатель пересоздаётся здесь, а не в onMounted: содержимое
+    // сменилось, и старый наблюдатель смотрит на уже размонтированный узел.
+    // Измерять здесь рано: содержимое ещё размонтировано (v-if стоит
+    // на !contentUnmounted), элемента поверхности нет, и измерение
+    // вернёт пустоту. Наблюдатель ставится после снятия парковки —
+    // см. onContentUnmounted ниже.
+    observer?.disconnect()
+    observer = null
     traceAnimations(`push sessionId=${msg.sessionId}`)
   })
 
@@ -242,6 +258,63 @@ onMounted(() => {
 // бессмысленна — она относится к содержимому, которого на экране уже
 // нет. Поэтому шлём текущий и полагаемся на main: он отсечёт команду, если
 // её сессия уже не активна.
+
+// Измерение содержимого — единственный источник правды по размеру.
+//
+// До шага 6 main считал высоту меню формулой MENU_PAD + N * MENU_ITEM_H,
+// где MENU_ITEM_H = 40 не имело никакого отношения к CSS: пункт в
+// реальности занимал 46 px (padding 9+9, строка 14, border 1), и каждый
+// пункт съедал 6 px. Меню вкладки получало ~120 px пустоты внизу окна, а
+// длинное название группы обрезалось по формуле, а не по содержимому.
+//
+// Теперь размер снимается с реального DOM. ResizeObserver, а не
+// один замер на кадре: высота меняется при смене количества пунктов,
+// при переносе длинного названия и при смене шрифта в системе.
+//
+// Отправляем bounding box ПЕРВОГО дочернего элемента, а не .overlay-root:
+// корень растянут на 100vw x 100vh и меряет размеры ОКНА, а не
+// содержимого. Размер окна main знает и без нас — это замкнутый круг,
+// из-за которого размер никогда бы не сошёлся.
+let lastSent = { w: 0, h: 0 }
+let observer: ResizeObserver | null = null
+
+function measureContent(): void {
+  const sessionId = payload.value?.sessionId
+  if (sessionId === undefined) return
+  const root = document.querySelector<HTMLElement>('.overlay-root.live')
+  // Первый дочерний элемент — сама поверхность (меню, диалог, тост).
+  // Пока его нет, мерять нечего: размер нулевой, и отправка в main
+  // схлопнула бы окно.
+  const surface = root?.firstElementChild as HTMLElement | null
+  if (!surface) return
+  const rect = surface.getBoundingClientRect()
+  if (rect.width < 1 || rect.height < 1) return
+  // Округляем до целых: дробные пиксели не дают ничего, а в лог
+  // попадают значения, которые не с чем сравнить.
+  const w = Math.ceil(rect.width)
+  const h = Math.ceil(rect.height)
+  if (w === lastSent.w && h === lastSent.h) return
+  lastSent = { w, h }
+  window.overlayAPI?.measure({ sessionId, width: w, height: h })
+}
+
+// Наблюдатель пересоздаётся на каждую сессию: элемент поверхности
+// меняется при смене view (меню -> диалог), и старый наблюдатель
+// остался бы смотать прошлый узел.
+function watchSurface(): void {
+  observer?.disconnect()
+  observer = null
+  lastSent = { w: 0, h: 0 }
+  const root = document.querySelector<HTMLElement>('.overlay-root.live')
+  const surface = root?.firstElementChild
+  if (!surface) return
+  observer = new ResizeObserver(() => measureContent())
+  observer.observe(surface)
+  // Первый замер сразу: ResizeObserver срабатывает асинхронно, а main
+  // ждёт размер для первого кадра.
+  measureContent()
+}
+
 function currentSessionId(): number | undefined {
   return payload.value?.sessionId
 }

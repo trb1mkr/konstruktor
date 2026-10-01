@@ -35,6 +35,9 @@ import {
 import { getStateBySender } from '../browserState'
 import { openFindOverlay, queryFind, nextFind, prevFind, closeFind } from '../findManager'
 import { isCommandCurrent } from './session'
+import { applyMeasured, getParentOfOverlay } from './service'
+import { OVERLAY_CHANNELS } from '../../shared/overlay-types'
+import type { MeasureMessage } from '../../shared/overlay-types'
 
 /**
  * Окно оверлея по sender'у, либо undefined, если sender — не оверлей.
@@ -130,6 +133,26 @@ export function registerOverlayIpc(): void {
   ipcMain.on('overlay:trace', (e, message: string) => {
     const overlay = overlayOf(e)
     log('lifecycle', `[trace] ${message}`, { windowId: overlay?.id })
+  })
+
+  // Измерение содержимого: renderer сообщает реальные размеры после
+  // монтирования, main пересчитывает bounds по ним.
+  //
+  // Шаг 6. До этого размеры считались в main формулой
+  // MENU_PAD + N * MENU_ITEM_H, где MENU_ITEM_H = 40 не имело отношения
+  // к CSS: пункт в реальности занимал 46 px, и каждый пункт «съедал»
+  // 6 px. Хардкод удалён, единственный источник правды по размеру —
+  // измерение здесь.
+  //
+  // Канал `send`, а не `handle`: измерение — не команда и не требует
+  // ответа. Проверка `overlayOf` обязательна — sender это webContents
+  // окна оверлея, и для чужого окна пересчитывать нечего.
+  ipcMain.on(OVERLAY_CHANNELS.measured, (e, msg: MeasureMessage) => {
+    const overlay = overlayOf(e)
+    if (!overlay) return
+    const parent = getParentOfOverlay(overlay)
+    if (!parent) return
+    applyMeasured(parent, msg.sessionId, { width: msg.width, height: msg.height })
   })
 
   // Панель поиска (Ctrl+F) — оверлей kind 'find', но управляется вкладкой.
