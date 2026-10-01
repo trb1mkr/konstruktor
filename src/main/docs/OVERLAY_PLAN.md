@@ -4,7 +4,7 @@
 
 **Для нового агента или разработчика:** этот файл самодостаточен. Он содержит всю архитектуру, все найденные грабли, точный статус по шагам и критерии приёмки. Начинать чтение с раздела «Обязательные к соблюдению правила».
 
-## 📌 Статус: шаги 0–6 выполнены, изменения шага 6 не закоммичены
+## 📌 Статус: шаги 0–7 выполнены
 
 | # | Шаг | Статус | Коммит |
 |---|-----|--------|--------|
@@ -83,9 +83,9 @@ flowchart TB
 | Main | `src/main/overlay/ipc.ts` | Регистрация каналов | ✅ шаг 4c |
 | Preload | `src/preload/overlay.ts` | Типизированный мост | ✅ шаг 2 |
 | Renderer | `src/renderer/overlay/OverlayRoot.vue` | `v-else-if` роутер, станет `OverlayHost` | 🟡 шаг 4 частично |
-| Renderer | `src/renderer/overlay/registry.ts` | Соответствие view и компонента | ⬜ шаг 7 |
+| Renderer | `src/renderer/overlay/registry.ts` | Соответствие view и компонента | ✅ шаг 7 |
 | Renderer | `src/renderer/overlay/hooks/useOverlaySession.ts` | Хук сессии и измерений | ✅ шаг 6 (измерение в `OverlayRoot.vue`) |
-| Renderer | `src/renderer/overlay/components/*` | Универсальные компоненты | ⬜ шаг 7 |
+| Renderer | `src/renderer/overlay/components/*` | Универсальные компоненты | ✅ шаг 7 |
 
 ## 💡 Ключевые решения
 
@@ -288,7 +288,9 @@ sequenceDiagram
 
 **`src/preload/overlay.ts`** — мост по контракту из `overlay-types.ts`. Новые методы `onPush`, `onUpdate`, `send`, `measure`; старые `select`, `dismiss`, `submit`, `submitIcon`, `find*` помечены `@deprecated` и работают как раньше — вызовы мигрируются на шаге 10. `trace` и `painted` без изменений; `ready` удалён вместе с фазой готовности. `setContentUnmounted` и `onContentUnmounted` — переименованы на шаге 2 (были `setParked` / `onParked`).
 
-**`src/renderer/overlay/OverlayRoot.vue`** — слушает `onPush`, применяет payload через `applyPayload`, на `contentUnmounted = false` отвечает `painted`. Роутер `v-else-if` заменяется на `OverlayHost` с реестром — это шаг 7.
+**`src/renderer/overlay/OverlayRoot.vue`** — слушает `onPush`, применяет payload через `applyPayload`, на `contentUnmounted = false` отвечает `painted`.
+Роутер `v-else-if` заменён на выбор компонента из реестра по `model.view`: один
+`<component :is>` на все виды вместо цепочки условий.
 
 ## 📏 Шаги
 
@@ -539,7 +541,7 @@ Ctrl+F не работал до клика | **в проекте не было �
 подробный разбор в `docs/TROUBLESHOOTING.md`. Замеры: `resize` приходит
 113–216 раз за перетаскивание, `resized` на Linux не приходит ни разу.
 
-### ⬜ Шаг 7 — универсальные компоненты
+### ✅ Шаг 7 — универсальные компоненты
 
 `registry.ts` и компоненты `MenuList`, `DialogForm`, `FindPanel`, `ToastStack`, `IconPicker`. Старые `BrowserMenu` и `PromptDialog` становятся тонкими обёртками.
 

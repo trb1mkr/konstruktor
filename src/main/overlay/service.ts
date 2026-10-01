@@ -256,12 +256,22 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
       closeIfFocusLeftApp(overlay, parent.id)
     }, BLUR_SETTLE_MS)
   }
-  // Esc закрывает активный оверлей. Ловим на родителе, потому что сам
-  // оверлей открыт через showInactive() и клавиши не получает — Esc уходит
-  // в страницу, и renderer оверлея его не видит.
+  // Esc закрывает активный оверлей.
+  //
+  // Слушатель висит на ДВУХ webContents — родителя и самого оверлея, и это
+  // не дублирование, а следствие шага 7. Изначально обработчик был только
+  // на родителе: оверлей открывался через showInactive(), фокуса не
+  // получал, и Esc уходил в страницу браузера, а renderer оверлея его не
+  // видел. Теперь меню получает фокус (это нужно клавиатурной навигации),
+  // и Esc уходит уже в оверлей — слушатель на родителе молча перестал
+  // срабатывать, а в renderer Esc намеренно не ловится.
+  //
+  // Нажатие приходит ровно в тот webContents, у которого фокус, поэтому
+  // двойного закрытия не будет. Родитель оставлен на случай, когда фокус
+  // ещё не переехал (окно показано, фокусировка не успела).
   //
   // Тосты исключены: они пассивны, живут по своему таймеру и гаситься
-  // пользователем не должны. find/dialog/icon — наоборот, обязаны
+  // пользователем не должны. find/dialog/icon/menu — наоборот, обязаны
   // закрываться, причём не теряя введённый текст.
   const onBeforeInput = (
     event: Electron.Event,
@@ -278,19 +288,38 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     })
     closeOverlay(parent)
   }
+  parent.webContents.on('before-input-event', onBeforeInput)
+  overlay.webContents.on('before-input-event', onBeforeInput)
   parent.on('move', closeOnParent)
   parent.on('resize', closeOnParent)
   parent.on('minimize', closeOnParent)
   parent.on('blur', closeOnBlur)
   overlay.on('blur', onOverlayBlur)
-  parent.webContents.on('before-input-event', onBeforeInput)
   overlay.on('closed', () => {
     parent.removeListener('move', closeOnParent)
     parent.removeListener('resize', closeOnParent)
     parent.removeListener('minimize', closeOnParent)
     parent.removeListener('blur', closeOnBlur)
     overlay.removeListener('blur', onOverlayBlur)
-    parent.webContents.removeListener('before-input-event', onBeforeInput)
+    // Проверка уничтожения обязательна для ОБЕИХ сторон.
+    //
+    // Слушатель висит на дочернем оверлее, и при закрытии приложения он
+    // срабатывает в момент, когда одно из окон уже разрушено: родитель
+    // закрылся раньше оверлея, либо оверлей раньше родителя. Обращение к
+    // webContents уничтоженного окна бросает
+    // «Object has been destroyed» — и оно всплывает как необработанное
+    // исключение в главном процессе, с диалогом поверх приложения.
+    //
+    // Раньше здесь стоял только parent.webContents.removeListener, и окно
+    // не разрушалось при закрытии, поэтому наткнуться на это было нельзя.
+    // Оверлей из пула уничтожается при выходе, и тогда первым падал
+    // именно оверлейный webContents.
+    if (!parent.isDestroyed()) {
+      parent.webContents.removeListener('before-input-event', onBeforeInput)
+    }
+    if (!overlay.isDestroyed()) {
+      overlay.webContents.removeListener('before-input-event', onBeforeInput)
+    }
   })
 }
 
@@ -1093,10 +1122,20 @@ if (!overlay || overlay.isDestroyed()) {
     // подтвердил, в окне лежат пункты ПРЕДЫДУЩЕГО меню — пользователь
     // видит их как вспышку. Поэтому ждём overlay:painted.
     if (win.isDestroyed()) return
-    // Окно намеренно забирает фокус (find вызывает focus() ниже, диалоги
-    // автофокусом поля ввода) — родитель потеряет его после setBounds.
-    // Помечаем заранее, чтобы blur не закрыл только что показанное меню.
-    if (request.kind === 'find' || request.kind === 'icon' || request.kind === 'dialog') {
+    // Окно намеренно забирает фокус (find вызывает focus() ниже, меню
+    // тоже, диалоги — автофокусом поля ввода) — родитель потеряет его
+    // после setBounds. Помечаем заранее, чтобы blur не закрыл только
+    // что показанную поверхность.
+    //
+    // 'menu' в списке обязателен: он в фокусе с момента открытия, а
+    // родитель, теряя фокус, посчитал бы это уходом из приложения и
+    // закрыл меню тем самым фокусированием.
+    if (
+      request.kind === 'find' ||
+      request.kind === 'icon' ||
+      request.kind === 'dialog' ||
+      request.kind === 'menu'
+    ) {
       noteFocusHandoff(parent.id)
     }
     // Окно может быть ЖИВЫМ (переключение поверх открытого меню) или
@@ -1194,7 +1233,15 @@ if (!overlay || overlay.isDestroyed()) {
       return
     }
     win.setOpacity(1)
-    if (request.kind === 'find') {
+    // Клавиатура в меню. Оверлей открыт через showInactive() и сам фокуса
+    // не получает: без focus() стрелки не доходят до renderer, и навигация
+    // «оживала» только после клика по самому меню. Клик работал потому,
+    // что он активировал окно — то есть фокус давал первый клик, а не
+    // открытие.
+    //
+    // Меню и панель поиска забирают фокус; диалоги — через автофокус поля
+    // ввода, тост фокуса не берёт вовсе (он пассивен).
+    if (request.kind === 'find' || request.kind === 'menu') {
       try {
         win.focus()
       } catch (err) {

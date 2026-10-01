@@ -1,10 +1,58 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
-import BrowserMenu from './BrowserMenu.vue'
-import ToastStack from './ToastStack.vue'
-import PromptDialog from './PromptDialog.vue'
-import IconDialog from './IconDialog.vue'
-import FindBar from './FindBar.vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
+
+// Компонент текущего вида и пропы для него.
+//
+// Реестр отвечает за ВЫБОР компонента, это место — за форму пропов.
+// Форма едина для всех видов: каждый компонент объявляет нужные ему поля
+// и игнорирует остальные. Альтернатива — передать всю модель целиком, но
+// тогда компоненты знали бы о видах, которых не касаются, и правка модели
+// в одном виде ломала бы чужие компоненты.
+import { componentFor } from './registry'
+
+const currentComponent = computed(() => {
+  const view = payload.value?.model?.view
+  if (!view) return null
+  return componentFor(view)
+})
+
+const currentProps = computed(() => {
+  const p = payload.value
+  if (!p) return {}
+  const model = p.model
+  // Общие поля для всех видов: токен сессии нужен каждому компоненту
+  // для команд. anchorLeft — только меню, но передаётся всем и
+  // игнорируется лишними.
+  const base = {
+    sessionId: p.sessionId,
+    anchorLeft: p.anchorLeft
+  }
+  switch (model.view) {
+    case 'menu':
+      return {
+        ...base,
+        items: model.items ?? [],
+        incognito: model.badge === 'incognito',
+        align: p.anchorLeft ? 'start' : 'end'
+      }
+    case 'toast':
+      // Модель может прийти без toast — тогда компонент не рендерим
+      // вовсе, а не показываем пустую карточку.
+      return model.toast ? { ...base, toast: model.toast } : null
+    case 'dialog':
+      return model.dialog ? { ...base, dialog: model.dialog } : null
+    case 'icon':
+      return model.icon ? { ...base, icon: model.icon } : null
+    case 'find':
+      return {
+        ...base,
+        initial: model.find?.query ?? '',
+        counter: model.find?.counter ?? ''
+      }
+    default:
+      return null
+  }
+})
 
 // Формы берёмся из контракта, а не дублируются здесь.
 //
@@ -289,10 +337,20 @@ function measureContent(): void {
   if (!surface) return
   const rect = surface.getBoundingClientRect()
   if (rect.width < 1 || rect.height < 1) return
+  // Размер окна = размер карточки ПЛЮС её поля (margin). Без этого окно
+  // вырезалось по габаритам самой карточки, и та прижималась к нижней
+  // границе окна. Нижние углы скругления оказывались на самой кромке
+  // поверхности и срезались Compositor'ом — меню выглядело с острым
+  // нижним углом. Поля не входят в getBoundingClientRect, поэтому
+  // прибавляем их явно.
+  const style = getComputedStyle(surface)
+  const mx = parseFloat(style.marginLeft) + parseFloat(style.marginRight)
+  const my = parseFloat(style.marginTop) + parseFloat(style.marginBottom)
   // Округляем до целых: дробные пиксели не дают ничего, а в лог
-  // попадают значения, которые не с чем сравнить.
-  const w = Math.ceil(rect.width)
-  const h = Math.ceil(rect.height)
+  // попадают значения, которые не с чем сравнить. Округление вверх, а
+  // не вниз: округление вниз срезало бы ту же границу.
+  const w = Math.ceil(rect.width + mx)
+  const h = Math.ceil(rect.height + my)
   if (w === lastSent.w && h === lastSent.h) return
   lastSent = { w, h }
   window.overlayAPI?.measure({ sessionId, width: w, height: h })
@@ -343,34 +401,18 @@ async function onSubmit(value: string) {
          Прозрачности окна для этого недостаточно. -->
     <template v-if="!contentUnmounted">
       <div v-if="error" class="overlay-error">{{ error }}</div>
-      <BrowserMenu
-        v-else-if="payload?.model.view === 'menu'"
-        :items="payload.model.items ?? []"
-        :incognito="payload.model.badge === 'incognito'"
-        :align="payload.anchorLeft ? 'start' : 'end'"
+      <!-- Один компонент на вид, выбранный по model.view. Пропы
+           единообразные: каждый компонент объявляет нужные ему поля и
+           игнорирует остальные. Раньше здесь стояла цепочка
+           v-else-if на пять компонентов, и добавление вида требовало
+           править шаблон: забытое условие давало пустое окно без
+           ошибок и без логов. -->
+      <component
+        :is="currentComponent"
+        v-else-if="currentComponent"
+        v-bind="currentProps"
         @select="onSelect"
-      />
-      <ToastStack
-        v-else-if="payload?.model.view === 'toast' && payload.model.toast"
-        :toast="payload.model.toast"
-        :session-id="payload.sessionId"
-      />
-      <PromptDialog
-        v-else-if="payload?.model.view === 'dialog' && payload.model.dialog"
-        :dialog="payload.model.dialog"
-        :session-id="payload.sessionId"
         @submit="onSubmit"
-      />
-      <IconDialog
-        v-else-if="payload?.model.view === 'icon' && payload.model.icon"
-        :icon="payload.model.icon"
-        :session-id="payload.sessionId"
-      />
-      <FindBar
-        v-else-if="payload?.model.view === 'find'"
-        :initial="payload.model.find?.query ?? ''"
-        :counter="payload.model.find?.counter ?? ''"
-        :session-id="payload.sessionId"
       />
     </template>
   </div>
