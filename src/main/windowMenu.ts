@@ -79,7 +79,6 @@ export function showWindowMenu(
     kind: 'window-menu',
     anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
     items,
-    incognito: false,
     align: 'start',
     onSelect: (action) => {
       // Окно могло закрыться, пока меню было открыто: действовать не на чем.

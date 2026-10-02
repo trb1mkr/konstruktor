@@ -9,9 +9,11 @@ import MenuList from './components/MenuList.vue'
 // Всё остальное (пункты, клавиатура, оформление) — в MenuList. Держать
 // здесь копию вёрстки пункта было бы ровно тем, что делает общий MenuList: четыре
 // меню приложения, четыре копии, и ни в одной нет навигации стрелками.
+// Проп incognito удалён вместе с бейджем «Incognito» над пунктами:
+// признак приватности теперь только бейдж в заголовке окна, а второй
+// лейбл в меню читался как отдельный режим и путал с системной строкой.
 defineProps<{
   items: MenuItem[]
-  incognito: boolean
   align?: 'start' | 'end'
 }>()
 
@@ -25,7 +27,6 @@ const emit = defineEmits<{
     class="browser-menu"
     :class="{ 'align-start': align === 'start' }"
     :items="items"
-    :badge="incognito ? '🕵️ Incognito' : undefined"
     @select="emit('select', $event)"
   />
 </template>

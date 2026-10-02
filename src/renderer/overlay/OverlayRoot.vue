@@ -32,7 +32,6 @@ export type { MenuItem }
 interface OverlayModel {
   view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu'
   items?: MenuItem[]
-  badge?: string
   toast?: ToastModel
   dialog?: DialogModel
   icon?: IconModel
@@ -83,7 +82,6 @@ function propsFor(level: Level): Record<string, unknown> | null {
       return {
         ...base,
         items: model.items ?? [],
-        incognito: model.badge === 'incognito',
         align: level.anchorLeft ? 'start' : 'end'
       }
     // Меню окна: та же карточка, но без бейджа инкогнито — вкладка и окно
@@ -652,12 +650,11 @@ async function onSubmit(value: string) {
 .overlay-root.align-start {
   justify-content: flex-start;
 }
-/* Тосты — правый нижний угол окна. Окно тоста и так ставится main в
-   правый нижний угол родителя, но внутри окна контент по умолчанию
-   прижат к верху, и карточка уезжает вверх от нижнего отступа. */
-.overlay-root:has(.toast-stack) {
-  align-items: flex-end;
-}
+/* Правило `align-items: flex-end` для тоста удалено вместе с width/height
+   на .toast-stack. Окно оверлея равно самой карточке, поэтому прижимать
+   контент к низу было нечего: он и так занимал всё окно. Хуже того,
+   контейнер на 100% растягивал уровень, и лишние 32 px padding уходили
+   в размер окна, который main и ставил по правому краю. */
 /* Диалог — по центру окна, меню/тосты — как раньше. Без дим-подложки:
    окно оверлея ровно по размеру панели, затемнение по краям выглядело
    как полупрозрачная обводка. Теней (box-shadow) тоже нет. */

@@ -91,7 +91,6 @@ interface OverlayRequest {
   kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu'
   anchor: { x: number; y: number }
   items?: OverlayMenuItem[]
-  incognito?: boolean
   toast?: { title: string; body?: string; timeout?: number }
   dialog?: {
     title: string
@@ -821,7 +820,7 @@ export function applyMeasured(
 // контракту из shared/overlay-types.ts, и его форма задаётся там.
 function overlayModel(request: OverlayRequest): OverlayModel {
   if (request.kind === 'menu') {
-    return { view: 'menu', items: request.items ?? [], badge: request.incognito ? 'incognito' : undefined }
+    return { view: 'menu', items: request.items ?? [] }
   }
   if (request.kind === 'window-menu') {
     return { view: 'window-menu', items: request.items ?? [] }

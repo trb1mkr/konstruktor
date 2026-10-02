@@ -71,7 +71,6 @@ export function showGroupContextMenu(
     kind: 'menu',
     anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
     items,
-    incognito: false,
     align: 'start',
     onSelect: (action) => {
       const live = win && !win.isDestroyed() ? getState(win) : undefined
@@ -184,7 +183,6 @@ export function showGroupContextMenu(
             kind: 'menu',
             anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
             items: targets,
-            incognito: false,
             align: 'start',
             onSelect: (targetId) => {
               const l2 = win && !win.isDestroyed() ? getState(win) : undefined
@@ -225,7 +223,6 @@ export function showGroupContextMenu(
             kind: 'menu',
             anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
             items: targets,
-            incognito: false,
             align: 'start',
             onSelect: (targetSavedId) => {
               const l3 = win && !win.isDestroyed() ? getState(win) : undefined

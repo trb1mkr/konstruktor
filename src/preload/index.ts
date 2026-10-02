@@ -113,7 +113,9 @@ const browserAPI = {
   // Втягивание чужой вкладки в это окно (слияние окон).
   attachTab: (id: number): Promise<boolean> => ipcRenderer.invoke('tabs:attach', id),
   // Новое инкогнито-окно (in-memory партиция).
-  openIncognito: (): Promise<number | null> => ipcRenderer.invoke('window:incognito'),
+  // Переключить приватность текущего окна (вкладки переоткрываются
+  // в другой партиции). Возвращает новый режим: true = приватный.
+  toggleIncognito: (): Promise<boolean> => ipcRenderer.invoke('window:incognito'),
   // Кнопки кастомного заголовка окна.
   minimizeWindow: (): Promise<boolean> => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: (): Promise<boolean> => ipcRenderer.invoke('window:toggle-maximize'),

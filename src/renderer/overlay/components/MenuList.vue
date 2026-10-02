@@ -18,12 +18,10 @@ import type { MenuItem } from '../../../shared/overlay-types'
 const props = withDefaults(
   defineProps<{
     items: MenuItem[]
-    /** Бейдж над пунктами (инкогнито). */
-    badge?: string
     /** Активный индекс; -1 = ни один. */
     modelValue?: number
   }>(),
-  { badge: undefined, modelValue: -1 }
+  { modelValue: -1 }
 )
 
 const emit = defineEmits<{
@@ -160,7 +158,6 @@ defineExpose({ focusFirst: toStart })
     @keydown="onKeydown"
     @mousedown.stop
   >
-    <div v-if="badge" class="menu-badge">{{ badge }}</div>
     <template v-for="(item, index) in items" :key="item.id">
       <div v-if="item.separator" class="menu-separator" role="separator" />
       <button
@@ -201,11 +198,6 @@ defineExpose({ focusFirst: toStart })
 }
 .menu-list:focus-visible {
   outline: 1px solid var(--ov-border);
-}
-.menu-badge {
-  font-size: 12px;
-  color: #9d7bff;
-  padding: 6px 10px 2px;
 }
 .menu-item {
   display: flex;

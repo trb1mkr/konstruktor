@@ -23,7 +23,12 @@ export interface TabsDeps {
   layoutActiveView: (ws: WindowState) => void
   toggleFullscreenMode: (ws: WindowState) => boolean
   persistSessionTabs: (ws: WindowState) => void
-  createWindow: (opts: { x?: number; y?: number; incognito?: boolean }) => WindowState
+  // restoreSession пробрасывается в createWindow: «Open new window» открывает
+  // пустое окно и не должен подхватывать sessionTabs (общий слот на всё
+  // приложение) — иначе «новое» окно оказывалось бы копией чужого.
+  // Опции incognito больше нет: приватное окно не создаётся, режим
+  // переключается на живом через switchIncognito.
+  createWindow: (opts: { x?: number; y?: number; restoreSession?: boolean }) => WindowState
   pruneEmptyGroup: (ws: WindowState, instanceId: string) => void
 }
 
@@ -319,12 +324,15 @@ export function cloneWindow(
 
   const ws = deps.createWindow({
     x: fromWin.getPosition()[0] + offsetX,
-    y: fromWin.getPosition()[1] + offsetY,
-    // Клон наследует режим инкогнито: обычное окно не должно получить
-    // вкладки из приватной сессии.
-    incognito: fromWs.incognito
+    y: fromWin.getPosition()[1] + offsetY
   })
   if (!ws.window) return
+  // Режим клона повторяет режим исходного окна, и флаг ставится ДО
+  // создания вкладок: createTab берёт партицию из ws.incognito, и
+  // переключать окно через switchIncognito нельзя — оно переоткрывает
+  // вкладки. Обычному окну попадать в приватную сессию тоже нельзя,
+  // поэтому порядок именно такой: сначала флаг, потом вкладки.
+  ws.incognito = fromWs.incognito
   for (const g of groups) {
     ws.openGroups.push(g)
     // Токен группы в ряду: только корневые. Вложенные рисуются внутри
@@ -377,10 +385,105 @@ export function cloneWindow(
   ws.activeTabId =
     activeId ?? (ws.tabOrder.length > 0 ? ws.tabOrder[ws.tabOrder.length - 1] : null)
   if (ws.activeTabId !== null) setActiveTab(ws, deps, ws.activeTabId)
+
   pushTabsState(ws)
 }
 
 // Новое окно создается ПЕРВЫМ (renderer успечает прислать layout до переезда),
+// затем view переносится. Иначе did-finish-load нового окна создаст лишнюю
+// стартовую вкладку, а pushTabsState уйдет в пустоту.
+/**
+ * Переключить окно в приватный режим или обратно.
+ *
+ * Вкладки пересоздаются заново, а не переводятся: партиция задаётся на
+ * WebContentsView в момент создания и сменить её у живой view нельзя.
+ * Старые view закрываются, новые открываются по сохранённым URL.
+ *
+ * Что переносится: url, заголовок, иконка, закрепление, группа. Что НЕ
+ * переносится: история вкладки, cookies, localStorage сайта — их нет в
+ * приватной партиции в принципе. Поэтому переключение «туда» не
+ * обратимо данными, а обратно вкладки просто откроются заново.
+ *
+ * Группы переносятся как есть: instanceId сохраняются, поэтому ссылки
+ * вкладок на группы остаются валидными.
+ *
+ * Порядок обязателен: сначала снимаем все view, потом создаём новые.
+ * Иначе панель на миг показала бы и старые, и новые вкладки, и при
+ * большом числе вкладок activeTabId указывал бы на закрытую.
+ */
+export function switchIncognito(
+  ws: WindowState,
+  deps: TabsDeps,
+  toIncognito: boolean
+): void {
+  if (!ws.window || ws.window.isDestroyed()) return
+  if (ws.incognito === toIncognito) return
+
+  // Слепок до разрушения: после закрытия view данных не будет.
+  const saved = ws.tabOrder
+    .map((id) => {
+      const rec = ws.tabs.get(id)
+      if (!rec) return null
+      return {
+        url: rec.url,
+        title: rec.title,
+        favicon: rec.favicon,
+        customTitle: rec.customTitle,
+        customFavicon: rec.customFavicon,
+        pinned: rec.pinned,
+        groupId: rec.groupId,
+        active: id === ws.activeTabId
+      }
+    })
+    .filter((t): t is NonNullable<typeof t> => t !== null)
+  const groups = ws.openGroups.map((g) => ({ ...g }))
+
+  // Старые view закрываем все до создания новых.
+  for (const rec of ws.tabs.values()) {
+    try {
+      ws.window.contentView.removeChildView(rec.view)
+      rec.view.webContents.close()
+    } catch {
+      // view уже мертва — игнорим.
+    }
+  }
+  ws.tabs.clear()
+  ws.tabOrder = []
+  ws.stripOrder = []
+  ws.pinnedStripOrder = []
+  ws.openGroups = groups
+  ws.activeTabId = null
+  ws.incognito = toIncognito
+
+  if (saved.length === 0) {
+    createTab(ws, deps, START_URL)
+    pushTabsState(ws)
+    return
+  }
+
+  let activeId: number | null = null
+  for (const t of saved) {
+    const id = createTab(ws, deps, t.url)
+    const rec = ws.tabs.get(id)
+    if (!rec) continue
+    rec.title = t.title
+    rec.favicon = t.favicon
+    rec.customTitle = t.customTitle
+    rec.customFavicon = t.customFavicon
+    rec.pinned = t.pinned
+    rec.groupId = t.groupId
+    if (t.groupId) removeStripToken(ws, `t:${id}`)
+    if (t.active) activeId = id
+  }
+  // Активной делаем ту же вкладку, что была активной: переключение
+  // режима не должно сбрасывать пользователя на первую вкладку.
+  ws.activeTabId =
+    activeId ?? (ws.tabOrder.length > 0 ? ws.tabOrder[ws.tabOrder.length - 1] : null)
+  if (ws.activeTabId !== null) setActiveTab(ws, deps, ws.activeTabId)
+  pushTabsState(ws)
+}
+
+// Новое окно создается ПЕРВЫМ (renderer успевает прислать layout до переезда),
 // затем view переносится. Иначе did-finish-load нового окна создаст лишнюю
 // стартовую вкладку, а pushTabsState уйдет в пустоту.
 export function detachTabToNewWindow(
@@ -392,13 +495,14 @@ export function detachTabToNewWindow(
 ): void {
   const rec = fromWs.tabs.get(id)
   if (!rec || !fromWs.window) return
-  // Detach наследует incognito-флаг: партиция view уже задана при создании.
+  // Флаг приватности ставится ДО переноса view: у detached-вкладки партиция
+  // уже задана при создании, и обычное окно принять приватную view не должно.
   const ws = deps.createWindow({
     x: Math.round(sx - 80),
-    y: Math.round(sy - 40),
-    incognito: fromWs.incognito
+    y: Math.round(sy - 40)
   })
   if (!ws.window) return
+  ws.incognito = fromWs.incognito
   // Переносим view сразу: новое окно еще грузит renderer, вкладка уже в tabOrder.
   // did-finish-load увидит непустой tabs и не создаст стартовую.
   ws.tabs.set(id, rec)

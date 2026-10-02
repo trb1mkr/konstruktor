@@ -4,7 +4,7 @@
 // принимает их через deps во избежание циклических импортов.
 import { app, BrowserWindow, WebContentsView } from 'electron'
 import { join } from 'path'
-import { windows, type WindowState } from './browserState'
+import { windows, type WindowState, INCOGNITO_PARTITION } from './browserState'
 import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { openFindOverlay } from './findManager'
 import { ensureOverlayWindow } from './overlay'
@@ -204,7 +204,6 @@ export function createWindow(
   opts: {
     x?: number
     y?: number
-    incognito?: boolean
     /**
      * Читать ли вкладки из sessionTabs при готовности renderer.
      *
@@ -226,7 +225,9 @@ export function createWindow(
     stripOrder: [],
     pinnedStripOrder: [],
     uiInsets: { top: 110, bottom: 50, left: 0, right: 0 },
-    incognito: opts.incognito ?? false,
+    // Новое окно всегда обычное: отдельного приватного окна больше нет,
+    // режим переключается на уже открытом через switchIncognito.
+    incognito: false,
     contentFullscreen: false,
     openGroups: []
   }
@@ -260,6 +261,24 @@ export function createWindow(
       // CJS-билд preload (format: 'cjs'): index.cjs рядом с internal.cjs.
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
+      // Партиция НЕ задаётся здесь.
+      //
+      // Раньше здесь стояло `partition: opts.incognito ? ...`, но после
+      // перехода на переключение режима в существующем окне это стало
+      // ложью: webPreferences читаются один раз при создании BrowserWindow,
+      // и сменить партицию живого окна нельзя. Окно, переключённое в
+      // приватный режим, продолжало бы писать localStorage шелла на диск.
+      //
+      // Теперь окно всегда грузится в in-memory партицию: различие между
+      // режимами делают вкладки (WebContentsView получают партицию в
+      // createTab, и она пересоздаётся при переключении). Для шелла
+      // разницы нет — хранить в нём нечего, кроме истории и закладок
+      // панели, а они в приватном режиме скрыты.
+      //
+      // Цена: localStorage обычного окна тоже не переживает перезапуск.
+      // Если понадобится сохранять — отдельная партиция на режим и
+      // перезагрузка renderer при переключении.
+      partition: INCOGNITO_PARTITION,
       // ESM-прелоад (.mjs при "type": "module") требует sandbox: false,
       // иначе скрипт молча не грузится и window.browserAPI undefined.
       sandbox: false

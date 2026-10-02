@@ -35,13 +35,18 @@ async function close() {
 
 <style scoped>
 .toast-stack {
-  width: 100%;
-  height: 100%;
+  /* Размер задаёт карточка, а не контейнер.
+     Раньше здесь стояло width/height: 100%, и контейнер растягивался на
+     размер окна оверлея, а padding добавлялся СВЕРХ него. В итоге уровень
+     в DOM был шире карточки на 32 px, main считал окно по этой ширине и
+     ставил его левее нужного — тост уезжал от правого края ровно на
+     величину padding.
+     Теперь контейнер по размеру содержимого (width/height не заданы), а
+     отступ от края окна даёт gap в geometry.ts. */
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   align-items: flex-end;
-  padding: 12px;
 }
 .toast {
   background: var(--ov-bg);

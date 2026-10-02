@@ -49,6 +49,10 @@ const SURFACES: Record<ViewKind, SurfaceSpec> = {
   // Поиск: ширина как у VS Code, высота под одну строку плюс отступы.
   find: { width: 380, height: 56, align: 'page-top-right', gap: 12 },
   // Тост: максимум по ширине, высота зависит от числа строк текста.
+  //
+  // gap — отступ от угла страницы. Он применяется ЗДЕСЬ, потому что окно
+  // оверлея равно самой карточке: отступ внутри компонента съедался бы
+  // заново при каждом измерении и уводил карточку от края.
   toast: { width: 360, height: null, align: 'page-bottom-right', gap: 16 }
 }
 
@@ -128,10 +132,15 @@ export function resolveBounds(
       break
 
     case 'page-bottom-right':
-      // Тост — правый нижний угол области страницы. Раньше он брал
-      // координаты из anchor, и высота окна не совпадала с переданным
-      // отступом, из-за чего карточка плавала выше низа. Положение
-      // считаем сами, anchor по вертикали игнорируем.
+      // Тост — правый нижний угол области страницы, то есть ОКНА, а не
+      // монитора. Отсчёт от экрана выглядел правильным в полноэкранном
+      // окне, но в оконном режиме уводил карточку за пределы окна и под
+      // панель задач.
+      //
+      // gap здесь — единственный отступ от угла. Внутри компонента его
+      // быть не должно: padding на контейнере добавлялся к размеру
+      // уровня, и main считал окно по этой лишней ширине, из-за чего
+      // карточка уезжала от правого края ровно на величину padding.
       x = parentBounds.x + parentBounds.width - width - gap
       y = parentBounds.y + parentBounds.height - height - gap
       break
@@ -167,13 +176,26 @@ export function resolveBounds(
     }
   }
 
-  // Последний кламп: в пределах рабочей области дисплея родителя.
-  // Именно дисплея, а не родителя: окно у края родителя — норма, а за
-  // экраном пользователь его не увидит.
-  const maxX = workArea.x + workArea.width - width
-  const maxY = workArea.y + workArea.height - height
-  const clampedX = Math.min(Math.max(Math.round(x), workArea.x), Math.max(workArea.x, maxX))
-  const clampedY = Math.min(Math.max(Math.round(y), workArea.y), Math.max(workArea.y, maxY))
+  // Последний кламп: не выходить за рабочую область дисплея родителя.
+  //
+  // Для поверхностей, привязанных к ОКНУ (toast, find), граница берётся
+  // по самому родителю, а не по дисплею. Иначе в оконном режиме
+  // карточка считалась от угла окна, но ограничивалась краем экрана —
+  // то есть уезжала за пределы окна, под его рамку и панель задач.
+  //
+  // Нижняя граница клампится вверх: если окно ниже карточки, прижимаем
+  // к низу родителя, иначе тост уехал бы в панель заголовка.
+  const parentMaxX = parentBounds.x + parentBounds.width - width
+  const parentMaxY = parentBounds.y + parentBounds.height - height
+  const isWindowAnchored = align === 'page-bottom-right' || align === 'page-top-right'
+  const boundX = isWindowAnchored
+    ? parentMaxX
+    : workArea.x + workArea.width - width
+  const boundY = isWindowAnchored
+    ? parentMaxY
+    : workArea.y + workArea.height - height
+  const clampedX = Math.min(Math.max(Math.round(x), workArea.x), Math.max(workArea.x, boundX))
+  const clampedY = Math.min(Math.max(Math.round(y), workArea.y), Math.max(workArea.y, boundY))
 
   if (measured && (clampedX !== Math.round(x) || clampedY !== Math.round(y))) {
     log('geometry', 'clamped to work area', {

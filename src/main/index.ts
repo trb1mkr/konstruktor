@@ -45,6 +45,7 @@ import {
   closeTab as closeTabRaw,
   detachTabToNewWindow as detachTabRaw,
   cloneWindow,
+  switchIncognito,
   pruneEmptyGroup,
   pushTabsState,
   type TabsDeps
@@ -144,7 +145,7 @@ function detachTabToNewWindow(fromWs: WindowState, id: number, sx: number, sy: n
 // пустое окно и не должен подхватывать sessionTabs (общий слот на всё
 // приложение) — иначе «новое» окно оказывалось бы копией чужого.
 function createWindow(
-  opts: { x?: number; y?: number; incognito?: boolean; restoreSession?: boolean } = {}
+  opts: { x?: number; y?: number; restoreSession?: boolean } = {}
 ): WindowState {
   const windowDeps: WindowDeps = { createTab, setActiveTab, pushTabsState }
   return createWindowRaw(opts, windowDeps)
@@ -153,8 +154,34 @@ function createWindow(
 // Загрузки: один обработчик на сессию. Файл качается через will-download,
 // прогресс пишем в downloads.json — страница konstruktor://downloads
 // читает через IPC и обновляется раз в секунду.
-function setupDownloads(ses: Electron.Session) {
+//
+// Загрузки разрешены и в приватном окне: файл всё равно попадает на
+// диск, и запрет был искусственным ограничением, а не требованием
+// приватности. Приватность касается cookies, кэша и истории навигации.
+//
+// Поэтому флаг приватности ниже НЕ передаётся: setupDownloads работает
+// одинаково для всех партиций, а скрытие следов загрузки — задача
+// downloads:* (там приватное окно получает пустой список).
+function setupDownloads(ses: Electron.Session, privateMode = false) {
   ses.on('will-download', (_e, item) => {
+    // Окно-владелец загрузки — нужно, чтобы тост о загрузке всплыл
+    // в том окне, где шла загрузка, а не во всех сразу.
+    //
+    // У will-download нет sender: событие сессионное, а не привязано к
+    // webContents, и Session не сообщает свою партицию. Поэтому режим
+    // передаётся флагом при регистрации обработчика, а окно ищется по
+    // нему.
+    //
+    // Сверять окно с самой сессией обработчика нельзя: партиция ТАБКИ и
+    // партиция окна-шелла разные (вкладки живут в NORMAL/INCOGNITO, окно
+    // всегда в INCOGNITO — см. windowsManager), так что сравнение не
+    // нашло бы ни одного окна.
+    const ownerWindow = [...windows.values()].find(
+      (ws) =>
+        ws.incognito === privateMode &&
+        ws.window &&
+        !ws.window.isDestroyed()
+    )?.window
     const filename = item.getFilename() || 'download'
     const id = newDownloadId()
     const savePath = join(app.getPath('downloads'), filename)
@@ -191,17 +218,18 @@ function setupDownloads(ses: Electron.Session) {
         state: finalState,
         endedAt: Date.now()
       }).then(() => {
-        if (finalState === 'completed') {
-          for (const ws of windows.values()) {
-            if (!ws.window || ws.window.isDestroyed()) continue
-            const bounds = ws.window.getContentBounds()
-            showOverlay(ws.window, {
-              kind: 'toast',
-              anchor: { x: Math.max(0, bounds.width - 380), y: bounds.height - 160 },
-              toast: { title: 'Download complete', body: filename }
-            })
-          }
-        }
+        if (finalState !== 'completed') return
+        // Тост шлём в то окно, где шла загрузка. Раньше он рассылался во
+        // все окна, и скачивание в обычном окне всплывало тостом в
+        // приватном — в другом окне и о другом действии.
+        if (!ownerWindow || ownerWindow.isDestroyed()) return
+        showOverlay(ownerWindow, {
+          kind: 'toast',
+          // anchor не задаётся: для тоста он игнорируется, положение
+          // считает geometry.ts по углу рабочей области дисплея.
+          anchor: { x: 0, y: 0 },
+          toast: { title: 'Download complete', body: filename }
+        })
       })
     })
   })
@@ -231,7 +259,6 @@ function registerIpc() {
         return { id, url: t.url, title: t.customTitle ?? t.title, pinned: t.pinned, favicon: t.customFavicon ?? t.favicon, groupId: t.groupId }
       }),
       activeTabId: ws.activeTabId,
-      incognito: ws.incognito,
       openGroups: ws.openGroups.map((g) => ({ ...g })),
       stripOrder: [...ws.stripOrder],
       pinnedStripOrder: [...ws.pinnedStripOrder]
@@ -343,7 +370,6 @@ function registerIpc() {
       kind: 'menu',
       anchor: { x: Math.round(payload.x), y: Math.round(payload.y) },
       items,
-      incognito: false,
       align: 'start',
       onSelect: (action) => {
         const target = findTab(id)
@@ -416,7 +442,6 @@ function registerIpc() {
               kind: 'menu',
               anchor: { x: Math.round(payload.x), y: Math.round(payload.y) },
               items: targets,
-              incognito: false,
               align: 'start',
               onSelect: (targetId) => {
                 const cur = findTab(id)
@@ -501,7 +526,6 @@ function registerIpc() {
       kind: 'menu',
       anchor: { x: Math.round(payload.x), y: Math.round(payload.y) },
       items,
-      incognito: false,
       align: 'start',
       onSelect: (action) => {
         const live = win && !win.isDestroyed() ? getState(win) : undefined
@@ -530,10 +554,18 @@ function registerIpc() {
       }
     })
   })
-  // Новое инкогнито-окно: in-memory партиция, данные стираются при закрытии.
-  ipcMain.handle('window:incognito', () => {
-    const ws = createWindow({ incognito: true })
-    return ws.window?.id ?? null
+  // Переключение приватности ТЕКУЩЕГО окна. Отдельного приватного окна
+  // больше нет: пункт меняет режим этого окна, и все его вкладки
+  // переоткрываются в другой партиции (см. switchIncognito).
+  //
+  // Возврат true означает, что режим переключился и окно надо
+  // перерисовать; false — переключения не было (окно уже в нужном
+  // режиме или разрушено).
+  ipcMain.handle('window:incognito', (e) => {
+    const ws = wsOf(e)
+    const to = !ws.incognito
+    switchIncognito(ws, tabsDeps, to)
+    return to
   })
   // Группы вкладок: шаблоны в groups.json + открытые экземпляры в WindowState.
   registerGroupsIpc(wsOf, { createTab, closeTab, setActiveTab, pushTabsState, pruneEmptyGroup })
@@ -588,19 +620,28 @@ function registerIpc() {
     await clearHistory()
     return true
   })
-  ipcMain.handle('downloads:list', (_e, limit?: number) => getDownloads(limit ?? 200))
-  ipcMain.handle('downloads:search', (_e, query: string, limit?: number) =>
-    searchDownloads(query, limit ?? 100)
-  )
-  ipcMain.handle('downloads:remove', async (_e, id: string) => {
+  ipcMain.handle('downloads:list', (e, limit?: number) => {
+    if (wsOf(e).incognito) return []
+    return getDownloads(limit ?? 200)
+  })
+  ipcMain.handle('downloads:search', (e, query: string, limit?: number) => {
+    if (wsOf(e).incognito) return []
+    return searchDownloads(query, limit ?? 100)
+  })
+  // remove/clear/open тоже закрыты: инкогнито видело пустой список, но
+  // могло удалить или открыть чужую запись по id из основного окна.
+  ipcMain.handle('downloads:remove', async (e, id: string) => {
+    if (wsOf(e).incognito) return false
     await removeDownload(id)
     return true
   })
-  ipcMain.handle('downloads:clear', async () => {
+  ipcMain.handle('downloads:clear', async (e) => {
+    if (wsOf(e).incognito) return false
     await clearDownloads()
     return true
   })
-  ipcMain.handle('downloads:open', async (_e, id: string) => {
+  ipcMain.handle('downloads:open', async (e, id: string) => {
+    if (wsOf(e).incognito) return false
     const list = await getDownloads(200)
     const found = list.find((d) => d.id === id)
     if (!found) return false
@@ -857,21 +898,32 @@ function registerIpc() {
       { id: 'profile', label: 'Profile', icon: '👤', disabled: true },
       { id: 'extensions', label: 'Extensions', icon: '🧩', disabled: true },
       { id: 'debug', label: 'Debug', icon: '🐞', disabled: true },
-      // В инкогнито-окне пункт скрыт — окно уже приватное.
-      ...(ws.incognito ? [] : [{ id: 'incognito', label: 'New incognito window', icon: '🕵️' }])
+      // Пункт виден всегда: он переключает режим ТЕКУЩЕГО окна, а не
+      // создаёт новое. В приватном окне он предлагает обратный переход,
+      // поэтому скрывать его было бы неверно.
+      {
+        id: 'incognito',
+        label: ws.incognito ? 'Switch to normal mode' : 'Switch to incognito mode',
+        icon: '🕵️'
+      }
     ]
     showOverlay(win, {
       kind: 'menu',
       anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
       items,
-      incognito: ws.incognito,
       // Второй клик по кнопке ☰ закрывает открытое ею же меню.
       toggleKey: 'browser-menu',
       onSelect: (id) => {
         if (id === 'downloads') openPage(DOWNLOADS_URL)
         else if (id === 'history') openPage(HISTORY_URL)
         else if (id === 'settings') openPage(SETTINGS_URL)
-        else if (id === 'incognito') createWindow({ incognito: true })
+        else if (id === 'incognito') {
+          // Переключение переоткрывает вкладки, поэтому активный оверлей
+          // (меню, открытый поверх вкладок) закрываем заранее: его
+          // содержимое сейчас станет неактуальным.
+          closeOverlay(win)
+          switchIncognito(ws, tabsDeps, !ws.incognito)
+        }
       }
     })
   })
@@ -950,7 +1002,10 @@ void app.whenReady().then(() => {
   registerInternalPreload(session.fromPartition(INCOGNITO_PARTITION))
   setupDownloads(session.defaultSession)
   setupDownloads(session.fromPartition(NORMAL_PARTITION))
-  setupDownloads(session.fromPartition(INCOGNITO_PARTITION))
+  // Приватная партиция вкладок: загрузки идут и сохраняются как обычно
+  // (приватность касается cookies и истории), но тост о загрузке
+  // показывается только в приватном окне.
+  setupDownloads(session.fromPartition(INCOGNITO_PARTITION), true)
   registerIpc()
   // Системная тема ОС: nativeTheme следит сам и шлет обновления —
   // пересчитываем color-scheme сайтов при смене темы ОС.
@@ -982,7 +1037,6 @@ void app.whenReady().then(() => {
           { id: 'auto-1', label: 'Auto item 1', icon: '📥' },
           { id: 'auto-2', label: 'Auto item 2', icon: '🕘' }
         ],
-        incognito: bootState.incognito,
         onSelect: () => undefined
       })
     }, autoOpenAt)

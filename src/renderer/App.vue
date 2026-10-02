@@ -11,7 +11,8 @@ import WindowControls from './components/stdlib/WindowControls.vue'
 
 // Корневой layout-SFC. Пользователь правит этот файл: порядок,
 // позиция, стили компонентов. WebContentsView занимает остаток окна.
-// Инкогнито-окно красится через класс .incognito на shell.
+// Приватное окно не перекрашивается: признак приватности — бейдж перед
+// кнопкой меню браузера, панель закладок в нём скрыта.
 // Верхняя строка — кастомный заголовок: вкладки слева, гарантированный
 // прямоугольник кнопок справа (меню браузера + свернуть/развернуть/закрыть).
 //
@@ -181,10 +182,14 @@ onMounted(() => {
         @mousedown="onTitleMouseDown"
         @dblclick="onTitleDblClick"
       >
-        <span v-if="isIncognito" class="incognito-badge" title="Incognito window">🕵️</span>
         <TabStrip class="grow" />
         <WindowControls class="controls">
           <template #menu>
+            <!-- Бейдж приватности перед кнопкой меню браузера: он
+                 обозначает окно, а не начало панели вкладок. Раньше стоял
+                 отдельным элементом слева от TabStrip и висел в стороне от
+                 кнопок окна, к которым относится. -->
+            <span v-if="isIncognito" class="incognito-badge" title="Incognito window">🕵️</span>
             <DropdownMenu title="☰" class="menu" />
           </template>
         </WindowControls>
@@ -208,7 +213,11 @@ onMounted(() => {
 /* Контентный fullscreen: панелей нет, view на все окно, скругления нет. */
 .shell { background: var(--shell-bg); overflow: hidden; }
 .shell.rounded:not(.maximized):not(.content-fs) { border-radius: 12px; }
-.shell.incognito { background: #1a1030; color: #eee; }
+/* Приватное окно НЕ перекрашивается. Признак приватности — бейдж у
+   кнопки меню браузера, а не цвет панелей: перекраска ломала
+   пользовательскую тему и читалась как отдельный «режим оформления», а
+   не как приватность. Класс .incognito на shell остаётся для этого
+   бейджа и для скрытия панели закладок. */
 .panel-top { display: flex; flex-direction: column; flex-shrink: 0; min-height: 60px; z-index: 10; background: var(--panel-bg); }
 /* Кастомный заголовок: вкладки и кнопки окна на одной линии по центру,
    одинаковая высота (32px), разрыв 8px между панелью и кнопками —
@@ -226,8 +235,16 @@ onMounted(() => {
 .titlebar .menu { display: flex; align-items: center; }
 .panel-bottom { display: none; }
 .shell.rounded:not(.maximized):not(.content-fs) .panel-bottom { display: flex; flex-direction: column; flex-shrink: 0; height: 12px; min-height: 12px; z-index: 10; background: transparent; }
-.incognito-badge { align-self: center; font-size: 18px; padding: 0 4px 0 8px; }
-/* Инкогнито-окно: темный фиолетовый акцент панелей. */
-.shell.incognito .panel-top { background: #1a1030; }
-.shell.incognito .panel-bottom { background: #1a1030; }
+/* Бейдж приватности: та же высота и выравнивание, что у кнопок окна,
+   иначе строка заголовка стала бы выше 32px. */
+.incognito-badge {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  font-size: 15px;
+  padding: 0 4px;
+  cursor: default;
+  user-select: none;
+}
+
 </style>
