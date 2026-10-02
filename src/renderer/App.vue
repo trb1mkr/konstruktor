@@ -14,7 +14,16 @@ import WindowControls from './components/stdlib/WindowControls.vue'
 // Инкогнито-окно красится через класс .incognito на shell.
 // Верхняя строка — кастомный заголовок: вкладки слева, гарантированный
 // прямоугольник кнопок справа (меню браузера + свернуть/развернуть/закрыть).
-// Пустая область строки тащит окно (-webkit-app-region: drag).
+//
+// Пустая область строки тащит окно. Раньше это делал -webkit-app-region:
+// drag, но на Windows drag-область перехватывает ПРАВЫЙ клик и отдаёт
+// его системному меню окна: событие до renderer не доходит, отменить
+// его нечем. Из-за этого контекстное меню панели открывалось только на
+// кнопке "+" (она no-drag), а «своего» меню окна не существовало вовсе.
+//
+// Теперь тащит startWindowDrag ниже: тот же жест, но событие остаётся
+// в renderer, поэтому ПКМ доступен на всей длине панели. Обратная сторона
+// — теряется прилипание к краям экрана, его даёт ОС на drag-области.
 useTabs()
 
 const topPanel = ref<HTMLElement | null>(null)
@@ -51,6 +60,65 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault()
     void window.browserAPI.toggleFullscreen()
   }
+}
+
+// --- Ручное перетаскивание окна ---
+//
+// Захват идёт по mousedown с ПРИНУЖДЕНИЕМ на ЛКМ: без него правый клик
+// по панели вкладок начинал бы перетаскивание, а не открывал меню.
+// Повторный mousedown без отпускания (т.е. dblclick) НЕ начинает drag:
+// двойной клик по пустой области заголовка разворачивает окно, как
+// в обычных окнах, и два перетаскивания подряд мешали бы этому.
+//
+// screenX/screenY, а не clientX/clientY: окно двигается по экрану,
+// а client отсчитывается от области содержимого. Это разные системы.
+function onTitleMouseDown(e: MouseEvent) {
+  // Только ЛКМ. contextmenu разбираем отдельно.
+  if (e.button !== 0) return
+  // Вкладка и кнопки окна сами обрабатывают свои клики.
+  //
+  // .strip-filler в списке исключений НЕТ намеренно: это и есть пустая
+  // часть панели, за которую окно обязано таскаться (раньше это делала
+  // drag-область на самом .tabstrip). Сам @contextmenu на .strip-filler
+  // отменяется через @contextmenu.prevent, и наведение мыши сюда
+  // добраться может только при ЛКМ, то есть конфликта с drag нет.
+  const target = e.target
+  if (target instanceof Element) {
+    if (target.closest('.tab, .tab-add, .window-controls')) return
+    // Текст и поля ввода — не точка хвата.
+    if (target.closest('input, textarea, button, a')) return
+  }
+  // Окно развёрнуно или в fullscreen: тащить нечего.
+  if (isMaximized.value || isFullscreen.value || isContentFullscreen.value) return
+  // Двойной клик = разворот, не drag.
+  if (e.detail > 1) return
+  if (!window.browserAPI.startWindowDrag({ x: e.screenX, y: e.screenY })) return
+  // Пока кнопка зажата, курсор должен остаться «перетаскивающим», а окно
+  // ехать за ним. Слушатели — на document с capture, иначе захват
+  // теряется, когда курсор уходит с окна вниз или вбок.
+  const onMove = (ev: MouseEvent) => {
+    if (ev.button !== 0) return
+    window.browserAPI.moveWindowDrag({ x: ev.screenX, y: ev.screenY })
+  }
+  const onUp = (ev: MouseEvent) => {
+    if (ev.button !== 0) return
+    window.browserAPI.endWindowDrag()
+    document.removeEventListener('mousemove', onMove, true)
+    document.removeEventListener('mouseup', onUp, true)
+  }
+  document.addEventListener('mousemove', onMove, true)
+  document.addEventListener('mouseup', onUp, true)
+}
+
+// Двойной клик по пустой области заголовка — развернуть/свернуть.
+// Системное поведение frameless-окна, которое мы потеряли вместе с
+// drag-областью.
+function onTitleDblClick(e: MouseEvent) {
+  if (e.button !== 0) return
+  const target = e.target
+  if (target instanceof Element && target.closest('.tab, .tab-add, .window-controls')) return
+  if (isMaximized.value || isFullscreen.value || isContentFullscreen.value) return
+  void window.browserAPI.toggleMaximize()
 }
 
 onMounted(() => window.addEventListener('keydown', onKey))
@@ -108,7 +176,11 @@ onMounted(() => {
   <div class="shell" :class="{ incognito: isIncognito, maximized: isMaximized || isFullscreen, rounded: roundedCorners, 'content-fs': isContentFullscreen }" :data-theme="effectiveTheme">
     <!-- Кастомный заголовок: вкладки + кнопки окна на одном уровне. -->
     <div v-if="!isContentFullscreen" ref="topPanel" class="panel-top">
-      <div class="titlebar">
+      <div
+        class="titlebar"
+        @mousedown="onTitleMouseDown"
+        @dblclick="onTitleDblClick"
+      >
         <span v-if="isIncognito" class="incognito-badge" title="Incognito window">🕵️</span>
         <TabStrip class="grow" />
         <WindowControls class="controls">
@@ -141,7 +213,11 @@ onMounted(() => {
 /* Кастомный заголовок: вкладки и кнопки окна на одной линии по центру,
    одинаковая высота (32px), разрыв 8px между панелью и кнопками —
    вкладка больше не упирается в кнопку меню. */
-.titlebar { display: flex; align-items: center; gap: 4px; padding: 0px 0px; -webkit-app-region: drag; }
+/* Заголовок больше НЕ drag-область: на Windows она перехватывала
+   правый клик и отдавала его системному меню окна. Окно тащит
+   onTitleMouseDown — событие остаётся в renderer, поэтому ПКМ доступен
+   на всей длине панели вкладок и у кнопок навигации. */
+.titlebar { display: flex; align-items: center; gap: 4px; padding: 0px 0px; }
 .titlebar .grow { flex: 1; min-width: 0; display: flex; }
 /* Панель вкладок отдает свои отступы заголовку: иначе двойной паддинг
    (6px стрипа + 6px заголовка) делает вкладки выше кнопок. */

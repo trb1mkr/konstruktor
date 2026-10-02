@@ -30,7 +30,7 @@ export type { MenuItem }
 
 /** Модель уровня — плоская: шаблон читает поля напрямую. */
 interface OverlayModel {
-  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
+  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu'
   items?: MenuItem[]
   badge?: string
   toast?: ToastModel
@@ -84,6 +84,14 @@ function propsFor(level: Level): Record<string, unknown> | null {
         ...base,
         items: model.items ?? [],
         incognito: model.badge === 'incognito',
+        align: level.anchorLeft ? 'start' : 'end'
+      }
+    // Меню окна: та же карточка, но без бейджа инкогнито — вкладка и окно
+    // не могут быть одновременно инкогнито-вкладкой и обычным окном.
+    case 'window-menu':
+      return {
+        ...base,
+        items: model.items ?? [],
         align: level.anchorLeft ? 'start' : 'end'
       }
     case 'toast':

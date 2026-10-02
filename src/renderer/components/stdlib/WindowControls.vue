@@ -42,10 +42,33 @@ async function toggleMax() {
 async function close() {
   await window.browserAPI.closeWindow()
 }
+
+// ПКМ по кнопкам навигации — своё меню окна (restore/move/size/minimize/
+// close + «Open new window»).
+//
+// Системное меню исчезло вместе с drag-областью заголовка: на Windows
+// правый клик по ней отдавался ОС, мимо renderer, и оно появлялось само
+// там, где пользователь не просил. Свое меню рисуется тем же оверлеем,
+// что остальные контекстные меню, — иначе оно было бы светлым на
+// тёмной панели.
+//
+// Точка вызова — координаты курсора, а не угол кнопок: правый клик по
+// ПКМ в системном окне тоже открывает меню в точке курсора.
+function openWindowMenu(e: MouseEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  window.browserAPI.windowContextMenu({
+    x: Math.round(e.clientX),
+    y: Math.round(e.clientY)
+  })
+}
 </script>
 
+<!-- ПКМ по всей группе, а не по кнопке: у кнопок событие всплывало бы
+     от нажатой, и меню открывалось бы в разных местах в зависимости от
+     того, какая кнопка попала под курсор. -->
 <template>
-  <div class="window-controls">
+  <div class="window-controls" @contextmenu.prevent="openWindowMenu($event)">
     <slot name="menu" />
     <button class="wc-btn" title="Minimize" @click="minimize">─</button>
     <button class="wc-btn" :title="maximized ? 'Restore' : 'Maximize'" @click="toggleMax">

@@ -121,6 +121,19 @@ const browserAPI = {
   isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:is-maximized'),
   // F11 из фокуса shell: тоггл fullscreen через main.
   toggleFullscreen: (): Promise<boolean> => ipcRenderer.invoke('window:toggle-fullscreen'),
+  // Ручное перетаскивание окна (вместо -webkit-app-region: drag).
+  //
+  // Координаты курсора — экранные (screenX/screenY), потому что окно
+  // двигается по экрану. clientX/Y не годятся: они отсчитываются от
+  // области содержимого, а при перетаскивании это разные координаты.
+  startWindowDrag: (pos: { x: number; y: number }): boolean =>
+    ipcRenderer.sendSync('window:drag-start', pos.x, pos.y),
+  moveWindowDrag: (pos: { x: number; y: number }): void =>
+    ipcRenderer.send('window:drag-move', pos.x, pos.y),
+  endWindowDrag: (): void => ipcRenderer.send('window:drag-end'),
+  // Своё меню окна: ПКМ по кнопкам навигации (свернуть/развернуть/закрыть).
+  windowContextMenu: (pos: { x: number; y: number }): void =>
+    ipcRenderer.send('window:context-menu', pos),
   // Внутренние страницы.
   openHistory: (): Promise<boolean> => ipcRenderer.invoke('tabs:open-history'),
   openSettings: (): Promise<boolean> => ipcRenderer.invoke('tabs:open-settings'),

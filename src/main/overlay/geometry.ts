@@ -39,6 +39,10 @@ const SURFACES: Record<ViewKind, SurfaceSpec> = {
   // растягиваться под длинное название группы, но и не должно обрезать
   // его. Значение используется как потолок при измерении.
   menu: { width: 320, height: null, align: 'anchor-end', gap: 4 },
+  // Меню окна: та же карточка, но выравнивание по левому краю точки вызова.
+  // Отдельная запись нужна из-за 'anchor-end' по умолчанию у menu — с ним
+  // меню открывалось бы справа от курсора и уезжало за край окна.
+  'window-menu': { width: 320, height: null, align: 'anchor', gap: 0 },
   // Диалоги фиксированы: содержимое не влияет на высоту, кнопки в ряд.
   dialog: { width: 320, height: 190, align: 'center', gap: 0 },
   icon: { width: 340, height: 250, align: 'center', gap: 0 },

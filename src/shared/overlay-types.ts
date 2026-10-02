@@ -4,7 +4,7 @@
 
 // Какие поверхности умеет показывать оверлей-окно. Renderer держит реестр
 // view -> Vue-компонент, main — описание геометрии/фокуса.
-export type ViewKind = 'menu' | 'dialog' | 'icon' | 'find' | 'toast'
+export type ViewKind = 'menu' | 'dialog' | 'icon' | 'find' | 'toast' | 'window-menu'
 
 // Как меню выравнивается относительно точки вызова.
 // 'anchor' — левый верхний угол в точке клика (контекстное меню).
@@ -51,6 +51,10 @@ export interface MenuItem {
   // Подпункты второго уровня (меню «Add to group» и т.п.).
   // null = пункт конечный.
   children?: MenuItem[] | null
+  // Разделительная линия. Пункт не нажимается и не получает фокус:
+  // в системном меню окна их три, и без них меню читается как сплошной
+  // список, где непонятно, что «Свернуть» и «Закрыть» — разные вещи.
+  separator?: boolean
 }
 
 // Данные для универсального диалога с полем ввода.
@@ -93,6 +97,11 @@ export interface ToastModel {
 // (или items/itemsFor — для универсального меню любого контекста).
 export type OverlayModel =
   | { view: 'menu'; items: MenuItem[]; badge?: string }
+  // Своё меню окна (ПКМ по кнопкам навигации). Отдельный вид, а не флаг
+  // у 'menu': у него другая геометрия (привязка к кнопкам окна, а не к
+  // точке клика на странице) и он не должен закрываться тем же жестом,
+  // что контекстные меню. Форма пунктов та же — MenuItem.
+  | { view: 'window-menu'; items: MenuItem[] }
   | { view: 'dialog'; dialog: DialogModel }
   | { view: 'icon'; icon: IconModel }
   | { view: 'find'; find: FindModel }

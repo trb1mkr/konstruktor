@@ -1,6 +1,7 @@
 import type { Component } from 'vue'
 import type { ViewKind } from '../../shared/overlay-types'
 import BrowserMenu from './BrowserMenu.vue'
+import WindowMenu from './WindowMenu.vue'
 import PromptDialog from './PromptDialog.vue'
 import IconDialog from './IconDialog.vue'
 import FindBar from './FindBar.vue'
@@ -18,6 +19,10 @@ import ToastStack from './ToastStack.vue'
 // имени вида становится ошибкой компиляции, а не молчаливым undefined.
 const REGISTRY: Record<ViewKind, Component> = {
   menu: BrowserMenu,
+  // Меню окна отличается от контекстного только источником пунктов
+  // (список формирует main из состояния окна), но рисуется тем же
+  // MenuList — иначе получилась бы вторая копия вёрстки пункта.
+  'window-menu': WindowMenu,
   dialog: PromptDialog,
   icon: IconDialog,
   find: FindBar,

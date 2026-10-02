@@ -144,8 +144,78 @@ export function restoreSessionTabs(ws: WindowState, deps: WindowDeps): boolean {
   return ws.tabOrder.length > 0
 }
 
+// Ручное перетаскивание окна.
+//
+// Заменило -webkit-app-region: drag на панели вкладок и заголовке:
+// drag-область на Windows перехватывает правый клик и отдаёт его
+// СИСТЕМНОМУ меню окна. Событие до renderer не доходит вообще, отменить
+// его нечем, и контекстное меню панели открывалось только на кнопке "+"
+// (она no-drag). Заодно это единственный способ убрать системное меню.
+//
+// Цена: теряется прилипание к краям экрана (snap) и «показать рабочий
+// стол» — их даёт ОС на drag-области, а не Chromium.
+interface WindowDrag {
+  // Окно, которое сейчас тащат. null = перетаскивания нет.
+  win: BrowserWindow | null
+  // Смещение курсора от левого верхнего угла окна в момент захвата.
+  // Держим смещение, а не стартовую позицию: иначе окно прыгает под
+  // курсор, если тот взяли не за угол.
+  offsetX: number
+  offsetY: number
+}
+
+const windowDrag: WindowDrag = { win: null, offsetX: 0, offsetY: 0 }
+
+/**
+ * Захват окна мышью. Дальше renderer шлёт координаты до отпускания.
+ *
+ * Никакой проверки на двойной клик здесь нет: renderer отсекает его сам
+ * (иначе разворот по двойному клику срабатывал бы после начала drag),
+ * а момент отсечки на стороне renderer-а виден в его стеке вызовов.
+ */
+export function startWindowDrag(win: BrowserWindow, cursorX: number, cursorY: number): boolean {
+  if (win.isDestroyed()) return false
+  windowDrag.win = win
+  const [x, y] = win.getPosition()
+  windowDrag.offsetX = Math.round(cursorX - x)
+  windowDrag.offsetY = Math.round(cursorY - y)
+  return true
+}
+
+/** Движение окна за курсором. Смещение внутри окна сохраняется. */
+export function moveWindowDrag(cursorX: number, cursorY: number): void {
+  const win = windowDrag.win
+  if (!win || win.isDestroyed()) return
+  // В maximize/fullscreen тащить нечего: окно размером с экран.
+  if (win.isMaximized() || win.isFullScreen()) return
+  const x = Math.round(cursorX - windowDrag.offsetX)
+  const y = Math.round(cursorY - windowDrag.offsetY)
+  // setBounds без animate: анимация окна на Windows видна как задержка
+  // начала перетаскивания, а системное окно едет мгновенно.
+  win.setBounds({ x, y, width: win.getBounds().width, height: win.getBounds().height })
+}
+
+/** Отпускание кнопки — конец перетаскивания. */
+export function endWindowDrag(): void {
+  windowDrag.win = null
+}
+
 export function createWindow(
-  opts: { x?: number; y?: number; incognito?: boolean } = {},
+  opts: {
+    x?: number
+    y?: number
+    incognito?: boolean
+    /**
+     * Читать ли вкладки из sessionTabs при готовности renderer.
+     *
+     * По умолчанию true — так ведёт себя обычный запуск и перезапуск:
+     * приложение возвращает вкладки прошлой сессии. Но пункт «Open new
+     * window» обязан открыть ПУСТОЕ окно со стартовой страницей, и без
+     * флага в него переезжали бы вкладки другого окна: sessionTabs —
+     * общий слот на всё приложение, а не слот конкретного окна.
+     */
+    restoreSession?: boolean
+  } = {},
   deps: WindowDeps
 ): WindowState {
   const ws: WindowState = {
@@ -247,9 +317,15 @@ export function createWindow(
   // готов принимать pushTabsState. Инкогнито сессию не читает никогда.
   win.webContents.on('did-finish-load', () => {
     if (ws.tabs.size === 0) {
-      const restored = !ws.incognito && restoreSessionTabs(ws, deps)
+      // Сессия читается только если её не отключили вызовом, и никогда
+      // для инкогнито: приватное окно не восстанавливает чужие вкладки.
+      const canRestore = opts.restoreSession !== false && !ws.incognito
+      const restored = canRestore && restoreSessionTabs(ws, deps)
       if (!restored) deps.createTab(ws)
     } else {
+      // Вкладки уже есть — значит их положил вызывающий (cloneWindow).
+      // Сессию НЕ читаем: она перезаписала бы только что созданные
+      // вкладки, и клон превратился бы в пустое окно со стартовой.
       layoutActiveView(ws)
       deps.pushTabsState(ws)
     }

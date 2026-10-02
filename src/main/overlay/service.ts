@@ -62,6 +62,10 @@ export interface OverlayMenuItem {
   // Цвет группы (для Add to group): точка-индикатор как на панели закладок.
   color?: string
   disabled?: boolean
+  // Разделительная линия. Только у меню окна: в системном их три, и без
+  // них меню читается как сплошной список. Пустые label/icon игнорируются
+  // renderer-ом, пункт не нажимается и не получает фокус.
+  separator?: boolean
 }
 
 export interface OverlayDialogButton {
@@ -84,7 +88,7 @@ export interface IconDialogState {
 export { verifyIconSource } from '../iconVerify'
 
 interface OverlayRequest {
-  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon'
+  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu'
   anchor: { x: number; y: number }
   items?: OverlayMenuItem[]
   incognito?: boolean
@@ -563,7 +567,8 @@ function provisionalSize(request: OverlayRequest): { width: number; height: numb
   const spec = surfaceFor(request.kind, request.align)
   if (spec.height !== null) return { width: spec.width, height: spec.height }
   // Меню: хватает на шесть пунктов, дальше окно дорастёт по измерению.
-  const rows = request.kind === 'menu' ? (request.items?.length ?? 0) : 1
+  const isMenuLike = request.kind === 'menu' || request.kind === 'window-menu'
+  const rows = isMenuLike ? (request.items?.length ?? 0) : 1
   const estimated = Math.max(rows, 6)
   return { width: spec.width, height: Math.min(estimated * MENU_ROW_FALLBACK_H, MAX_PROVISIONAL_H) }
 }
@@ -817,6 +822,9 @@ export function applyMeasured(
 function overlayModel(request: OverlayRequest): OverlayModel {
   if (request.kind === 'menu') {
     return { view: 'menu', items: request.items ?? [], badge: request.incognito ? 'incognito' : undefined }
+  }
+  if (request.kind === 'window-menu') {
+    return { view: 'window-menu', items: request.items ?? [] }
   }
   if (request.kind === 'dialog') {
     return {
@@ -1223,7 +1231,7 @@ export function closeOverlay(parent: BrowserWindow): void {
   // Запоминаем закрытое меню с его триггером: следующий вызов showOverlay
   // с тем же ключом в пределах TOGGLE_ECHO_MS — это эхо открывающего клика,
   // а не намерение открыть заново (см. ветку toggle в showOverlay).
-  if (entry.request.kind === 'menu') {
+  if (entry.request.kind === 'menu' || entry.request.kind === 'window-menu') {
     lastClosed.set(parent.id, {
       toggleKey: entry.request.toggleKey,
       at: Date.now()
@@ -1349,7 +1357,7 @@ export function closeStack(parent: BrowserWindow): void {
   // закрытии верхнего уровня: следующий клик по тому же триггеру должен
   // распознаться как эхо, а не открыть меню заново.
   const root = stackOf<OverlayRequest>(parent.id)[0]
-  if (root.request.kind === 'menu') {
+  if (root.request.kind === 'menu' || root.request.kind === 'window-menu') {
     lastClosed.set(parent.id, {
       toggleKey: root.request.toggleKey,
       at: Date.now()
@@ -1387,7 +1395,7 @@ export function closeOverlayIfMenu(parent: BrowserWindow): void {
   }
   const entry = sessionOf<OverlayRequest>(parent.id)
   if (!entry) return
-  if (entry.request.kind !== 'menu') return
+  if (entry.request.kind !== 'menu' && entry.request.kind !== 'window-menu') return
   const age = Date.now() - entry.openedAt
   if (age < OPEN_SETTLE_MS) {
     log('session', 'shell click during open, ignored', {
@@ -1744,7 +1752,8 @@ if (!overlay || overlay.isDestroyed()) {
       request.kind === 'find' ||
       request.kind === 'icon' ||
       request.kind === 'dialog' ||
-      request.kind === 'menu'
+      request.kind === 'menu' ||
+      request.kind === 'window-menu'
     ) {
       noteFocusHandoff(parent.id)
     }
@@ -1868,7 +1877,11 @@ if (!overlay || overlay.isDestroyed()) {
     //
     // Меню и панель поиска забирают фокус; диалоги — через автофокус поля
     // ввода, тост фокуса не берёт вовсе (он пассивен).
-    if (request.kind === 'find' || request.kind === 'menu') {
+    if (
+      request.kind === 'find' ||
+      request.kind === 'menu' ||
+      request.kind === 'window-menu'
+    ) {
       try {
         win.focus()
       } catch (err) {

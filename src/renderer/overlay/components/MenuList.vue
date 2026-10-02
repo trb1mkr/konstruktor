@@ -39,7 +39,9 @@ const active = ref(props.modelValue >= 0 ? props.modelValue : 0)
 // Пункты, на которые можно попасть: disabled пропускаются. Без этого
 // стрелка вставала бы на неактивный пункт и Enter ничего не делал.
 const selectable = computed(() =>
-  props.items.map((item, index) => (item.disabled ? -1 : index)).filter((i) => i >= 0)
+  props.items
+    .map((item, index) => (item.disabled || item.separator ? -1 : index))
+    .filter((i) => i >= 0)
 )
 
 function step(delta: number): void {
@@ -159,23 +161,25 @@ defineExpose({ focusFirst: toStart })
     @mousedown.stop
   >
     <div v-if="badge" class="menu-badge">{{ badge }}</div>
-    <button
-      v-for="(item, index) in items"
-      :key="item.id"
-      class="menu-item"
-      :class="{ 'menu-item--active': index === active }"
-      role="menuitem"
-      :disabled="item.disabled"
-      :tabindex="index === active ? 0 : -1"
-      @click="activate(index)"
-      @mouseenter="index === active || (active = index)"
-    >
-      <span class="menu-icon">
-        <span v-if="item.color" class="menu-dot" :style="{ background: item.color }" />
-        <template v-if="item.icon">{{ item.icon }}</template>
-      </span>
-      <span class="menu-label">{{ item.label }}</span>
-    </button>
+    <template v-for="(item, index) in items" :key="item.id">
+      <div v-if="item.separator" class="menu-separator" role="separator" />
+      <button
+        v-else
+        class="menu-item"
+        :class="{ 'menu-item--active': index === active }"
+        role="menuitem"
+        :disabled="item.disabled"
+        :tabindex="index === active ? 0 : -1"
+        @click="activate(index)"
+        @mouseenter="index === active || (active = index)"
+      >
+        <span class="menu-icon">
+          <span v-if="item.color" class="menu-dot" :style="{ background: item.color }" />
+          <template v-if="item.icon">{{ item.icon }}</template>
+        </span>
+        <span class="menu-label">{{ item.label }}</span>
+      </button>
+    </template>
   </div>
 </template>
 
@@ -221,6 +225,14 @@ defineExpose({ focusFirst: toStart })
    стрелками курсор стоит в стороне, иначе активный пункт не виден. */
 .menu-item--active:not(:disabled) { background: var(--ov-hover); }
 .menu-item:disabled { color: #666; cursor: default; }
+/* Разделитель: та же ширина карточки минус внутренние поля, что у пункта,
+   иначе линия была бы короче текста и выглядела бы опечаткой. */
+.menu-separator {
+  height: 1px;
+  margin: 4px 10px;
+  background: var(--ov-border);
+  flex-shrink: 0;
+}
 .menu-icon {
   width: 20px;
   text-align: center;

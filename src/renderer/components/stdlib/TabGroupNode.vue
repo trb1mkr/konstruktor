@@ -83,6 +83,7 @@ function onBodyWheel(e: WheelEvent) {
     @dragover="emit('strip-item-drag-over', $event)"
     @drop="emit('strip-item-drop', $event)"
     @dragend.stop="emit('group-drag-end', $event)"
+    @contextmenu.prevent="emit('open-group-menu', { instanceId, ev: $event })"
   >
     <div
       class="tabgroup-head"
@@ -97,7 +98,15 @@ function onBodyWheel(e: WheelEvent) {
       <span class="tabgroup-name">{{ saved?.name ?? 'Group' }}</span>
       <span class="tabgroup-count">{{ ownTabs.length }}</span>
     </div>
-    <div v-if="!inst.collapsed" ref="body" class="tabgroup-body" @wheel="onBodyWheel($event)">
+    <!-- Тело развёрнутой группы: пустое место под вкладками. ПКМ здесь
+         открывает меню группы, а не панели. -->
+    <div
+      v-if="!inst.collapsed"
+      ref="body"
+      class="tabgroup-body"
+      @wheel="onBodyWheel($event)"
+      @contextmenu.prevent="emit('open-group-menu', { instanceId, ev: $event })"
+    >
       <div
         v-for="t in ownTabs"
         :key="t.id"

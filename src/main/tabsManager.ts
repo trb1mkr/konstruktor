@@ -11,7 +11,7 @@ import {
   type TabRecord
 } from './browserState'
 import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from './browserTheme'
-import { ensureStripToken, removeStripToken } from './stripOrder'
+import { ensureStripToken, removeStripToken, reorderStrip } from './stripOrder'
 import { openFindOverlay } from './findManager'
 import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlay'
 import { getSettingsSync, saveSettings } from './settingsStore'
@@ -285,7 +285,102 @@ export function pruneEmptyGroup(ws: WindowState, instanceId: string): void {
 }
 
 // Вынос вкладки в новое окно: view переезжает целиком, история сохраняется.
-// Новое окно создается ПЕРВЫМ (renderer успевает прислать layout до переезда),
+/**
+ * Копия всех вкладок окна в новое окно (пункт «Clone window» меню окна).
+ *
+ * Отличие от detach: исходные вкладки остаются на месте. Переносить их
+ * нельзя — это был бы detach всех вкладок разом, то есть исходное окно
+ * осталось бы пустым и закрылось.
+ *
+ * Копируются ЗАПИСИ, а не WebContentsView (detach переносит view). Причина
+ * в том, что перенос view не может быть копированием: одна view принадлежит
+ * одному родителю, addChildView в второе окно её оттуда заберёт. Поэтому у
+ * клона своя view на каждую вкладку — с той же партицией, то есть с той же
+ * историей и кэшем.
+ *
+ * Порядок обязателен: сначала новое окно (renderer успевает прислать layout
+ * до заезда), затем вкладки. Иначе did-finish-load нового окна создаст
+ * лишнюю стартовую вкладку — она появилась бы первой и стала активной.
+ *
+ * Сдвиг от исходного окна: два окна в одной точке лежали бы друг на друге,
+ * и верхнее закрыло бы нижнее целиком.
+ */
+export function cloneWindow(
+  fromWs: WindowState,
+  deps: TabsDeps,
+  offsetX = 32,
+  offsetY = 32
+): void {
+  if (!fromWs.window || fromWs.tabs.size === 0) return
+  const fromWin = fromWs.window
+  // Группы копируются ДО вкладок: вкладки ссылаются на instanceId, и если
+  // группа появится позже, ссылка окажется в пустоте при первом же рендере.
+  const groups = fromWs.openGroups.map((g) => ({ ...g }))
+
+  const ws = deps.createWindow({
+    x: fromWin.getPosition()[0] + offsetX,
+    y: fromWin.getPosition()[1] + offsetY,
+    // Клон наследует режим инкогнито: обычное окно не должно получить
+    // вкладки из приватной сессии.
+    incognito: fromWs.incognito
+  })
+  if (!ws.window) return
+  for (const g of groups) {
+    ws.openGroups.push(g)
+    // Токен группы в ряду: только корневые. Вложенные рисуются внутри
+    // родителя, как и в исходном окне.
+    if (!g.parentInstanceId) ensureStripToken(ws, `g:${g.instanceId}`, g.pinned)
+  }
+
+  // Порядок копируем как есть: пользователь выстроил его вручную.
+  //
+  // Порядок вкладок (tabOrder) и порядок панели (stripOrder) — разные
+  // вещи, и копируются по-разному. tabOrder задаётся циклом ниже, а
+  // stripOrder здесь: группы к тому моменту уже в ряду, а createTab
+  // докладывает вкладки в конец. Без явного reorderStrip группа,
+  // добавленная первой, осталась бы в начале РЯДА, даже если в
+  // исходном окне стояла последней.
+  //
+  // Соответствие токенов: id вкладок в клоне новые, поэтому порядок
+  // исходного окна переносится через карту source->copy. Группы
+  // сохраняют instanceId, и их токены переносятся как есть.
+  const sourceTokenToCopyToken = new Map<string, string>()
+
+  let activeId: number | null = null
+  for (const id of fromWs.tabOrder) {
+    const rec = fromWs.tabs.get(id)
+    if (!rec) continue
+    const copyId = createTab(ws, deps, rec.url)
+    const copy = ws.tabs.get(copyId)
+    if (!copy) continue
+    copy.pinned = rec.pinned
+    copy.customTitle = rec.customTitle
+    copy.customFavicon = rec.customFavicon
+    // instanceId сохраняется: ссылка вкладки должна вести в копию той же
+    // группы, а не в отсутствующую.
+    copy.groupId = rec.groupId
+    // Вкладка с группой не получает токен в ряду — createTab уже положила
+    // свой, и без removeStripToken она светилась бы и в группе, и в ряду.
+    if (rec.groupId) removeStripToken(ws, `t:${copyId}`)
+    sourceTokenToCopyToken.set(`t:${id}`, `t:${copyId}`)
+    if (id === fromWs.activeTabId) activeId = copyId
+  }
+
+  // Порядок панели клона = порядок исходного окна с подменёнными
+  // токенами вкладок. Зоны (pinned/normal) reorderStrip разнесёт сам по
+  // флагам pinned, поэтому достаточно склеить зоны в том же порядке,
+  // в каком их отдаёт renderer.
+  const stripOrder = [...fromWs.pinnedStripOrder, ...fromWs.stripOrder]
+    .map((tok) => sourceTokenToCopyToken.get(tok) ?? tok)
+  reorderStrip(ws, stripOrder)
+
+  ws.activeTabId =
+    activeId ?? (ws.tabOrder.length > 0 ? ws.tabOrder[ws.tabOrder.length - 1] : null)
+  if (ws.activeTabId !== null) setActiveTab(ws, deps, ws.activeTabId)
+  pushTabsState(ws)
+}
+
+// Новое окно создается ПЕРВЫМ (renderer успечает прислать layout до переезда),
 // затем view переносится. Иначе did-finish-load нового окна создаст лишнюю
 // стартовую вкладку, а pushTabsState уйдет в пустоту.
 export function detachTabToNewWindow(

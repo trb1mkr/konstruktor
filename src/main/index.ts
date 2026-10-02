@@ -34,6 +34,9 @@ import {
   persistSessionTabs,
   snapshotSessionTabs,
   isDev,
+  startWindowDrag,
+  moveWindowDrag,
+  endWindowDrag,
   type WindowDeps
 } from './windowsManager'
 import {
@@ -41,6 +44,7 @@ import {
   setActiveTab as setActiveTabRaw,
   closeTab as closeTabRaw,
   detachTabToNewWindow as detachTabRaw,
+  cloneWindow,
   pruneEmptyGroup,
   pushTabsState,
   type TabsDeps
@@ -61,6 +65,7 @@ import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { getShortcuts, addShortcut, removeShortcut } from './shortcutsStore'
 import { createSavedGroup, getGroups } from './groupsStore'
 import { registerGroupsIpc } from './groupsManager'
+import { showWindowMenu } from './windowMenu'
 import { registerInternalPreload } from './internalBridge'
 import { dnsServersFor, applySecureDns } from './dnsConfig'
 import {
@@ -135,7 +140,12 @@ function detachTabToNewWindow(fromWs: WindowState, id: number, sx: number, sy: n
   detachTabRaw(fromWs, tabsDeps, id, sx, sy)
 }
 
-function createWindow(opts: { x?: number; y?: number; incognito?: boolean } = {}): WindowState {
+// restoreSession пробрасывается в createWindow: «Open new window» открывает
+// пустое окно и не должен подхватывать sessionTabs (общий слот на всё
+// приложение) — иначе «новое» окно оказывалось бы копией чужого.
+function createWindow(
+  opts: { x?: number; y?: number; incognito?: boolean; restoreSession?: boolean } = {}
+): WindowState {
   const windowDeps: WindowDeps = { createTab, setActiveTab, pushTabsState }
   return createWindowRaw(opts, windowDeps)
 }
@@ -660,6 +670,46 @@ function registerIpc() {
       return next
     }
   )
+  // Ручное перетаскивание окна вместо -webkit-app-region: drag.
+  //
+  // sendSync, а не invoke: ответ нужен СИНХРОННО, до первого mousemove,
+  // иначе окно дёрнется на первом кадре — invoke возвращается через
+  // event loop, то есть уже после того, как renderer успел отправить
+  // cursor-move. На двойном клике возвращаем false: системный разворот
+  // обрабатывается renderer-ом отдельно.
+  ipcMain.on('window:drag-start', (e, x: number, y: number) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const ok = win ? startWindowDrag(win, x, y) : false
+    e.returnValue = ok
+  })
+  ipcMain.on('window:drag-move', (e, x: number, y: number) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (win) moveWindowDrag(x, y)
+  })
+  ipcMain.on('window:drag-end', () => {
+    endWindowDrag()
+  })
+  // ПКМ по кнопкам навигации: своё меню окна вместо системного.
+  // Координаты — относительно content-области, как у всех меню оверлея.
+  ipcMain.on('window:context-menu', (e, payload: { x: number; y: number }) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const ws = win ? getState(win) : undefined
+    if (!win || !ws) return
+    showWindowMenu(win, { x: payload.x, y: payload.y }, {
+      // restoreSession: false — иначе sessionTabs (общий слот на всё
+      // приложение) подставил бы сюда вкладки какого-то другого окна,
+      // и «новое окно» оказалось бы копией.
+      newWindow: () => {
+        createWindow({ restoreSession: false })
+      },
+      // Клон создаёт окно и кладёт вкладки сам (cloneWindow), поэтому
+      // restoreSession тут не нужен: сессия прочитана не будет, так как
+      // вкладки к моменту did-finish-load уже есть.
+      cloneWindow: () => {
+        cloneWindow(ws, tabsDeps)
+      }
+    })
+  })
   // Кнопки кастомного заголовка: свернуть / развернуть / закрыть.
   ipcMain.handle('window:minimize', (e) => {
     BrowserWindow.fromWebContents(e.sender)?.minimize()

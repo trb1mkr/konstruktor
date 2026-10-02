@@ -635,8 +635,11 @@ async function onStripDrop(e: DragEvent) {
   scrollbar-width: none;
   -ms-overflow-style: none;
   user-select: none;
-  /* Пустая область панели тащит окно (frameless). Вкладки — нет. */
-  -webkit-app-region: drag;
+  /* Drag-область убрана намеренно: на Windows она перехватывала правый
+     клик и отдавала его СИСТЕМНОМУ меню окна, мимо renderer. Из-за
+     этого меню панели открывалось только на кнопке "+". Теперь окно
+     тащит onTitleMouseDown в App.vue, а ПКМ доходит до обработчика
+     openStripMenu на всей свободной длине панели. */
   position: relative;
 }
 .tabstrip::-webkit-scrollbar { display: none; }
@@ -715,14 +718,18 @@ async function onStripDrop(e: DragEvent) {
   flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
-/* Заполнитель пустого места панели до кнопок окна: тянет окно
-   (frameless) на всей ширине, включая участок от "+" до кнопок окна.
-   drag отдаёт правый клик системному меню окна, поэтому контекстное
-   меню панели ловится capture-слушателем в App.vue (см. onGlobalContextMenu). */
+/* Заполнитель пустого места панели до кнопок окна: занимает всю
+   ширину, включая участок от "+" до кнопок окна, и ловит правый клик
+   сам — контекстное меню панели открывается по всей свободной длине,
+   а не только на кнопке "+".
+
+   Drag-область убрана (см. .tabstrip выше): с ней правый клик уходил
+   в системное меню окна. Перетаскивание окна теперь ловит
+   onTitleMouseDown в App.vue — этот элемент ему не мешает, потому что
+   обработчик на самом заголовке и всплывает сюда. */
 .strip-filler {
   flex: 1;
   align-self: stretch;
   min-width: 12px;
-  -webkit-app-region: drag;
 }
 </style>
