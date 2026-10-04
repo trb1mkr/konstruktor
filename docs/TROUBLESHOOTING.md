@@ -600,6 +600,20 @@ if (parent) closeOverlay(parent)     // stillSame игнорируется
 
 Часть CDN отдает `ERR_CONNECTION_CLOSED` на дефолтном UA Electron: повтор с Chrome-UA чинит handshake (`did-fail-load` в `tabsManager.ts`).
 
+### 🔬 DevTools страницы док-ится сам
+
+F12 открывает DevTools на `WebContentsView` вкладки, но рисовать панель приложению не нужно: `WebContentsView` — обёртка над `InspectableWebContentsView`, а там уже есть пара «страница + DevTools» с готовой разметкой дока. Electron делит bounds view сам. Отсюда практический вывод: не пересчитывать геометрию под док вручную, `layoutView` с полными bounds остаётся корректным.
+
+Докнуть панель в собственный `BrowserWindow` или оверлей-окно нельзя: `setDevToolsWebContents` переводит DevTools в `detach` с отдельным системным окном, а собственный контейнер не содержит `InspectableWebContentsView`, который Chromium ждёт для разметки.
+
+### ⌨️ F12 не срабатывает из адресной строки
+
+`before-input-event` стреляет только в том `webContents`, который в фокусе. Обработчик на view ловит F12 в странице, но не в shell, поэтому точка на окне обязательна. Обратный случай: в фокусе самого DevTools Chromium обрабатывает F12 сам и событие не доходит — дублировать там нечего.
+
+### 🧹 Состояние DevTools протухает
+
+Панель закрывается не только через F12, но и крестиком в самом DevTools, поэтому признак в `tabs:state` берётся опросом `isDevToolsOpened()`, а подписки `devtools-opened`/`devtools-closed` только подтягивают запись. При закрытии вкладки и при переключении инкогнито состояние сбрасывается до уничтожения `webContents` (`closeDevToolsFor`), иначе панель уходит вместе с view молча и запись достаётся новой вкладке.
+
 ### 🌐 Кастомная схема до ready
 
 `protocol.registerSchemesAsPrivileged` для `konstruktor://` — строго до `app.ready`, иначе view схему не рендерит. Хендл регистрировать на всех трех сессиях (default + обе партиции).

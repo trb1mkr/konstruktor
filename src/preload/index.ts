@@ -8,6 +8,8 @@ export interface TabInfo {
   pinned: boolean
   favicon: string
   groupId?: string
+  // DevTools страницы открыты на этой вкладке?
+  devToolsOpen?: boolean
 }
 
 export interface OpenGroupInfo {
@@ -123,6 +125,13 @@ const browserAPI = {
   isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:is-maximized'),
   // F11 из фокуса shell: тоггл fullscreen через main.
   toggleFullscreen: (): Promise<boolean> => ipcRenderer.invoke('window:toggle-fullscreen'),
+  // DevTools веб-страницы: открыть/закрыть на вкладке (F12 в активной).
+  // Возвращает новое состояние — по нему UI знает, что именно произошло.
+  toggleDevTools: (id?: number): Promise<{ open: boolean; mode: string }> =>
+    ipcRenderer.invoke('devtools:toggle', id),
+  // Состояние DevTools вкладки без переключения.
+  devToolsState: (id?: number): Promise<{ open: boolean; mode: string }> =>
+    ipcRenderer.invoke('devtools:state', id),
   // Ручное перетаскивание окна (вместо -webkit-app-region: drag).
   //
   // Координаты курсора — экранные (screenX/screenY), потому что окно

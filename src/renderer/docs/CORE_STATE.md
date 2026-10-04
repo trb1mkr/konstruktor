@@ -23,6 +23,10 @@ flowchart LR
 
 Shell слушает `tabs:state`, `tabs:navigated`, `tabs:tab-action`, `settings:changed`, `window:maximized`, `window:fullscreen`, `window:content-fullscreen`. Опрос таймером не используется.
 
+## ⌨️ Клавиши shell
+
+`onKey` в `App.vue` держит Ctrl+F (панель поиска), F11 (fullscreen) и F12 (DevTools активной вкладки). F11 и F12 дублируют `before-input-event` окна в main, а не заменяют его: событие стреляет только в том `webContents`, который в фокусе, поэтому из адресной строки или панели вкладок клавиша иначе не дошла бы до main. Решение принимается в main, оттуда же возвращается состояние в `tabs:state`.
+
 ## 🔒 Лок оформления
 
 Кастомный компонент фиксирует свое оформление оберткой `.theme-lock`: внутри нее CSS-переменные зафиксированы на dark и тема браузера не влияет. Реестр компонентов живет в `registry.ts`.

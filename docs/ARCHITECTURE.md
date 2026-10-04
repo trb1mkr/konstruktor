@@ -34,6 +34,7 @@ src/
     browserTheme.ts     color-scheme сайтов, dataset.theme страниц
     findManager.ts      состояние поиска, findInPage и custom-поиск
     findScripts.ts      builder-функции JS-инъекций
+    devtools.ts         DevTools страницы: док в WebContentsView вкладки
     windowMenu.ts       меню окна
     overlay/            overlay-окна menu/toast/dialog/find
       index.ts          точка входа для потребителей

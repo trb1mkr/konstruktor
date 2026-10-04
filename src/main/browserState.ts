@@ -13,6 +13,9 @@ export interface TabRecord {
   // Открытый экземпляр группы: ссылка на шаблон в groups.json.
   // undefined = вкладка вне групп.
   groupId?: string
+  // DevTools страницы открыты? Состояние уходит в меню браузера
+  // (галочка) и в shell. См. devtools.ts.
+  devToolsOpen?: boolean
 }
 
 export interface TabData {
@@ -31,6 +34,10 @@ export interface TabData {
   themeKey?: string
   // Открытый экземпляр группы: ссылка на шаблон в groups.json.
   groupId?: string
+  // DevTools страницы: док-режим и признак открытия. undefined = закрыты.
+  // Хранится в записи вкладки, а не в карте рядом, потому что состояние
+  // принадлежит конкретной вкладке и должно пережить смену активной.
+  devTools?: { open: boolean; mode: 'right' | 'bottom' }
 }
 
 // Состояние одного окна браузера. Вкладки живут внутри окна,

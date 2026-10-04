@@ -7,6 +7,7 @@ import { join } from 'path'
 import { windows, type WindowState, INCOGNITO_PARTITION } from './browserState'
 import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { openFindOverlay } from './findManager'
+import { toggleDevTools } from './devtools'
 import { ensureOverlayWindow } from './overlay'
 import { readFileSync, existsSync } from 'fs'
 
@@ -393,6 +394,9 @@ export function createWindow(
   // Глобальный Ctrl+F окна: срабатывает даже если before-input-event view
   // не выстрелил (фокус в shell, пустая вкладка, перехват сайтом).
   // F11 из фокуса shell: тоггл сценария из настроек вручную.
+  // F12 из фокуса shell: та же точка входа, что и на view. Дублировать
+  // обязательно — без неё F12 работал бы только когда фокус в странице,
+  // а из адресной строки или панели вкладок не срабатывал бы вовсе.
   win.webContents.on('before-input-event', (e, input) => {
     if (
       input.key === 'F11' &&
@@ -404,6 +408,20 @@ export function createWindow(
     ) {
       e.preventDefault()
       if (!win.isDestroyed()) toggleFullscreenMode(ws)
+      return
+    }
+    if (
+      input.key === 'F12' &&
+      input.type === 'keyDown' &&
+      !input.control &&
+      !input.meta &&
+      !input.shift &&
+      !input.alt
+    ) {
+      e.preventDefault()
+      if (win.isDestroyed() || ws.activeTabId === null) return
+      toggleDevTools(ws, ws.activeTabId)
+      deps.pushTabsState(ws)
       return
     }
     const key = (input.key ?? '').toLowerCase()

@@ -49,12 +49,20 @@ async function refreshMaximized() {
 
 // Ctrl+F из фокуса shell (адресная строка, панели): открываем панель поиска.
 // F11 из фокуса shell: Chromium не отдает клавишу сайту, тогглим через main.
+// F12 из фокуса shell: DevTools активной вкладки. Точка дублирует
+// before-input-event окна, а не заменяет его: в main решается, что именно
+// докнуто, и там же состояние уходит в tabs:state.
 function onKey(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey
   const isF = e.key.toLowerCase() === 'f' || e.code === 'KeyF'
   if (mod && !e.shiftKey && !e.altKey && isF) {
     e.preventDefault()
     void window.browserAPI.openFind()
+    return
+  }
+  if (e.key === 'F12' && !mod && !e.shiftKey && !e.altKey) {
+    e.preventDefault()
+    void window.browserAPI.toggleDevTools()
     return
   }
   if (e.key === 'F11' && !mod && !e.shiftKey && !e.altKey) {

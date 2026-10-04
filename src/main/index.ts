@@ -51,6 +51,7 @@ import {
   type TabsDeps
 } from './tabsManager'
 import { openFindOverlay } from './findManager'
+import { toggleDevTools, devToolsStateOf } from './devtools'
 import { recordVisit, updateMetadata, getHistory, searchHistory, getTimeline, deleteVisit, deleteEntry, clearHistory } from './historyStore'
 import {
   getDownloads,
@@ -256,7 +257,7 @@ function registerIpc() {
     return {
       tabs: ws.tabOrder.map((id) => {
         const t = ws.tabs.get(id)!
-        return { id, url: t.url, title: t.customTitle ?? t.title, pinned: t.pinned, favicon: t.customFavicon ?? t.favicon, groupId: t.groupId }
+        return { id, url: t.url, title: t.customTitle ?? t.title, pinned: t.pinned, favicon: t.customFavicon ?? t.favicon, groupId: t.groupId, devToolsOpen: t.devTools?.open === true }
       }),
       activeTabId: ws.activeTabId,
       openGroups: ws.openGroups.map((g) => ({ ...g })),
@@ -339,6 +340,27 @@ function registerIpc() {
     found.rec.customFavicon = value ? value : undefined
     pushTabsState(found.ws)
     return true
+  })
+  // DevTools веб-страницы: F12, пункт меню и хоткей из shell сюда сходятся.
+  // Без id работаем с активной вкладкой — так его зовёт shell, у которого
+  // активная вкладка одна. Возвращаем новое состояние: по нему меню рисует
+  // галочку, а renderer знает, открылась панель или закрылась.
+  ipcMain.handle('devtools:toggle', (e, id?: number) => {
+    const ws = wsOf(e)
+    const tabId = id ?? ws.activeTabId
+    if (tabId === null) return { open: false, mode: 'right' as const }
+    const state = toggleDevTools(ws, tabId)
+    pushTabsState(ws)
+    return state
+  })
+  // Состояние DevTools для отрисовки меню. Отдельный канал, а не чтение
+  // tabs:list: пункт меню открывается на активной вкладке и не должен
+  // перезапрашивать весь список вкладок.
+  ipcMain.handle('devtools:state', (e, id?: number) => {
+    const ws = wsOf(e)
+    const tabId = id ?? ws.activeTabId
+    if (tabId === null) return { open: false, mode: 'right' as const }
+    return devToolsStateOf(ws, tabId)
   })
   // Контекстное меню вкладки: якорь — точка клика относительно окна.
   // Пункты зависят от состояния (закреплена/нет), действия — через onSelect.
@@ -894,6 +916,16 @@ function registerIpc() {
       { id: 'downloads', label: 'Downloads', icon: '📥' },
       { id: 'history', label: 'History', icon: '🕘' },
       { id: 'settings', label: 'Settings', icon: '🛠️' },
+      // DevTools активной вкладки. Состояние читаем при открытии меню:
+      // панель могли закрыть крестиком в самом DevTools, и подпись пункта
+      // обязана это отражать.
+      {
+        id: 'devtools',
+        label: devToolsStateOf(ws, ws.activeTabId ?? -1).open
+          ? 'Close DevTools'
+          : 'Open DevTools',
+        icon: '🛠'
+      },
       // Заглушки: разделы в разработке, пункты неактивны.
       { id: 'profile', label: 'Profile', icon: '👤', disabled: true },
       { id: 'extensions', label: 'Extensions', icon: '🧩', disabled: true },
@@ -917,7 +949,17 @@ function registerIpc() {
         if (id === 'downloads') openPage(DOWNLOADS_URL)
         else if (id === 'history') openPage(HISTORY_URL)
         else if (id === 'settings') openPage(SETTINGS_URL)
-        else if (id === 'incognito') {
+        else if (id === 'devtools') {
+          // Меню закрываем ДО открытия панели: оверлей лежит поверх view,
+          // и докнутые DevTools перерисовали бы его область. Плюс панель
+          // забирает фокус, а меню его держит — оставить открытым значило бы
+          // оставить окно без фокуса.
+          closeOverlay(win)
+          if (ws.activeTabId !== null) {
+            toggleDevTools(ws, ws.activeTabId)
+            pushTabsState(ws)
+          }
+        } else if (id === 'incognito') {
           // Переключение переоткрывает вкладки, поэтому активный оверлей
           // (меню, открытый поверх вкладок) закрываем заранее: его
           // содержимое сейчас станет неактуальным.

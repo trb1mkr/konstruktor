@@ -6,6 +6,8 @@
 
 `findManager.ts` открывает панель через `openFindOverlay`. Повторный вызов при открытой панели считается no-op. Точки входа: `before-input-event` view, Ctrl+F shell, `find:open`. Закрытие идет через `closeFind` с чисткой подсветки.
 
+Точки входа дублируются в двух местах — на view и на окне — по одной причине: `before-input-event` стреляет только в том `webContents`, который в фокусе, поэтому Ctrl+F из адресной строки иначе не сработал бы. Тот же приём используется для F11 и F12.
+
 ## 🔤 Обычный поиск
 
 Подстрока с `matchCase` идет через `webContents.findInPage`. Навигация идет через `nextFind` и `prevFind` с флагом `findNext`. Состояние хранится в `lastFindText` и `lastFindFlags`.

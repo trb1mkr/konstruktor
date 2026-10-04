@@ -13,6 +13,7 @@ import {
 import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from './browserTheme'
 import { ensureStripToken, removeStripToken, reorderStrip } from './stripOrder'
 import { openFindOverlay } from './findManager'
+import { closeDevToolsFor, toggleDevTools } from './devtools'
 import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlay'
 import { getSettingsSync, saveSettings } from './settingsStore'
 import { recordVisit, updateMetadata } from './historyStore'
@@ -36,17 +37,22 @@ export function pushTabsState(ws: WindowState): void {
   const list: TabRecord[] = ws.tabOrder
     .map((id) => {
       const t = ws.tabs.get(id)
-      return t
-        ? {
-            id,
-            viewId: t.view.webContents.id,
-            url: t.url,
-            title: t.customTitle ?? t.title,
-            pinned: t.pinned,
-            favicon: t.customFavicon ?? t.favicon,
-            groupId: t.groupId
-          }
-        : null
+      if (!t) return null
+      // Опрос DevTools вместо чтения rec.devTools: пользователь может
+      // закрыть панель крестиком в самом DevTools, и тогда запись в rec
+      // устареет, а меню покажет «открыто». isDestroyed обязателен —
+      // умирающий webContents бросает на любом обращении.
+      const wc = t.view.webContents
+      return {
+        id,
+        viewId: wc.id,
+        url: t.url,
+        title: t.customTitle ?? t.title,
+        pinned: t.pinned,
+        favicon: t.customFavicon ?? t.favicon,
+        groupId: t.groupId,
+        devToolsOpen: wc.isDestroyed() ? false : wc.isDevToolsOpened()
+      }
     })
     .filter((t) => t !== null) as TabRecord[]
   ws.window?.webContents.send('tabs:state', {
@@ -184,6 +190,27 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
       deps.toggleFullscreenMode(ws)
       return
     }
+    // F12 — DevTools страницы (док справа/снизу, как в Chrome).
+    //
+    // Именно эта точка, а не обработчик окна: F12 приходит в webContents,
+    // который сейчас в фокусе. Когда фокус в самом DevTools, Chromium
+    // обрабатывает клавишу сам и event сюда не доходит — там F12 закрывает
+    // панель штатно, дублировать нечего.
+    if (
+      input.key === 'F12' &&
+      input.type === 'keyDown' &&
+      !input.control &&
+      !input.meta &&
+      !input.shift &&
+      !input.alt &&
+      ws.window &&
+      !ws.window.isDestroyed()
+    ) {
+      e.preventDefault()
+      toggleDevTools(ws, id)
+      pushTabsState(ws)
+      return
+    }
     const key = (input.key ?? '').toLowerCase()
     // code KeyF — физическая клавиша, не зависит от раскладки (русская 'а' = KeyF).
     const isF = key === 'f' || input.code === 'KeyF'
@@ -199,6 +226,23 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
         closeOverlay(ws.window)
       }
     }
+  })
+  // Состояние DevTools в записи вкладки синхронизируем с Chromium: панель
+  // закрывается не только через F12, но и крестиком в самом DevTools и по
+  // F12 внутри DevTools. Без этих подписок запись протухала бы, и меню
+  // показало бы «открыто» у закрытой панели. Пушим только при открытии:
+  // закрытие не меняет раскладку меню, а лишний tabs:state гоняет всю панель.
+  view.webContents.on('devtools-opened', () => {
+    const live = ws.tabs.get(id)
+    if (!live) return
+    live.devTools = { open: true, mode: live.devTools?.mode ?? 'right' }
+    if (id === ws.activeTabId) pushTabsState(ws)
+  })
+  view.webContents.on('devtools-closed', () => {
+    const live = ws.tabs.get(id)
+    if (!live) return
+    live.devTools = undefined
+    if (id === ws.activeTabId) pushTabsState(ws)
   })
   // Счётчик совпадений поиска: found-in-page активной view уходит в панель
   // поиска (оверлей kind 'find') точечным патчем overlay:update.
@@ -259,6 +303,10 @@ export function closeTab(ws: WindowState, deps: TabsDeps, id: number): void {
   const rec = ws.tabs.get(id)
   if (!rec || !ws.window) return
   const groupId = rec.groupId
+  // DevTools закрываем ДО уничтожения webContents: умирающий view уносит
+  // панель с собой, а closeDevTools на живом сбрасывает состояние явно.
+  // При закрытии неактивной вкладки состояние всё равно уходит с записью.
+  closeDevToolsFor(ws, id)
   ws.window.contentView.removeChildView(rec.view)
   rec.view.webContents.close()
   ws.tabs.delete(id)
@@ -439,8 +487,13 @@ export function switchIncognito(
   const groups = ws.openGroups.map((g) => ({ ...g }))
 
   // Старые view закрываем все до создания новых.
-  for (const rec of ws.tabs.values()) {
+  for (const [tabId, rec] of ws.tabs) {
     try {
+      // DevTools закрываем явно, до уничтожения view: панель принадлежит
+      // view, и без closeDevTools Chromium сносит её вместе с webContents
+      // молча. Само состояние обнуляем здесь же — карта вкладок очищается
+      // строкой ниже, но closeDevToolsFor читает запись по id.
+      closeDevToolsFor(ws, tabId)
       ws.window.contentView.removeChildView(rec.view)
       rec.view.webContents.close()
     } catch {
