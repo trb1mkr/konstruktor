@@ -34,7 +34,15 @@ src/
     browserTheme.ts     color-scheme сайтов, dataset.theme страниц
     findManager.ts      состояние поиска, findInPage и custom-поиск
     findScripts.ts      builder-функции JS-инъекций
-    overlayManager.ts   overlay-окна menu/toast/dialog/find
+    windowMenu.ts       меню окна
+    overlay/            overlay-окна menu/toast/dialog/find
+      index.ts          точка входа для потребителей
+      service.ts        логика показа и разбора запросов
+      pool.ts           окна оверлея и прогрев
+      ipc.ts            каналы overlay:* и их разбор
+      session.ts        сессии, токены, стек вложенности
+      geometry.ts       позиция и размер поверхностей
+      logger.ts         логирование по OVERLAY_DEBUG
     settingsStore.ts    settings.json
     historyStore.ts     history.json
     downloadsStore.ts   downloads.json
@@ -50,18 +58,28 @@ src/
   view-preload/
     internal.ts         window.konstruktor для view
     VIEW_BRIDGE.md      документация моста view
+  shared/
+    overlay-types.ts    контракт сообщений и типов overlay
   renderer/
     docs/               документация shell и UI
     App.vue             корневой layout, panel-top и panel-bottom
+    main.ts             точка входа renderer
+    overlay.ts          точка входа overlay-окна
+    index.html          документ shell
+    menu.html           документ overlay-окна
+    styles.css          базовые стили shell
     core/               useTabs, useTheme, layoutEngine, registry
     components/stdlib/  TabStrip, TabGroupNode, tabShared, useStripDrag и другие
-    overlay/            BrowserMenu, ToastStack, PromptDialog, FindBar
+    overlay/            BrowserMenu, ToastStack, PromptDialog, FindBar, IconDialog
+      components/       MenuList, DialogForm
+      registry.ts       выбор компонента по model.view
     layouts/            пресеты ClassicTop, Minimal
 docs/
   ARCHITECTURE.md       этот файл
   DOCS.md               правила документирования
   GIT.md                правила работы с git
   TROUBLESHOOTING.md    разбор проблем
+  UPDATE_PLAN.md        план автообновления
 ```
 
 ## 📦 Карта модулей

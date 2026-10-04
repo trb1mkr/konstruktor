@@ -10,14 +10,11 @@ dist/
 npm-debug.log*
 
 # OS
-.DS_Store
 Thumbs.db
 
 # IDE
-.idea/
 *.tsbuildinfo
-.vscode/*
-!.vscode/extensions.json
 
-# Electron builder cache
-.cache/
+# Dot folders
+/.*/
+!.vscode/extensions.json
