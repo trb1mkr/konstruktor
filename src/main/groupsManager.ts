@@ -35,7 +35,7 @@ export type { GroupTabDeps }
 type WsOf = (e: { sender: Electron.WebContents }) => WindowState
 
 export function registerGroupsIpc(wsOf: WsOf, deps: GroupTabDeps): void {
-  const { createTab, closeTab, pushTabsState, pruneEmptyGroup } = deps
+  const { closeTab, pushTabsState, pruneEmptyGroup } = deps
 
   // Моментальная синхронизация шаблонов: после каждой мутации store
   // рассылаем свежий список во все окна — shell не ждет tabs:state.

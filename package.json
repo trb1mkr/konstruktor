@@ -1,32 +1,51 @@
 {
   "name": "konstruktor",
   "version": "1.0.0",
-  "description": "",
+  "description": "The powerful browser for users and developers with a passion for customization",
   "main": "out/main/index.js",
   "scripts": {
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run typecheck",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "start": "electron ./out/main/index.js",
-    "dist": "electron-vite build ; electron-builder --win --x64"
+    "clean": "node -e \"require('node:fs').rmSync('out', { recursive: true, force: true })\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "dist": "electron-vite build && electron-builder --win --x64"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "electron",
+    "browser",
+    "vue"
+  ],
   "type": "module",
-  "private": "true",
+  "private": true,
+  "engines": {
+    "node": "^22.13.0 || >=24.13.0"
+  },
+  "packageManager": "npm@11.19.0",
   "dependencies": {
     "vue": "^3.5.43"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.6",
     "@vitejs/plugin-vue": "^5.2.4",
     "electron": "^41.7.1",
     "electron-builder": "^26.15.3",
     "electron-vite": "^3.1.0",
+    "eslint": "^10.12.0",
+    "eslint-plugin-vue": "^10.6.2",
+    "globals": "^16.5.0",
+    "prettier": "^3.9.9",
     "typescript": "~5.8.0",
+    "typescript-eslint": "^8.48.1",
     "vite": "^6.4.3",
+    "vue-eslint-parser": "^10.4.1",
     "vue-tsc": "~2.2.0"
   }
 }

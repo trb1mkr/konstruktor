@@ -170,7 +170,10 @@ async function onStripItemDrop(token: string, e: DragEvent) {
 function gapWidthFor(token: string): number {
   return gapWidth(stripDrag, token)
 }
-function onGroupDragEnd(e: DragEvent) {
+// Событие из шаблона приходит с аргументом, но само оно не нужно: группы
+// не detach'атся, обработчик только сбрасывает состояние перетаскивания.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function onGroupDragEnd(_event?: DragEvent) {
   const gid = dragGroupId.value
   resetStripDrag(stripDrag)
   mergeHover.value = false

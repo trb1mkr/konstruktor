@@ -56,11 +56,11 @@ export function rebuildStripFromTabs(ws: WindowState): void {
   }
   ws.pinnedStripOrder = keepOrder(ws.pinnedStripOrder, [
     ...pinnedTabs.map((id) => `t:${id}`),
-    ...pinnedGroups.map((gid) => `g:${gid}`)
+    ...pinnedGroups.map((gid) => `g:${gid}`),
   ])
   ws.stripOrder = keepOrder(ws.stripOrder, [
     ...normalTabs.map((id) => `t:${id}`),
-    ...normalGroups.map((gid) => `g:${gid}`)
+    ...normalGroups.map((gid) => `g:${gid}`),
   ])
 }
 
@@ -69,10 +69,12 @@ export function rebuildStripFromTabs(ws: WindowState): void {
 // Пины — только для групп. Неизвестные токены отбрасываются, недостающие дописываются в конец.
 export function reorderStrip(ws: WindowState, order: string[]): void {
   const knownTabs = new Set(
-    ws.tabOrder.filter((id) => {
-      const t = ws.tabs.get(id)
-      return t && !t.groupId
-    }).map((id) => `t:${id}`)
+    ws.tabOrder
+      .filter((id) => {
+        const t = ws.tabs.get(id)
+        return t && !t.groupId
+      })
+      .map((id) => `t:${id}`),
   )
   const knownGroups = new Set(rootGroupIds(ws).map((gid) => `g:${gid}`))
   const pinned: string[] = []
@@ -88,8 +90,11 @@ export function reorderStrip(ws: WindowState, order: string[]): void {
     } else if (tok.startsWith('g:')) {
       if (!knownGroups.has(tok)) continue
       const gid = tok.slice(2)
-      if (isGroupPinned(ws, gid)) { if (!pinned.includes(tok)) pinned.push(tok) }
-      else { if (!normal.includes(tok)) normal.push(tok) }
+      if (isGroupPinned(ws, gid)) {
+        if (!pinned.includes(tok)) pinned.push(tok)
+      } else {
+        if (!normal.includes(tok)) normal.push(tok)
+      }
     }
   }
   // Недостающие — в конец своей зоны: вкладки всегда в обычный ряд.
@@ -129,7 +134,10 @@ export function checkStripInvariant(ws: WindowState): string[] {
   }
   for (const id of ws.tabOrder) {
     const t = ws.tabs.get(id)
-    if (!t) { problems.push(`tabOrder has missing tab ${id}`); continue }
+    if (!t) {
+      problems.push(`tabOrder has missing tab ${id}`)
+      continue
+    }
     if (t.groupId) {
       if (all.includes(`t:${id}`)) problems.push(`grouped tab t:${id} still in strip`)
     } else {

@@ -32,8 +32,6 @@ import {
   layoutActiveView,
   toggleFullscreenMode,
   persistSessionTabs,
-  snapshotSessionTabs,
-  isDev,
   startWindowDrag,
   moveWindowDrag,
   endWindowDrag,
@@ -52,7 +50,7 @@ import {
 } from './tabsManager'
 import { openFindOverlay } from './findManager'
 import { toggleDevTools, devToolsStateOf } from './devtools'
-import { recordVisit, updateMetadata, getHistory, searchHistory, getTimeline, deleteVisit, deleteEntry, clearHistory } from './historyStore'
+import { getHistory, searchHistory, getTimeline, deleteVisit, deleteEntry, clearHistory } from './historyStore'
 import {
   getDownloads,
   searchDownloads,
@@ -63,7 +61,7 @@ import {
   newDownloadId,
   type DownloadEntry
 } from './downloadsStore'
-import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
+import { getSettings, saveSettings } from './settingsStore'
 import { getShortcuts, addShortcut, removeShortcut } from './shortcutsStore'
 import { createSavedGroup, getGroups } from './groupsStore'
 import { registerGroupsIpc } from './groupsManager'

@@ -271,8 +271,8 @@ export function resolveUnionBounds(
   const grow = levels.length > 1 ? STACK_GAP : 0
   let x = Math.round(left - grow)
   let y = Math.round(top - grow)
-  let width = Math.round(right - left + grow * 2)
-  let height = Math.round(bottom - top + grow * 2)
+  const width = Math.round(right - left + grow * 2)
+  const height = Math.round(bottom - top + grow * 2)
   // Последний кламп: union не должен уходить за экран, иначе край
   // уровня окажется за рабочей областью и карточка обрежется.
   const maxX = workArea.x + workArea.width - width

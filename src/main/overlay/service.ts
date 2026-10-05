@@ -1,5 +1,4 @@
 import { BrowserWindow, app, dialog, ipcMain, nativeTheme, screen } from 'electron'
-import { join } from 'path'
 import { getSettingsSync } from '../settingsStore'
 import { verifyIconSource, verifyEmojiButton, fileToIconDataUrl } from '../iconVerify'
 import { log, mark, perf, recordOpen, now, logError } from './logger'
@@ -1464,9 +1463,6 @@ export function getParentOfOverlay(overlay: BrowserWindow): BrowserWindow | unde
 }
 
 export function showOverlay(parent: BrowserWindow, request: OverlayRequest): void {
-  // Perf-метка входа: считаем всё от вызова showOverlay до показа окна.
-  const t0 = mark('overlay:open')
-
   // Toggle: повторный клик по ТОМ ЖЕ триггеру закрывает его меню.
   // Ключ обязателен: без него закрылось бы чужое открытое меню — например,
   // открыто меню вкладки, клик по ☰ закрыл бы его вместо показа меню
@@ -1501,22 +1497,6 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
       return
     }
   }
-
-  // Флаг анимаций из настроек: false = открыть моментально без fade-in.
-  // Синхронно из кэша — без await, иначе меню открывается с задержкой.
-  // Тему тоже из кэша: оверлей красится до монтирования.
-  const settings = getSettingsSync()
-  const animations = settings.animations !== false
-  // Эффективная тема оверлея: system резолвится через nativeTheme,
-  // остальные уходят как есть (slate красится своими переменными).
-  const theme =
-    settings.theme === 'system'
-      ? nativeTheme.shouldUseDarkColors
-        ? 'dark'
-        : 'light'
-      : settings.theme === 'slate' || settings.theme === 'light'
-        ? settings.theme
-        : 'dark'
 
   // Дисплей родителя — источник истины по координатам. При раскладке,
   // где окно на левом мониторе, его workArea.x отрицателен, и любая

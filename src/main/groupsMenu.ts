@@ -47,7 +47,7 @@ export function showGroupContextMenu(
 ): void {
   const inst = ws.openGroups.find((g) => g.instanceId === instanceId)
   if (!inst) return
-  const { createTab, closeTab, pushTabsState, pruneEmptyGroup, broadcastGroups } = deps
+  const { closeTab, pushTabsState, pruneEmptyGroup, broadcastGroups } = deps
   const others = ws.openGroups.filter((g) => g.instanceId !== instanceId)
   // Закрепление шаблона: подпись зависит от текущего состояния (async).
   void getGroups().then((list) => {

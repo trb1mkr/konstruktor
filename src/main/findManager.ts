@@ -67,7 +67,7 @@ function setFindCounter(parent: BrowserWindow | undefined, text: string): void {
 // Unicode-букв/цифр — пробелы и пунктуация считаются разделителями.
 export async function runCustomFind(rec: TabData, opts: CustomFindOptions): Promise<void> {
   const parent = parentOfTab(rec)
-  let res: { matches?: number; error?: string } = {}
+  let res: { matches?: number; error?: string }
   try {
     res = (await rec.view.webContents.executeJavaScript(
       buildRunCustomFindScript(opts)
@@ -84,7 +84,7 @@ export async function runCustomFind(rec: TabData, opts: CustomFindOptions): Prom
 
 export async function stepCustomFind(rec: TabData, forward: boolean): Promise<void> {
   const parent = parentOfTab(rec)
-  let res: { matches?: number; active?: number } = {}
+  let res: { matches?: number; active?: number }
   try {
     res = (await rec.view.webContents.executeJavaScript(
       buildStepCustomFindScript(forward)

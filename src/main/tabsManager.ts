@@ -15,7 +15,7 @@ import { ensureStripToken, removeStripToken, reorderStrip } from './stripOrder'
 import { openFindOverlay } from './findManager'
 import { closeDevToolsFor, toggleDevTools } from './devtools'
 import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlay'
-import { getSettingsSync, saveSettings } from './settingsStore'
+import { getSettingsSync } from './settingsStore'
 import { recordVisit, updateMetadata } from './historyStore'
 import { START_URL } from './startPage'
 

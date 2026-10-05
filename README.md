@@ -16,6 +16,17 @@ npm install
 npm run dev
 ```
 
+## 🔧 Проверки и стиль
+
+```sh
+npm run typecheck    # vue-tsc --noEmit
+npm run lint         # eslint . — ошибки в src/
+npm run format       # prettier --write . — переформатировать файлы
+npm run clean        # удалить out/
+```
+
+Стиль кода задаёт prettier (`.prettierrc.yml`), разбор ошибок — eslint (`eslint.config.js`). Форматирование и проверка разделены намеренно: `lint` не должен спорить с `format`.
+
 ## 🧩 Кастомизация
 
 Корневой layout — `src/renderer/App.vue`. Стандартные блоки лежат в `src/renderer/components/stdlib/` (`AddressBar`, `TabStrip`, `BookmarksBar`, `DropdownMenu`, `WindowControls`). Общее состояние вкладок хранится в `core/useTabs.ts`, отступы под WebContentsView считает `layoutEngine.ts`. Группы вкладок живут в `src/main/groupsStore.ts` и `src/main/groupsManager.ts`, рисуются через `TabGroupNode.vue`.  

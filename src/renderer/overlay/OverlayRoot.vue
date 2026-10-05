@@ -18,7 +18,6 @@ import type {
   FindModel,
   IconModel,
   MenuItem,
-  PushMessage,
   StackEntry,
   ToastModel,
   UpdateMessage
@@ -111,19 +110,6 @@ function propsFor(level: Level): Record<string, unknown> | null {
   }
 }
 
-const currentComponent = computed(() => {
-  const level = topLevel.value
-  return level ? componentFor(level.model.view) : null
-})
-
-const currentProps = computed(() => {
-  const level = topLevel.value
-  return level ? propsFor(level) : null
-})
-
-// Уровни для отрисовки, снизу вверх. propsFor отдаёт null для модели без
-// содержимого (тост без toast) — такой уровень пропускаем, иначе в DOM
-// появился бы компонент без данных.
 const renderedLevels = computed(() => {
   const stack = payload.value?.stack ?? []
   return stack
