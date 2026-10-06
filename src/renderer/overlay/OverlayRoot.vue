@@ -29,12 +29,13 @@ export type { MenuItem }
 
 /** Модель уровня — плоская: шаблон читает поля напрямую. */
 interface OverlayModel {
-  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu'
+  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom'
   items?: MenuItem[]
   toast?: ToastModel
   dialog?: DialogModel
   icon?: IconModel
   find?: FindModel
+  zoom?: { percent: number }
 }
 
 // Один уровень стека, ровно как его прислал main. Форма задана
@@ -105,6 +106,11 @@ function propsFor(level: Level): Record<string, unknown> | null {
         initial: model.find?.query ?? '',
         counter: model.find?.counter ?? ''
       }
+    // Попап зума: процент приходит в push (открытие) и в overlay:update
+    // (каждое `+`/`−`/`Reset`) — компонент живёт на пропе, своего
+    // состояния вне модели у него нет.
+    case 'zoom':
+      return { ...base, percent: model.zoom?.percent ?? 100 }
     default:
       return null
   }
@@ -528,10 +534,19 @@ async function onBackdrop(e: MouseEvent) {
 }
 
 async function onSelect(id: string) {
+  // Нативный DOM-события 'select' (Chromium его ПУЗЫРИТ, bubbles=true)
+  // задевает слушатель @select: компоненты без declare emits получают его
+  // fallthrough'ем на корень, и выделение текста в поле (двойной клик по
+  // проценту зума) приходило сюда как Event. Event в IPC доходит объектом,
+  // и main падал на `id.replace is not a function`. Не строка — не команда.
+  if (typeof id !== 'string') return
   await window.overlayAPI.select(id, currentSessionId())
 }
 
 async function onSubmit(value: string) {
+  // Тот же заслон: нативный 'submit' сюда попасть не должен, но
+  // resolveOverlaySubmit режет raw.slice() и упал бы на не-строке.
+  if (typeof value !== 'string') return
   await window.overlayAPI.submit(value, currentSessionId())
 }
 </script>

@@ -287,6 +287,12 @@ export const SETTINGS_PAGE_HTML = shell(
    <label class="check"><input id="rounded-cb" type="checkbox" /><span>Rounded window corners (windowed mode)</span></label>
    <label class="check"><input id="remember-cb" type="checkbox" /><span>Remember window size and position</span></label>
    <label class="check"><input id="remember-tabs-cb" type="checkbox" /><span>Remember open tabs</span></label>
+   <label class="set"><span>Page zoom</span>
+     <select id="zoommode">
+       <option value="origin">Per site — shared by URL (like Chrome)</option>
+       <option value="tab">Per tab — independent of URL, resets on tab close</option>
+     </select></label>
+   <label class="check"><input id="zoom-sync-cb" type="checkbox" /><span>Same zoom for all tabs</span></label>
    <div class="set"><span>Browser theme</span>
      <div class="theme-pick" id="theme-pick">
        <button type="button" data-theme-pick="dark" title="Dark theme">
@@ -335,6 +341,8 @@ export const SETTINGS_PAGE_HTML = shell(
      const roundedCb = document.getElementById('rounded-cb');
      const rememberCb = document.getElementById('remember-cb');
      const rememberTabsCb = document.getElementById('remember-tabs-cb');
+     const zoomModeSel = document.getElementById('zoommode');
+     const zoomSyncCb = document.getElementById('zoom-sync-cb');
      const fsmode = document.getElementById('fsmode');
      const themePick = document.getElementById('theme-pick');
      let theme = 'dark';
@@ -365,6 +373,8 @@ export const SETTINGS_PAGE_HTML = shell(
        roundedCb.checked = s.roundedCorners === true;
        rememberCb.checked = s.rememberBounds !== false;
        rememberTabsCb.checked = s.rememberTabs !== false;
+       zoomModeSel.value = s.zoomMode === 'tab' ? 'tab' : 'origin';
+       zoomSyncCb.checked = s.zoomSync === true;
        fsmode.value = s.fullscreenMode === 'content' ? 'content' : 'window';
        theme = s.theme === 'light' || s.theme === 'system' || s.theme === 'slate' ? s.theme : 'dark';
        paintTheme();
@@ -382,6 +392,8 @@ export const SETTINGS_PAGE_HTML = shell(
          roundedCorners: roundedCb.checked,
          rememberBounds: rememberCb.checked,
          rememberTabs: rememberTabsCb.checked,
+         zoomMode: zoomModeSel.value,
+         zoomSync: zoomSyncCb.checked,
          fullscreenMode: fsmode.value,
          theme
        });

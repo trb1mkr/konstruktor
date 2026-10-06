@@ -14,6 +14,16 @@ import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from './brows
 import { ensureStripToken, removeStripToken, reorderStrip } from './stripOrder'
 import { openFindOverlay } from './findManager'
 import { closeDevToolsFor, toggleDevTools } from './devtools'
+import {
+  applyZoomToWs,
+  percentOf,
+  seedZoomPercent,
+  setZoom,
+  stepActiveZoom,
+  syncZoomPopup,
+  zoomModeFor,
+  zoomShortcut
+} from './zoomManager'
 import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlay'
 import { getSettingsSync } from './settingsStore'
 import { recordVisit, updateMetadata } from './historyStore'
@@ -51,7 +61,11 @@ export function pushTabsState(ws: WindowState): void {
         pinned: t.pinned,
         favicon: t.customFavicon ?? t.favicon,
         groupId: t.groupId,
-        devToolsOpen: wc.isDestroyed() ? false : wc.isDevToolsOpened()
+        devToolsOpen: wc.isDestroyed() ? false : wc.isDevToolsOpened(),
+        // Процент зума — опросом webContents, как у DevTools: Chromium
+        // меняет его и сам (per-origin при навигации), а запись без
+        // опроса протухала бы и badge показал бы чужое значение.
+        zoom: percentOf(wc)
       }
     })
     .filter((t) => t !== null) as TabRecord[]
@@ -63,6 +77,10 @@ export function pushTabsState(ws: WindowState): void {
     stripOrder: [...ws.stripOrder],
     pinnedStripOrder: [...ws.pinnedStripOrder]
   })
+  // Открытый попап зума едет в той же точке: любое изменение зума
+  // (клавиши, Ctrl+колесо, IPC, кнопки попапа) проходит через этот пуш,
+  // и поле попапа показывает фактический процент страницы, а не stale.
+  syncZoomPopup(ws)
 }
 
 export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): number {
@@ -82,6 +100,22 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   } catch {
     // Старый Electron без setBackgroundColor у View — игнорим.
   }
+  // Pinch-zoom гасим: процентный зум — единственный источник масштаба,
+  // и визуальный зум спорил бы с ним (своя шкала, своя история).
+  // В Electron visual zoom выключен по умолчанию — вызов страховка,
+  // а не включение.
+  void view.webContents.setVisualZoomLevelLimits(1, 1)
+  // Режим зума из настройки: 'tab' -> isolated (зум живёт в вкладке и
+  // умирает с ней), 'origin' -> default (per-origin, как Chrome).
+  view.webContents.setZoomMode(zoomModeFor(getSettingsSync()))
+  // Единый зум: вкладка открывается с последнего процента и держит его на
+  // каждой навигации. Зум до загрузки НЕ применяется (проверено замером:
+  // setZoomFactor до did-finish-load отдаёт 1), поэтому подписка на
+  // did-finish-load, а не вызов сразу. В isolated-режиме повтор того же
+  // значения — no-op, в default перебивает origin-значение нового сайта.
+  view.webContents.on('did-finish-load', () => {
+    if (getSettingsSync().zoomSync) setZoom(view.webContents, seedZoomPercent())
+  })
   const id = allocTabId()
   ws.tabs.set(id, { view, url, title: 'New Tab', pinned: false, favicon: '', retriedWithChromeUA: false, customTitle: undefined, customFavicon: undefined })
   ws.tabOrder.push(id)
@@ -211,6 +245,17 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
       pushTabsState(ws)
       return
     }
+    // Масштаб страницы: Ctrl/Cmd + = / - / 0. Физический code, не key —
+    // раскладка (см. TROUBLESHOOTING.md «Ctrl+F и раскладка»).
+    const zoomAct = zoomShortcut(input)
+    if (zoomAct !== null) {
+      e.preventDefault()
+      // Применение внутри helpers: они же пушат окно (и все окна при
+      // едином зуме), отдельный pushTabsState здесь был бы дублем.
+      if (zoomAct === 0) applyZoomToWs(ws, 100, pushTabsState)
+      else stepActiveZoom(ws, zoomAct, pushTabsState)
+      return
+    }
     const key = (input.key ?? '').toLowerCase()
     // code KeyF — физическая клавиша, не зависит от раскладки (русская 'а' = KeyF).
     const isF = key === 'f' || input.code === 'KeyF'
@@ -258,6 +303,20 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
         ? 'No results'
         : `${result.activeMatchOrdinal} of ${result.matches}`
     updateActiveOverlay(ws.window, { find: { counter: text } })
+  })
+
+  // Ctrl+колесо: Electron зум НЕ применяет сам — content шлёт делегату
+  // запрос (WebContentsDelegate::ContentsZoomChange), а Electron-реализация
+  // только испускает zoom-changed и больше ничего не делает (в Chrome там
+  // IDC_ZOOM_PLUS). Значит единственный вариант: применять лестницу здесь,
+  // иначе Ctrl+колесо молча не работает.
+  //
+  // Свой лестничный шаг вместо того, что сделал бы Chromium: проценты
+  // должны совпадать с badge и полем попапа, а не быть 1.2^N.
+  view.webContents.on('zoom-changed', (_e, direction: string) => {
+    const live = ws.tabs.get(id)
+    if (!live) return
+    stepActiveZoom(ws, direction === 'out' ? -1 : 1, pushTabsState)
   })
 
   if (url !== 'about:blank') {

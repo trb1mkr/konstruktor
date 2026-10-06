@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('konstruktor', {
     fullscreenMode?: string
     rememberBounds?: boolean
     rememberTabs?: boolean
+    zoomMode?: string
+    zoomSync?: boolean
   }) => ipcRenderer.invoke('settings:save', patch),
   getShortcuts: () => ipcRenderer.invoke('shortcuts:list'),
   addShortcut: (input: { name?: string; url: string }) =>

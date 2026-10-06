@@ -27,6 +27,14 @@ export interface BrowserSettings {
   rememberBounds: boolean
   // Запоминать открытые вкладки и восстанавливать при старте.
   rememberTabs: boolean
+  // Режим зума страницы: 'origin' — per-origin (как Chrome: общий для
+  // всех вкладок одного сайта и переживающий перезапуск), 'tab' —
+  // per-webContents через setZoomMode('isolated'): зум принадлежит
+  // вкладке, не наследуется по URL, а закрытие вкладки обнуляет его.
+  zoomMode: string
+  // Единый зум на все вкладки: любое изменение применяется ко всем
+  // вкладкам всех окон, новые открываются с последнего процента.
+  zoomSync: boolean
   // Последняя геометрия обычного (не maximized/fullscreen) окна.
   windowBounds?: { x: number; y: number; width: number; height: number }
   windowMaximized?: boolean
@@ -48,7 +56,9 @@ const DEFAULTS: BrowserSettings = {
   roundedCorners: false,
   fullscreenMode: 'window',
   rememberBounds: true,
-  rememberTabs: true
+  rememberTabs: true,
+  zoomMode: 'origin',
+  zoomSync: false
 }
 
 let filePath = ''

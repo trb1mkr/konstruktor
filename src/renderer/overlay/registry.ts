@@ -6,6 +6,7 @@ import PromptDialog from './PromptDialog.vue'
 import IconDialog from './IconDialog.vue'
 import FindBar from './FindBar.vue'
 import ToastStack from './ToastStack.vue'
+import ZoomPopup from './ZoomPopup.vue'
 
 // Соответствие вида оверлея и компонента.
 //
@@ -26,7 +27,10 @@ const REGISTRY: Record<ViewKind, Component> = {
   dialog: PromptDialog,
   icon: IconDialog,
   find: FindBar,
-  toast: ToastStack
+  toast: ToastStack,
+  // Попап масштаба у бейджа в адресной строке: поле процента, `−`/`+`,
+  // Reset. Форма своя, поэтому свой компонент, а не MenuList с пунктом.
+  zoom: ZoomPopup
 }
 
 /**

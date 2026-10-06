@@ -87,7 +87,7 @@ export interface IconDialogState {
 export { verifyIconSource } from '../iconVerify'
 
 interface OverlayRequest {
-  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu'
+  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom'
   anchor: { x: number; y: number }
   items?: OverlayMenuItem[]
   toast?: { title: string; body?: string; timeout?: number }
@@ -99,7 +99,15 @@ interface OverlayRequest {
   }
   icon?: IconDialogState
   find?: { query?: string }
+  // Текущий процент зума попапа. Общий объект с моделью из openZoomPopup:
+  // onSelect мутирует его, и пересборка push (измерение, возврат по Esc)
+  // показывает уже применённый процент, а не тот, что был на открытии.
+  zoom?: { percent: number }
   onSelect?: (id: string) => void
+  // Не закрывать сессию после select. Нужно попапу зума: `+`/`−`/`Reset`
+  // обновляют процент через overlay:update и держат попап открытым,
+  // тогда как пункт меню закрывает его всегда.
+  holdOnSelect?: (id: string) => boolean
   // Контекст общего диалога иконки: apply вызывается после верификации.
   // Лежит только здесь; хендлер overlay:submit-icon находит его через
   // request активной сессии, найденной по sender-окну.
@@ -115,6 +123,21 @@ interface OverlayRequest {
   // открыто меню вкладки) просто показывает своё меню. Ключ обязателен —
   // без него toggle закрывал бы чужое открытое меню.
   toggleKey?: string
+}
+
+/**
+ * Виды, которые гасятся внешним кликом и тогглом по своему триггеру.
+ *
+ * Меню (контекстное и окна) и попап зума: у всех один UX-контракт —
+ * открытое закрывается кликом мимо и повторным кликом по триггеру,
+ * диалоги/поиск/тосты так не закрываются (у них своя логика).
+ *
+ * Раньше условие было продублировано в шести местах сервиса, и каждое
+ * новое «менюподобное» видело только часть из них: попап зума либо
+ * не закрывался кликом по странице, либо закрывался при каждом `+`.
+ */
+function isDismissableMenuLike(kind: OverlayRequest['kind']): boolean {
+  return kind === 'menu' || kind === 'window-menu' || kind === 'zoom'
 }
 
 // Активная сессия оверлея. Состояние живёт в session.ts: записи,
@@ -566,7 +589,7 @@ function provisionalSize(request: OverlayRequest): { width: number; height: numb
   if (spec.height !== null) return { width: spec.width, height: spec.height }
   // Меню: хватает на шесть пунктов, дальше окно дорастёт по измерению.
   const isMenuLike = request.kind === 'menu' || request.kind === 'window-menu'
-  const rows = isMenuLike ? (request.items?.length ?? 0) : 1
+  const rows = isMenuLike ? (request.items?.length ?? 0) : request.kind === 'zoom' ? 2 : 1
   const estimated = Math.max(rows, 6)
   return { width: spec.width, height: Math.min(estimated * MENU_ROW_FALLBACK_H, MAX_PROVISIONAL_H) }
 }
@@ -847,6 +870,9 @@ function overlayModel(request: OverlayRequest): OverlayModel {
   }
   if (request.kind === 'find') {
     return { view: 'find', find: { query: request.find?.query } }
+  }
+  if (request.kind === 'zoom') {
+    return { view: 'zoom', zoom: { percent: request.zoom?.percent ?? 100 } }
   }
   return { view: 'toast', toast: request.toast ?? { title: '' } }
 }
@@ -1229,7 +1255,7 @@ export function closeOverlay(parent: BrowserWindow): void {
   // Запоминаем закрытое меню с его триггером: следующий вызов showOverlay
   // с тем же ключом в пределах TOGGLE_ECHO_MS — это эхо открывающего клика,
   // а не намерение открыть заново (см. ветку toggle в showOverlay).
-  if (entry.request.kind === 'menu' || entry.request.kind === 'window-menu') {
+  if (isDismissableMenuLike(entry.request.kind)) {
     lastClosed.set(parent.id, {
       toggleKey: entry.request.toggleKey,
       at: Date.now()
@@ -1355,7 +1381,7 @@ export function closeStack(parent: BrowserWindow): void {
   // закрытии верхнего уровня: следующий клик по тому же триггеру должен
   // распознаться как эхо, а не открыть меню заново.
   const root = stackOf<OverlayRequest>(parent.id)[0]
-  if (root.request.kind === 'menu' || root.request.kind === 'window-menu') {
+  if (isDismissableMenuLike(root.request.kind)) {
     lastClosed.set(parent.id, {
       toggleKey: root.request.toggleKey,
       at: Date.now()
@@ -1393,7 +1419,7 @@ export function closeOverlayIfMenu(parent: BrowserWindow): void {
   }
   const entry = sessionOf<OverlayRequest>(parent.id)
   if (!entry) return
-  if (entry.request.kind !== 'menu' && entry.request.kind !== 'window-menu') return
+  if (!isDismissableMenuLike(entry.request.kind)) return
   const age = Date.now() - entry.openedAt
   if (age < OPEN_SETTLE_MS) {
     log('session', 'shell click during open, ignored', {
@@ -1467,7 +1493,9 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   // Ключ обязателен: без него закрылось бы чужое открытое меню — например,
   // открыто меню вкладки, клик по ☰ закрыл бы его вместо показа меню
   // браузера. Диалоги и поиск ключа не имеют и всегда просто показываются.
-  if (request.toggleKey && request.kind === 'menu') {
+  // zoom-badge в списке обязателен: повторный клик по бейджу зума закрывает
+  // его попап (контракт тот же, что у ☰).
+  if (request.toggleKey && isDismissableMenuLike(request.kind)) {
     const cur = sessionOf<OverlayRequest>(parent.id)
     const same = cur && !cur.overlay.isDestroyed() && cur.request.toggleKey === request.toggleKey
     if (same) {
@@ -1732,7 +1760,8 @@ if (!overlay || overlay.isDestroyed()) {
       request.kind === 'icon' ||
       request.kind === 'dialog' ||
       request.kind === 'menu' ||
-      request.kind === 'window-menu'
+      request.kind === 'window-menu' ||
+      request.kind === 'zoom'
     ) {
       noteFocusHandoff(parent.id)
     }
@@ -1855,11 +1884,13 @@ if (!overlay || overlay.isDestroyed()) {
     // открытие.
     //
     // Меню и панель поиска забирают фокус; диалоги — через автофокус поля
-    // ввода, тост фокуса не берёт вовсе (он пассивен).
+    // ввода, тост фокуса не берёт вовсе (он пассивен). Попап зума — как
+    // меню: без focus() стрелки/Enter в поле процента не доходили бы.
     if (
       request.kind === 'find' ||
       request.kind === 'menu' ||
-      request.kind === 'window-menu'
+      request.kind === 'window-menu' ||
+      request.kind === 'zoom'
     ) {
       try {
         win.focus()
@@ -1882,6 +1913,15 @@ if (!overlay || overlay.isDestroyed()) {
 }
 
 export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
+  // IPC-канал открытый: не-строка приходит, если renderer прислал
+  // нативный DOM-Event (выделение текста в поле поверхности пузырится до
+  // корня как 'select', см. OverlayRoot.onSelect). Такая «команда» не
+  // существует — гасим до onSelect, иначе упавший хендлер роняет весь
+  // IPC-вызов с TypeError в логах.
+  if (typeof id !== 'string') {
+    log('error', 'select with non-string id, ignored', { got: typeof id })
+    return
+  }
   log('command', `select: ${id}`)
   const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return
@@ -1890,6 +1930,14 @@ export function resolveOverlaySelect(overlay: BrowserWindow, id: string): void {
   {
     const parent = BrowserWindow.fromId(parentId)
     entry.request.onSelect?.(id)
+    // Сессия просит остаться открытой после выбора: попап зума (`+`/`−`/
+    // `Reset` обновили процент через overlay:update и держат себя же).
+    // Проверка ДО логики stillTop: onSelect не открывал новую сессию, а
+    // закрывать обновлённый попап значит потерять его после каждого шага.
+    if (entry.request.holdOnSelect?.(id)) {
+      log('command', 'select keeps overlay open', { parentId, id })
+      return
+    }
     // onSelect умеет открыть новое оверлей-поверх (меню -> диалог иконки).
     // active уже указывает на новую сессию, и её закрывать нельзя —
     // иначе диалог живёт одну вспышку. Но парковать СТАРОЕ содержимое
@@ -1961,6 +2009,12 @@ export function resolveOverlayDismiss(overlay: BrowserWindow): void {
 // Диалог с полем ввода: значение "buttonId::text" резолвится
 // через тот же onSelect — main разобрает префикс сам.
 export function resolveOverlaySubmit(overlay: BrowserWindow, raw: string): void {
+  // Тот же заслон не-строки, что и в resolveOverlaySelect: log ниже
+  // режет raw.slice(0, 40) и упал бы на объекте.
+  if (typeof raw !== 'string') {
+    log('error', 'submit with non-string value, ignored', { got: typeof raw })
+    return
+  }
   log('command', `submit: ${raw.slice(0, 40)}`)
   const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return

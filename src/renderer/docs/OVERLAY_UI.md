@@ -8,7 +8,7 @@
 
 ## 🗂️ Панели
 
-`BrowserMenu.vue` рисует пункты и инкогнито-бейдж. Пункт группы показывает заданные иконку, название и цветную точку (`color`). `ToastStack.vue` показывает уведомления. `PromptDialog.vue` запрашивает ввод для переименования и цвета. `IconDialog.vue` — общий диалог иконки для вкладок и групп: поле ввода плюс кнопки URL, файл, emoji и отмена; тип источника верифицирует main (`verifyIconSource`). `FindBar.vue` висит над страницей с опциями как в VS Code.
+`BrowserMenu.vue` рисует пункты и инкогнито-бейдж. Пункт группы показывает заданные иконку, название и цветную точку (`color`). `ToastStack.vue` показывает уведомления. `PromptDialog.vue` запрашивает ввод для переименования и цвета. `IconDialog.vue` — общий диалог иконки для вкладок и групп: поле ввода плюс кнопки URL, файл, emoji и отмена; тип источника верифицирует main (`verifyIconSource`). `FindBar.vue` висит над страницей с опциями как в VS Code. `ZoomPopup.vue` управляет масштабом страницы: поле процента, кнопки `−`/`+` и `Reset`; поле первое в DOM ради автофокуса, визуальный порядок `− N% +` задает flex `order`.
 
 ```mermaid
 flowchart LR
@@ -17,9 +17,11 @@ flowchart LR
   Kind -->|toast| Toast[ToastStack]
   Kind -->|dialog| Dialog[PromptDialog]
   Kind -->|find| Find[FindBar]
+  Kind -->|zoom| Zoom[ZoomPopup]
   Find -->|overlayAPI| Main[find:* в main]
   Menu -->|overlayAPI| Main
   Dialog -->|overlayAPI| Main
+  Zoom -->|overlayAPI| Main
 ```
 
 ## 🔍 Поиск

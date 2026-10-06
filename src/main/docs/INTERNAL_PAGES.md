@@ -11,7 +11,7 @@
 | `konstruktor://start` | Стартовая страница-табло с плитками | `shortcuts.json` |
 | `konstruktor://history` | История визитов с хронологией по дням, месяцам и годам | `history.json`, инкогнито не пишет и не читает |
 | `konstruktor://downloads` | Хранилище загрузок с системными иконками | `downloads.json` |
-| `konstruktor://settings` | Поиск, домашняя страница, DNS | `settings.json` |
+| `konstruktor://settings` | Поиск, домашняя страница, DNS, тема, режимы зума | `settings.json` |
 
 ## 🔀 Роутинг
 

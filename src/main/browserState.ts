@@ -16,6 +16,11 @@ export interface TabRecord {
   // DevTools страницы открыты? Состояние уходит в меню браузера
   // (галочка) и в shell. См. devtools.ts.
   devToolsOpen?: boolean
+  // Масштаб страницы в процентах (100 = обычный). Читается из
+  // webContents при пуше (см. percentOf в zoomManager), а не хранится
+  // отдельно: источник истины — Chromium, иначе badge расходится с
+  // страницей после навигации (per-origin зум).
+  zoom: number
 }
 
 export interface TabData {

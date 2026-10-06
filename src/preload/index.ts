@@ -10,6 +10,9 @@ export interface TabInfo {
   groupId?: string
   // DevTools страницы открыты на этой вкладке?
   devToolsOpen?: boolean
+  // Масштаб страницы в процентах (100 = обычный). undefined = старое
+  // состояние без зума, трактуется как 100.
+  zoom?: number
 }
 
 export interface OpenGroupInfo {
@@ -132,6 +135,17 @@ const browserAPI = {
   // Состояние DevTools вкладки без переключения.
   devToolsState: (id?: number): Promise<{ open: boolean; mode: string }> =>
     ipcRenderer.invoke('devtools:state', id),
+  // Масштаб страницы активной вкладки: шаги по лестнице, ручной процент,
+  // сброс. Возвращают применённый процент — по нему можно не ждать
+  // tabs:state (в нём он придёт тем же значением).
+  zoomIn: (): Promise<number> => ipcRenderer.invoke('zoom:in'),
+  zoomOut: (): Promise<number> => ipcRenderer.invoke('zoom:out'),
+  zoomReset: (): Promise<number> => ipcRenderer.invoke('zoom:reset'),
+  zoomSet: (percent: number): Promise<number> => ipcRenderer.invoke('zoom:set', percent),
+  // Попап масштаба: якорь — правый НИЖНИЙ угол бейджа относительно
+  // content-области окна (контракт menu:popup кнопки ☰).
+  zoomPopup: (anchor: { x: number; y: number }): void =>
+    ipcRenderer.send('zoom:popup', anchor),
   // Ручное перетаскивание окна (вместо -webkit-app-region: drag).
   //
   // Координаты курсора — экранные (screenX/screenY), потому что окно

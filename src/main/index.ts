@@ -50,6 +50,13 @@ import {
 } from './tabsManager'
 import { openFindOverlay } from './findManager'
 import { toggleDevTools, devToolsStateOf } from './devtools'
+import {
+  applyZoomToWs,
+  openZoomPopup,
+  percentOf,
+  stepActiveZoom,
+  zoomModeFor
+} from './zoomManager'
 import { getHistory, searchHistory, getTimeline, deleteVisit, deleteEntry, clearHistory } from './historyStore'
 import {
   getDownloads,
@@ -255,7 +262,7 @@ function registerIpc() {
     return {
       tabs: ws.tabOrder.map((id) => {
         const t = ws.tabs.get(id)!
-        return { id, url: t.url, title: t.customTitle ?? t.title, pinned: t.pinned, favicon: t.customFavicon ?? t.favicon, groupId: t.groupId, devToolsOpen: t.devTools?.open === true }
+        return { id, url: t.url, title: t.customTitle ?? t.title, pinned: t.pinned, favicon: t.customFavicon ?? t.favicon, groupId: t.groupId, devToolsOpen: t.devTools?.open === true, zoom: percentOf(t.view.webContents) }
       }),
       activeTabId: ws.activeTabId,
       openGroups: ws.openGroups.map((g) => ({ ...g })),
@@ -359,6 +366,28 @@ function registerIpc() {
     const tabId = id ?? ws.activeTabId
     if (tabId === null) return { open: false, mode: 'right' as const }
     return devToolsStateOf(ws, tabId)
+  })
+  // Масштаб страницы активной вкладки. Процент всегда читается из
+  // webContents (источник истины — Chromium), после применения пушится
+  // tabs:state — badge в адресной строке обновляется реактивно, отдельный
+  // канал не нужен. Всё идёт через applyZoomToWs/stepActiveZoom: там же
+  // живёт режим единого зума (все вкладки всех окон).
+  ipcMain.handle('zoom:in', (e) => stepActiveZoom(wsOf(e), 1, pushTabsState))
+  ipcMain.handle('zoom:out', (e) => stepActiveZoom(wsOf(e), -1, pushTabsState))
+  ipcMain.handle('zoom:reset', (e) => applyZoomToWs(wsOf(e), 100, pushTabsState))
+  ipcMain.handle('zoom:set', (e, raw: number) => applyZoomToWs(wsOf(e), raw, pushTabsState))
+  // Попап масштаба: якорь — правый НИЖНИЙ угол бейджа, координаты
+  // content-области (тот же контракт, что у menu:popup кнопки ☰).
+  ipcMain.on('zoom:popup', (e, anchor: { x: number; y: number }) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const ws = win ? getState(win) : undefined
+    if (!win || !ws || !anchor) return
+    openZoomPopup(
+      win,
+      ws,
+      { x: Math.round(anchor.x), y: Math.round(anchor.y) },
+      pushTabsState
+    )
   })
   // Контекстное меню вкладки: якорь — точка клика относительно окна.
   // Пункты зависят от состояния (закреплена/нет), действия — через onSelect.
@@ -705,6 +734,8 @@ function registerIpc() {
         fullscreenMode?: string
         rememberBounds?: boolean
         rememberTabs?: boolean
+        zoomMode?: string
+        zoomSync?: boolean
       }
     ) => {
       const next = await saveSettings(patch)
@@ -726,6 +757,29 @@ function registerIpc() {
           ws.window?.webContents.send('settings:changed')
         }
         if (patch.theme !== undefined) applyThemeToViews(next.theme)
+      }
+      // Режим зума применяется к уже открытым view сразу: политика —
+      // свойство webContents, а не partition, и без sweep новая настройка
+      // действовала бы только на вкладки, открытые после неё.
+      if (patch.zoomMode !== undefined) {
+        const mode = zoomModeFor(next)
+        for (const ws of windows.values()) {
+          for (const rec of ws.tabs.values()) {
+            const wc = rec.view.webContents
+            if (!wc.isDestroyed()) wc.setZoomMode(mode)
+          }
+          pushTabsState(ws)
+        }
+      }
+      // Включение единого зума выравнивает вкладки СРАЗУ, а не к следующему
+      // шагу лестницы: иначе после включения проценты остаются разными,
+      // пока пользователь не изменит зум повторно.
+      if (patch.zoomSync === true) {
+        const seedWs = [...windows.values()].find((w) => w.activeTabId !== null)
+        const rec = seedWs?.activeTabId != null ? seedWs.tabs.get(seedWs.activeTabId) : undefined
+        if (seedWs && rec) {
+          applyZoomToWs(seedWs, percentOf(rec.view.webContents), pushTabsState)
+        }
       }
       void e
       return next

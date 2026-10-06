@@ -8,6 +8,7 @@ import { windows, type WindowState, INCOGNITO_PARTITION } from './browserState'
 import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { openFindOverlay } from './findManager'
 import { toggleDevTools } from './devtools'
+import { applyZoomToWs, stepActiveZoom, zoomShortcut } from './zoomManager'
 import { ensureOverlayWindow } from './overlay'
 import { readFileSync, existsSync } from 'fs'
 
@@ -422,6 +423,22 @@ export function createWindow(
       if (win.isDestroyed() || ws.activeTabId === null) return
       toggleDevTools(ws, ws.activeTabId)
       deps.pushTabsState(ws)
+      return
+    }
+    // Масштаб страницы из фокуса shell (адресная строка, панели) — та же
+    // дублирующая точка, что F12/Ctrl+F: before-input-event стреляет только
+    // в focused webContents, и без обработчика окна зум из адресной строки
+    // не срабатывал бы вовсе.
+    //
+    // В App.vue НЕ дублируется: здесь стоит preventDefault, а он не даёт
+    // событию дойти до keydown страницы — дубль дал бы два шага лестницы
+    // за одно нажатие.
+    const zoomAct = zoomShortcut(input)
+    if (zoomAct !== null && !win.isDestroyed()) {
+      e.preventDefault()
+      // Helpers пушат само окно (и все окна при едином зуме).
+      if (zoomAct === 0) applyZoomToWs(ws, 100, deps.pushTabsState)
+      else stepActiveZoom(ws, zoomAct, deps.pushTabsState)
       return
     }
     const key = (input.key ?? '').toLowerCase()

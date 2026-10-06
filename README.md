@@ -5,7 +5,7 @@
 ## ℹ️ Общие сведения
 
 **💻 Целевые платформы:** ПК (Windows, разработка и сборка через Electron).  
-**🧰 Стек:** Electron 41, Vue 3, TypeScript, Vite, electron-vite.  
+**🧰 Стек:** Electron 44, Vue 3, TypeScript, Vite, electron-vite.  
 **📦 Ядро:** Пул WebContentsView с партициями `persist:konstruktor` и `incognito-mem`, прозрачные overlay-окна для меню и диалогов, локальные страницы `konstruktor://`.  
 **💡 Идея:** Браузер для тех, кто устал адаптироваться под браузеры.  
 
@@ -47,6 +47,7 @@ Main:
 
 - [🖥️ Окна и вкладки](./src/main/docs/WINDOWS_TABS.md)
 - [💬 Оверлей-окна](./src/main/docs/OVERLAY.md)
+- [🔬 Масштаб страницы](./src/main/docs/ZOOM.md)
 - [ Поиск по странице](./src/main/docs/FIND.md)
 - [🎨 Темы](./src/main/docs/THEMES.md)
 - [💾 Хранилища](./src/main/docs/STORES.md)

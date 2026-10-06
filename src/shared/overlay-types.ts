@@ -4,7 +4,18 @@
 
 // Какие поверхности умеет показывать оверлей-окно. Renderer держит реестр
 // view -> Vue-компонент, main — описание геометрии/фокуса.
-export type ViewKind = 'menu' | 'dialog' | 'icon' | 'find' | 'toast' | 'window-menu'
+//
+// 'zoom' — попап масштаба у индикатора в адресной строке. Отдельный вид,
+// а не меню с пунктом: форма своя (поле процента + кнопки), поведение
+// своё — `+`/`−`/`Reset` НЕ закрывают попап, в отличие от пункта меню.
+export type ViewKind =
+  | 'menu'
+  | 'dialog'
+  | 'icon'
+  | 'find'
+  | 'toast'
+  | 'window-menu'
+  | 'zoom'
 
 // Как меню выравнивается относительно точки вызова.
 // 'anchor' — левый верхний угол в точке клика (контекстное меню).
@@ -96,6 +107,15 @@ export interface ToastModel {
   timeout?: number
 }
 
+// Данные попапа масштаба: текущий процент страницы.
+//
+// percent приходит и в push (открытие), и в overlay:update (каждое нажатие
+// `+`/`−`): поле ввода живёт реактивно, а модель — единственный источник
+// правды, из него же пересобирается badge в адресной строке через tabs:state.
+export interface ZoomModel {
+  percent: number
+}
+
 // Модель — то, что видно компоненту. Ровно одно поле заполнено
 // (или items/itemsFor — для универсального меню любого контекста).
 export type OverlayModel =
@@ -109,6 +129,7 @@ export type OverlayModel =
   | { view: 'icon'; icon: IconModel }
   | { view: 'find'; find: FindModel }
   | { view: 'toast'; toast: ToastModel }
+  | { view: 'zoom'; zoom: ZoomModel }
 
 // Один уровень стека оверлея.
 //
