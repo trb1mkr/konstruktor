@@ -49,6 +49,7 @@ src/
     downloadsStore.ts   downloads.json
     shortcutsStore.ts   shortcuts.json
     dnsConfig.ts        Secure DNS switches
+    i18n.ts             t(), init языка, смена через settings:save
     internalPages.ts    konstruktor://history, settings, downloads
     startPage.ts        konstruktor://start
     internalBridge.ts   registerPreloadScript на сессии
@@ -61,11 +62,18 @@ src/
     VIEW_BRIDGE.md      документация моста view
   shared/
     overlay-types.ts    контракт сообщений и типов overlay
+    i18n/               локализация: каталоги, реестр языков, runtime страниц
+      locales/          en.json — язык-источник
+      languages.ts      реестр LANGUAGES
+      index.ts          resolveLocale, ресурсы, опции i18next
+      pageRuntime.ts    window.tr для внутренних страниц
+      I18N.md           документация системы перевода
   renderer/
     docs/               документация shell и UI
     App.vue             корневой layout, panel-top и panel-bottom
     main.ts             точка входа renderer
     overlay.ts          точка входа overlay-окна
+    i18n.ts             фабрика i18next для shell и overlay
     index.html          документ shell
     menu.html           документ overlay-окна
     styles.css          базовые стили shell
@@ -92,6 +100,7 @@ docs/
 | Поиск | `findInPage`, custom DOM-поиск, подсветка | `src/main/docs/FIND.md` |
 | Темы | `dark`, `light`, `system`, `slate` | `src/main/docs/THEMES.md` |
 | Хранилища | JSON в userData, DNS | `src/main/docs/STORES.md` |
+| Локализация | Каталоги, ключи, детект и смена языка | `src/shared/i18n/I18N.md` |
 | Внутренние страницы | `konstruktor://`, preload на сессиях | `src/main/docs/INTERNAL_PAGES.md` |
 | Shell и layout | `App.vue`, инсеты, пресеты | `src/renderer/docs/SHELL_LAYOUT.md` |
 | Состояние shell | Подписки IPC, тема, `theme-lock` | `src/renderer/docs/CORE_STATE.md` |

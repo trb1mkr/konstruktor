@@ -186,8 +186,10 @@ const browserAPI = {
   openFind: (query?: string): Promise<boolean> => ipcRenderer.invoke('find:open', query),
   // Настройки shell: тема и прочее без перезагрузки внутренних страниц.
   getSettings: () => ipcRenderer.invoke('settings:get'),
-  onSettingsChanged: (cb: () => void): (() => void) => {
-    const listener = () => cb()
+  // info.locale — сырое значение настройки (auto|en|код): shell резолвит
+  // его сам через navigator.language, как и при старте.
+  onSettingsChanged: (cb: (info?: { locale?: string }) => void): (() => void) => {
+    const listener = (_e: unknown, info?: { locale?: string }) => cb(info)
     ipcRenderer.on('settings:changed', listener as never)
     return () => ipcRenderer.removeListener('settings:changed', listener as never)
   },

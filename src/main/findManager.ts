@@ -22,6 +22,7 @@ import {
   buildClearCustomFindScript,
   type CustomFindOptions
 } from './findScripts'
+import { t } from './i18n'
 
 // Панель поиска поверх страницы: один конструктор на все точки входа
 // (before-input-event view, Ctrl+F shell, find:open). Повторный вызов
@@ -78,7 +79,11 @@ export async function runCustomFind(rec: TabData, opts: CustomFindOptions): Prom
   const n = res.matches ?? 0
   setFindCounter(
     parent,
-    res.error === 'bad-regex' ? 'Invalid expression' : n === 0 ? 'No results' : `1 of ${n}`
+    res.error === 'bad-regex'
+      ? t('find.invalid')
+      : n === 0
+        ? t('find.none')
+        : t('find.counter', { active: 1, total: n })
   )
 }
 
@@ -93,7 +98,10 @@ export async function stepCustomFind(rec: TabData, forward: boolean): Promise<vo
     return
   }
   const n = res.matches ?? 0
-  setFindCounter(parent, n === 0 ? 'No results' : `${res.active ?? 0} of ${n}`)
+  setFindCounter(
+    parent,
+    n === 0 ? t('find.none') : t('find.counter', { active: res.active ?? 0, total: n })
+  )
 }
 
 export async function clearCustomFind(rec: TabData): Promise<void> {

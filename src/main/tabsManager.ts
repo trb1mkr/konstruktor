@@ -26,6 +26,7 @@ import {
 } from './zoomManager'
 import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlay'
 import { getSettingsSync } from './settingsStore'
+import { t } from './i18n'
 import { recordVisit, updateMetadata } from './historyStore'
 import { START_URL } from './startPage'
 
@@ -117,7 +118,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     if (getSettingsSync().zoomSync) setZoom(view.webContents, seedZoomPercent())
   })
   const id = allocTabId()
-  ws.tabs.set(id, { view, url, title: 'New Tab', pinned: false, favicon: '', retriedWithChromeUA: false, customTitle: undefined, customFavicon: undefined })
+  ws.tabs.set(id, { view, url, title: t('tabs.newTitle'), pinned: false, favicon: '', retriedWithChromeUA: false, customTitle: undefined, customFavicon: undefined })
   ws.tabOrder.push(id)
   // Новая вкладка без группы — в конец обычного ряда панели.
   ensureStripToken(ws, `t:${id}`, false)
@@ -300,8 +301,8 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     if (id !== ws.activeTabId || !ws.window) return
     const text =
       result.matches === 0
-        ? 'No results'
-        : `${result.activeMatchOrdinal} of ${result.matches}`
+        ? t('find.none')
+        : t('find.counter', { active: result.activeMatchOrdinal, total: result.matches })
     updateActiveOverlay(ws.window, { find: { counter: text } })
   })
 

@@ -614,7 +614,7 @@ async function onStripDrop(e: DragEvent) {
         </template>
       </div>
     </template>
-    <button class="tab-add" title="New tab" @click="add()">+</button>
+    <button class="tab-add" :title="$t('tabs.newTab')" @click="add()">+</button>
     <!-- Заполнитель от кнопки + до кнопок окна: правый клик открывает
          меню панели. no-drag обязателен: на drag-области Windows отдает
          правый клик системному меню окна и renderer его не получает

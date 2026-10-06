@@ -75,4 +75,12 @@ export default tseslint.config(
       'vue/no-ref-as-operand': 'off',
     },
   },
+
+  {
+    // Скрипты инструментов локализации (scripts/) идут в Node-контексте.
+    files: ['scripts/**/*.{js,mjs,cjs}'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
 )

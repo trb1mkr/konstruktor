@@ -70,11 +70,15 @@ function openWindowMenu(e: MouseEvent) {
 <template>
   <div class="window-controls" @contextmenu.prevent="openWindowMenu($event)">
     <slot name="menu" />
-    <button class="wc-btn" title="Minimize" @click="minimize">─</button>
-    <button class="wc-btn" :title="maximized ? 'Restore' : 'Maximize'" @click="toggleMax">
+    <button class="wc-btn" :title="$t('window.menu.minimize')" @click="minimize">─</button>
+    <button
+      class="wc-btn"
+      :title="maximized ? $t('window.menu.restore') : $t('window.menu.maximize')"
+      @click="toggleMax"
+    >
       {{ maximized ? '❐' : '☐' }}
     </button>
-    <button class="wc-btn close" title="Close" @click="close">✕</button>
+    <button class="wc-btn close" :title="$t('window.menu.close')" @click="close">✕</button>
   </div>
 </template>
 

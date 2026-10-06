@@ -177,6 +177,10 @@ export interface PushMessage {
   stack: StackEntry[]
   // Тема оверлея: 'dark' | 'light' | 'slate' (уже разрешена в main).
   theme: 'dark' | 'light' | 'slate'
+  // Язык интерфейса оверлея: код из LANGUAGES, разрешённый в main.
+  // Renderer применяет его до отрисовки стека, чтобы FindBar и диалог
+  // иконки не мелькнули английским при смене языка.
+  language: string
   // Анимации включены (настройка). false = без fade.
   animations: boolean
 }

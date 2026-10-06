@@ -1,13 +1,21 @@
 // Внутренние страницы конструктора. Отдаются через konstruktor://history
 // и konstruktor://settings без внешних ресурсов — работают офлайн.
 // Рендерятся внутри WebContentsView как обычные вкладки.
+//
+// Каждая страница собирается функцией от языка: HTML запекается на
+// запрос (а не при импорте модуля), статические строки переводятся t(),
+// динамические внутри <script> — встроенным tr() из shared/i18n/pageRuntime.
+import { LANGUAGES, langTag } from '../shared/i18n'
+import { pageI18nScript } from '../shared/i18n/pageRuntime'
+import { t } from './i18n'
+
 export const HISTORY_URL = 'konstruktor://history'
 export const SETTINGS_URL = 'konstruktor://settings'
 export const DOWNLOADS_URL = 'konstruktor://downloads'
 
-function shell(title: string, body: string): string {
+function shell(title: string, body: string, lang: string): string {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${langTag(lang)}">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -89,6 +97,7 @@ function shell(title: string, body: string): string {
   .tp-addr.system { background: linear-gradient(90deg, #2b2b2b 50%, #e0e0e0 50%); }
   .tp-name { font-size: 13px; }
 </style>
+${pageI18nScript(lang)}
 <script>
   // Тема shell применяется к внутренним страницам: читаем settings
   // до отрисовки, чтобы не мигать темной темой при светлой.
@@ -111,19 +120,20 @@ function shell(title: string, body: string): string {
 </html>`
 }
 
-export const HISTORY_PAGE_HTML = shell(
-  'History',
-  `<div class="hist-controls">
-     <input id="q" type="search" placeholder="Search history…" autocomplete="off" />
+export function buildHistoryPage(lang: string): string {
+  return shell(
+    t('history.title'),
+    `<div class="hist-controls">
+     <input id="q" type="search" placeholder="${t('history.search')}" autocomplete="off" />
      <div class="seg" id="mode">
-       <button data-mode="day" class="on">Day</button><button data-mode="month">Month</button><button data-mode="year">Year</button>
+       <button data-mode="day" class="on">${t('history.modeDay')}</button><button data-mode="month">${t('history.modeMonth')}</button><button data-mode="year">${t('history.modeYear')}</button>
      </div>
    </div>
    <div class="toolbar">
-     <button id="clear" class="danger">Clear all history</button>
+     <button id="clear" class="danger">${t('history.clearAll')}</button>
      <span id="stats" class="hint"></span>
    </div>
-   <div id="tree"><div class="empty">Loading…</div></div>
+   <div id="tree"><div class="empty">${t('history.loading')}</div></div>
    <script>
      // Хронология: main отдаёт плоский список визитов (url/title/at),
      // дерево день → месяц → год строим здесь. Поиск фильтрует на стороне main.
@@ -145,11 +155,11 @@ export const HISTORY_PAGE_HTML = shell(
      function yearKey(d) { return String(d.getFullYear()); }
      function fmtDay(d) {
        const today = new Date(); const y = new Date(); y.setDate(y.getDate() - 1);
-       if (dayKey(d) === dayKey(today)) return 'Today';
-       if (dayKey(d) === dayKey(y)) return 'Yesterday';
-       return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+       if (dayKey(d) === dayKey(today)) return tr('history.today');
+       if (dayKey(d) === dayKey(y)) return tr('history.yesterday');
+       return d.toLocaleDateString(window.__I18N_INTL__, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
      }
-     function fmtMonth(d) { return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }); }
+     function fmtMonth(d) { return d.toLocaleDateString(window.__I18N_INTL__, { month: 'long', year: 'numeric' }); }
      function groupKey(at) {
        const d = new Date(at);
        if (mode === 'day') return dayKey(d);
@@ -164,23 +174,23 @@ export const HISTORY_PAGE_HTML = shell(
      }
      async function load(query = '') {
        if (!window.konstruktor) {
-         tree.innerHTML = '<div class="empty">Bridge unavailable. Reload the page.</div>';
+         tree.innerHTML = '<div class="empty">' + tr('internal.bridgeUnavailable') + '</div>';
          return;
        }
        let rows = [];
        try {
          rows = await window.konstruktor.historyTimeline(query);
        } catch (err) {
-         tree.innerHTML = '<div class="empty">Failed to load history.</div>';
+         tree.innerHTML = '<div class="empty">' + tr('history.loadFailed') + '</div>';
          return;
        }
        if (rows.length === 0) {
-         tree.innerHTML = '<div class="empty">No history yet. Visit some sites first.</div>';
+         tree.innerHTML = '<div class="empty">' + tr('history.empty') + '</div>';
          stats.textContent = '';
          return;
        }
        const urls = new Set(rows.map((r) => r.url)).size;
-       stats.textContent = rows.length + ' visits · ' + urls + ' sites';
+       stats.textContent = tr('history.stats', { visits: rows.length, sites: urls });
        // Группируем с сохранением порядка (rows уже по убыванию времени).
        const groups = new Map();
        for (const r of rows) {
@@ -199,7 +209,7 @@ export const HISTORY_PAGE_HTML = shell(
          s.textContent = groupLabel(g.at);
          const c = document.createElement('span');
          c.className = 'count';
-         c.textContent = g.items.length + (g.items.length === 1 ? ' visit' : ' visits');
+         c.textContent = tr('history.groupCount', { count: g.items.length });
          sum.append(s, c);
          details.appendChild(sum);
          for (const r of g.items) {
@@ -209,11 +219,11 @@ export const HISTORY_PAGE_HTML = shell(
              ? '<img class="fav" src="' + r.favicon + '" />'
              : '<span class="fav">◉</span>';
            const time = mode === 'day'
-             ? new Date(r.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-             : new Date(r.at).toLocaleString();
+             ? new Date(r.at).toLocaleTimeString(window.__I18N_INTL__, { hour: '2-digit', minute: '2-digit' })
+             : new Date(r.at).toLocaleString(window.__I18N_INTL__);
            row.innerHTML = fav + '<div class="meta"><div class="t"></div><div class="u"></div></div>' +
              '<span class="when">' + time + '</span>' +
-             '<button data-del title="Delete this visit">✕</button>';
+             '<button data-del title="' + tr('history.deleteVisit') + '">✕</button>';
            row.querySelector('.t').textContent = r.title || r.url;
            row.querySelector('.u').textContent = r.url;
            row.style.cursor = 'pointer';
@@ -238,7 +248,7 @@ export const HISTORY_PAGE_HTML = shell(
        timer = setTimeout(() => void load(q.value), 250);
      });
      document.getElementById('clear').addEventListener('click', async () => {
-       if (confirm('Delete all browsing history?')) {
+       if (confirm(tr('history.clearConfirm'))) {
          await window.konstruktor.historyClear();
          void load(q.value);
        }
@@ -258,76 +268,80 @@ export const HISTORY_PAGE_HTML = shell(
      .group .row { border: none; border-top: 1px solid var(--pg-border); border-radius: 0; margin-top: 0; }
      .count { font-size: 12px; font-weight: 400; color: var(--pg-dim); }
      .toolbar { align-items: center; }
-   </style>`
-)
+   </style>`,
+    lang
+  )
+}
 
-export const SETTINGS_PAGE_HTML = shell(
-  'Settings',
-  `<label class="set"><span>Search engine URL (%s = query)</span>
+export function buildSettingsPage(lang: string): string {
+  // Опции языка строятся из реестра LANGUAGES: новый язык = запись
+  // в реестре + файл каталога, страница при этом не правится.
+  const langOptions = LANGUAGES.map(
+    (l) => `\n       <option value="${l.code}">${l.label}</option>`
+  ).join('')
+  return shell(
+    t('settings.title'),
+    `<label class="set"><span>${t('settings.searchEngine')}</span>
      <input id="se" type="text" spellcheck="false" /></label>
-   <label class="set"><span>Homepage</span>
+   <label class="set"><span>${t('settings.homepage')}</span>
      <input id="hp" type="text" spellcheck="false" /></label>
-   <label class="check"><input id="dt" type="checkbox" /><span>Open developer tools at startup</span></label>
-   <label class="set"><span>Secure DNS (applies after restart)</span>
+   <label class="check"><input id="dt" type="checkbox" /><span>${t('settings.devtools')}</span></label>
+   <label class="set"><span>${t('settings.dns.label')}</span>
      <select id="dns">
-       <option value="off">System DNS</option>
+       <option value="off">${t('settings.dns.system')}</option>
        <option value="cloudflare">Cloudflare (1.1.1.1)</option>
        <option value="google">Google (8.8.8.8)</option>
-       <option value="custom">Custom DoH server…</option>
+       <option value="custom">${t('settings.dns.customOption')}</option>
      </select></label>
-   <label class="set" id="dns-custom-wrap" style="display:none"><span>Custom DoH URL</span>
+   <label class="set" id="dns-custom-wrap" style="display:none"><span>${t('settings.dns.customUrl')}</span>
      <input id="dns-custom" type="text" spellcheck="false"
        placeholder="https://example.com/dns-query" /></label>
-   <label class="set"><span>Browser language (stub — English only for now)</span>
+   <label class="set"><span>${t('settings.language')}</span>
      <select id="locale">
-       <option value="en">English</option>
-       <option value="ru">Русский (coming soon)</option>
+       <option value="auto">${t('settings.languageAuto')}</option>${langOptions}
      </select></label>
-   <label class="check"><input id="anim-cb" type="checkbox" /><span>Animations (menus, dialogs, toasts)</span></label>
-   <label class="check"><input id="rounded-cb" type="checkbox" /><span>Rounded window corners (windowed mode)</span></label>
-   <label class="check"><input id="remember-cb" type="checkbox" /><span>Remember window size and position</span></label>
-   <label class="check"><input id="remember-tabs-cb" type="checkbox" /><span>Remember open tabs</span></label>
-   <label class="set"><span>Page zoom</span>
+   <label class="check"><input id="anim-cb" type="checkbox" /><span>${t('settings.animations')}</span></label>
+   <label class="check"><input id="rounded-cb" type="checkbox" /><span>${t('settings.roundedCorners')}</span></label>
+   <label class="check"><input id="remember-cb" type="checkbox" /><span>${t('settings.rememberBounds')}</span></label>
+   <label class="check"><input id="remember-tabs-cb" type="checkbox" /><span>${t('settings.rememberTabs')}</span></label>
+   <label class="set"><span>${t('settings.pageZoom')}</span>
      <select id="zoommode">
-       <option value="origin">Per site — shared by URL (like Chrome)</option>
-       <option value="tab">Per tab — independent of URL, resets on tab close</option>
+       <option value="origin">${t('settings.zoomOrigin')}</option>
+       <option value="tab">${t('settings.zoomTab')}</option>
      </select></label>
-   <label class="check"><input id="zoom-sync-cb" type="checkbox" /><span>Same zoom for all tabs</span></label>
-   <div class="set"><span>Browser theme</span>
+   <label class="check"><input id="zoom-sync-cb" type="checkbox" /><span>${t('settings.zoomSync')}</span></label>
+   <div class="set"><span>${t('settings.theme')}</span>
      <div class="theme-pick" id="theme-pick">
-       <button type="button" data-theme-pick="dark" title="Dark theme">
+       <button type="button" data-theme-pick="dark" title="${t('settings.themeDarkTip')}">
          <span class="tp-bar"><span class="tp-tab on"></span><span class="tp-tab"></span><span class="tp-dot"></span></span>
          <span class="tp-addr"></span>
-         <span class="tp-name">Dark</span>
+         <span class="tp-name">${t('settings.themeDark')}</span>
        </button>
-       <button type="button" data-theme-pick="light" title="Light theme">
+       <button type="button" data-theme-pick="light" title="${t('settings.themeLightTip')}">
          <span class="tp-bar light"><span class="tp-tab on"></span><span class="tp-tab"></span><span class="tp-dot"></span></span>
          <span class="tp-addr light"></span>
-         <span class="tp-name">Light</span>
+         <span class="tp-name">${t('settings.themeLight')}</span>
        </button>
-       <button type="button" data-theme-pick="system" title="Follow OS theme">
+       <button type="button" data-theme-pick="system" title="${t('settings.themeSystemTip')}">
          <span class="tp-bar system"><span class="tp-tab on"></span><span class="tp-tab"></span><span class="tp-dot"></span></span>
          <span class="tp-addr system"></span>
-         <span class="tp-name">System</span>
+         <span class="tp-name">${t('settings.themeSystem')}</span>
        </button>
-       <button type="button" data-theme-pick="slate" title="Slate gray-blue theme">
+       <button type="button" data-theme-pick="slate" title="${t('settings.themeSlateTip')}">
          <span class="tp-bar slate"><span class="tp-tab on"></span><span class="tp-tab"></span><span class="tp-dot"></span></span>
          <span class="tp-addr slate"></span>
-         <span class="tp-name">Slate</span>
+         <span class="tp-name">${t('settings.themeSlate')}</span>
        </button>
      </div>
-     <div class="hint">Custom components can opt out with a <code>.theme-lock</code> wrapper.</div></div>
-   <label class="set"><span>F11 fullscreen mode</span>
+     <div class="hint">${t('settings.themeHint')}</div></div>
+   <label class="set"><span>${t('settings.f11')}</span>
      <select id="fsmode">
-       <option value="window">Whole browser — with all controls</option>
-       <option value="content">Page only — browser UI hidden</option>
+       <option value="window">${t('settings.f11Window')}</option>
+       <option value="content">${t('settings.f11Content')}</option>
      </select></label>
-   <div class="toolbar"><button id="save">Save</button>
+   <div class="toolbar"><button id="save">${t('common.save')}</button>
      <span id="ok" class="hint"></span></div>
-   <p class="hint">Layout presets live in <code>src/renderer/layouts/</code> — copy one into
-     <code>src/renderer/App.vue</code> to switch. History and bookmarks are stored in the
-     app userData folder. DevTools can also be forced with env
-     <code>KONSTRUKTOR_DEVTOOLS=1</code> or flag <code>--devtools</code>.</p>
+   <p class="hint">${t('settings.footer')}</p>
    <script>
      // Мост window.konstruktor ставит session-preload до парсинга документа.
      const se = document.getElementById('se');
@@ -368,7 +382,7 @@ export const SETTINGS_PAGE_HTML = shell(
        dt.checked = s.devtools === true;
        dns.value = s.dnsMode || 'off';
        dnsCustom.value = s.dnsCustom || '';
-       locale.value = s.locale || 'en';
+       locale.value = s.locale || 'auto';
        animCb.checked = s.animations !== false;
        roundedCb.checked = s.roundedCorners === true;
        rememberCb.checked = s.rememberBounds !== false;
@@ -402,19 +416,22 @@ export const SETTINGS_PAGE_HTML = shell(
      });
      function savedMsg(dnsMode) {
        return dnsMode && dnsMode !== 'off'
-         ? 'Saved. Restart the browser to apply Secure DNS.'
-         : 'Saved.';
+         ? tr('settings.savedDns')
+         : tr('settings.saved');
      }
-   </script>`
-)
+   </script>`,
+    lang
+  )
+}
 
-export const DOWNLOADS_PAGE_HTML = shell(
-  'Downloads',
-  `<input id="q" type="search" placeholder="Search downloads…" autocomplete="off" />
+export function buildDownloadsPage(lang: string): string {
+  return shell(
+    t('downloads.title'),
+    `<input id="q" type="search" placeholder="${t('downloads.search')}" autocomplete="off" />
    <div class="toolbar">
-     <button id="clear" class="danger">Clear list</button>
+     <button id="clear" class="danger">${t('downloads.clear')}</button>
    </div>
-   <div id="list"><div class="empty">Loading…</div></div>
+   <div id="list"><div class="empty">${t('downloads.loading')}</div></div>
    <script>
      const list = document.getElementById('list');
      const q = document.getElementById('q');
@@ -446,35 +463,39 @@ export const DOWNLOADS_PAGE_HTML = shell(
        if (e.state === 'progressing') {
          if (e.totalBytes > 0) {
            const pct = Math.round((e.receivedBytes / e.totalBytes) * 100);
-           return pct + '% · ' + fmtBytes(e.receivedBytes) + ' / ' + fmtBytes(e.totalBytes);
+           return tr('downloads.progress', {
+             percent: pct,
+             received: fmtBytes(e.receivedBytes),
+             total: fmtBytes(e.totalBytes)
+           });
          }
-         return fmtBytes(e.receivedBytes) + ' downloaded…';
+         return tr('downloads.downloading', { size: fmtBytes(e.receivedBytes) });
        }
        if (e.state === 'completed') return fmtBytes(e.totalBytes || e.receivedBytes);
-       if (e.state === 'cancelled') return 'Cancelled';
-       return 'Interrupted';
+       if (e.state === 'cancelled') return tr('downloads.cancelled');
+       return tr('downloads.interrupted');
      }
      async function load(query = '') {
        if (!window.konstruktor) {
-         list.innerHTML = '<div class="empty">Bridge unavailable. Reload the page.</div>';
+         list.innerHTML = '<div class="empty">' + tr('internal.bridgeUnavailable') + '</div>';
          return;
        }
        let entries = [];
        try {
          entries = await window.konstruktor.downloadsSearch(query);
        } catch (err) {
-         list.innerHTML = '<div class="empty">Failed to load downloads.</div>';
+         list.innerHTML = '<div class="empty">' + tr('downloads.loadFailed') + '</div>';
          return;
        }
        if (entries.length === 0) {
-         list.innerHTML = '<div class="empty">No downloads yet.</div>';
+         list.innerHTML = '<div class="empty">' + tr('downloads.empty') + '</div>';
          return;
        }
        list.innerHTML = '';
        for (const e of entries) {
          const row = document.createElement('div');
          row.className = 'row';
-         const when = new Date(e.startedAt).toLocaleString();
+         const when = new Date(e.startedAt).toLocaleString(window.__I18N_INTL__);
          const isActive = e.state === 'progressing';
          const pct = isActive && e.totalBytes > 0
            ? Math.min(100, Math.round((e.receivedBytes / e.totalBytes) * 100))
@@ -489,7 +510,7 @@ export const DOWNLOADS_PAGE_HTML = shell(
            '<div class="meta"><div class="t"></div>' +
            '<div class="u"></div>' + barHtml + '</div>' +
            '<span class="when">' + fmtState(e) + ' · ' + when + '</span>' +
-           (e.state === 'completed' ? '<button data-open>Open</button>' : '') +
+           (e.state === 'completed' ? '<button data-open>' + tr('downloads.open') + '</button>' : '') +
            '<button data-del>✕</button>';
          row.querySelector('.t').textContent = e.filename || e.url;
          row.querySelector('.u').textContent = e.url;
@@ -534,7 +555,7 @@ export const DOWNLOADS_PAGE_HTML = shell(
      }
      q.addEventListener('input', () => void load(q.value));
      document.getElementById('clear').addEventListener('click', async () => {
-       if (confirm('Clear the downloads list? Files stay on disk.')) {
+       if (confirm(tr('downloads.clearConfirm'))) {
          await window.konstruktor.downloadsClear();
          void load(q.value);
        }
@@ -548,5 +569,7 @@ export const DOWNLOADS_PAGE_HTML = shell(
      .bar .fill { height: 100%; background: var(--pg-dim); transition: width 0.3s; }
      .file-icon { font-size: 16px; display: inline-flex; align-items: center; justify-content: center; }
      img.fav { width: 32px; height: 32px; }
-   </style>`
-)
+   </style>`,
+    lang
+  )
+}

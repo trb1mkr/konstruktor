@@ -44,8 +44,8 @@ function clear() {
 <template>
   <div class="history">
     <div class="history-header">
-      <span>History</span>
-      <button class="history-clear" @click="clear">Clear</button>
+      <span>{{ $t('history.title') }}</span>
+      <button class="history-clear" @click="clear">{{ $t('history.clear') }}</button>
     </div>
     <div class="history-list">
       <button

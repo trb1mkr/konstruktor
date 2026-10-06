@@ -1,10 +1,10 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, shell, protocol, session, clipboard } from 'electron'
 import { join } from 'path'
-import { START_PAGE_HTML, START_URL } from './startPage'
+import { buildStartPage, START_URL } from './startPage'
 import {
-  HISTORY_PAGE_HTML,
-  SETTINGS_PAGE_HTML,
-  DOWNLOADS_PAGE_HTML,
+  buildHistoryPage,
+  buildSettingsPage,
+  buildDownloadsPage,
   HISTORY_URL,
   SETTINGS_URL,
   DOWNLOADS_URL
@@ -86,6 +86,7 @@ import {
 import { registerOverlayIpc } from './overlay/ipc'
 import { watchPaintedOnce } from './overlay/service'
 import { dumpStats as dumpOverlayStats, log } from './overlay/logger'
+import { initI18n, setLocalePreference, currentLang, t } from './i18n'
 
 // Кастомная схема должна стать privileged ДО ready, иначе WebContentsView ее не отрендерит.
 protocol.registerSchemesAsPrivileged([
@@ -234,7 +235,7 @@ function setupDownloads(ses: Electron.Session, privateMode = false) {
           // anchor не задаётся: для тоста он игнорируется, положение
           // считает geometry.ts по углу рабочей области дисплея.
           anchor: { x: 0, y: 0 },
-          toast: { title: 'Download complete', body: filename }
+          toast: { title: t('toast.downloadComplete'), body: filename }
         })
       })
     })
@@ -404,16 +405,18 @@ function registerIpc() {
     const inGroup = !!rec.groupId && ws.openGroups.some((g) => g.instanceId === rec.groupId)
     const items: OverlayMenuItem[] = [
       rec.pinned
-        ? { id: 'unpin', label: 'Unminimize', icon: '↔️' }
-        : { id: 'pin', label: 'Minimize', icon: '🤏' },
-      { id: 'duplicate', label: 'Duplicate tab', icon: '👥' },
-      { id: 'add-to-group', label: 'Add to group', icon: '📁' },
-      ...(inGroup ? [{ id: 'remove-from-group', label: 'Remove from group', icon: '📂' }] : []),
-      { id: 'rename', label: 'Rename tab', icon: '✏️' },
-      { id: 'set-icon', label: 'Change icon', icon: '🖼️' },
-      { id: 'copy-url', label: 'Copy URL', icon: '🔗' },
-      { id: 'reload', label: 'Reload', icon: '🔄' },
-      { id: 'close', label: 'Close tab', icon: '✕' }
+        ? { id: 'unpin', label: t('tabs.unpin'), icon: '↔️' }
+        : { id: 'pin', label: t('tabs.pin'), icon: '🤏' },
+      { id: 'duplicate', label: t('tabs.duplicate'), icon: '👥' },
+      { id: 'add-to-group', label: t('tabs.addToGroup'), icon: '📁' },
+      ...(inGroup
+        ? [{ id: 'remove-from-group', label: t('tabs.removeFromGroup'), icon: '📂' }]
+        : []),
+      { id: 'rename', label: t('tabs.rename'), icon: '✏️' },
+      { id: 'set-icon', label: t('tabs.changeIcon'), icon: '🖼️' },
+      { id: 'copy-url', label: t('tabs.copyUrl'), icon: '🔗' },
+      { id: 'reload', label: t('tabs.reload'), icon: '🔄' },
+      { id: 'close', label: t('tabs.close'), icon: '✕' }
     ]
     showOverlay(win, {
       kind: 'menu',
@@ -481,7 +484,7 @@ function registerIpc() {
               seen.add(g.id)
               targets.push({
                 id: `saved:${g.id}`,
-                label: `${g.name} (closed)`,
+                label: t('tabs.closedGroup', { name: g.name }),
                 icon: g.icon?.startsWith('emoji:') ? g.icon.replace(/^emoji:/, '') : g.icon || '📁',
                 color: g.color
               })
@@ -544,8 +547,8 @@ function registerIpc() {
             kind: 'icon',
             anchor: { x: 0, y: 0 },
             icon: {
-              title: 'Tab icon',
-              placeholder: 'URL, file path or emoji (empty resets)',
+              title: t('icon.tabTitle'),
+              placeholder: t('icon.placeholder'),
               initial: trec.customFavicon ?? ''
             },
             onIconApply: (icon) => {
@@ -567,9 +570,9 @@ function registerIpc() {
     const ws = win ? getState(win) : undefined
     if (!win || !ws) return
     const items: OverlayMenuItem[] = [
-      { id: 'new-tab', label: 'New tab', icon: '＋' },
-      { id: 'new-group', label: 'New group', icon: '📁' },
-      { id: 'close-all', label: 'Close group', icon: '✕' }
+      { id: 'new-tab', label: t('tabs.newTab'), icon: '＋' },
+      { id: 'new-group', label: t('groups.menu.new'), icon: '📁' },
+      { id: 'close-all', label: t('groups.menu.close'), icon: '✕' }
     ]
     showOverlay(win, {
       kind: 'menu',
@@ -585,17 +588,19 @@ function registerIpc() {
           // Новая группа = шаблон + экземпляр с 1 вкладкой (минимум).
           // createTab кладет токен в ряд, но вкладка сразу уходит в группу —
           // чистим токен вкладки и кладем токен группы, иначе группа не видна.
-          void createSavedGroup({ name: 'Group', urls: [START_URL] }).then((saved) => {
-            const l2 = win && !win.isDestroyed() ? getState(win) : undefined
-            if (!l2) return
-            const instanceId = `i${Date.now()}${Math.floor(Math.random() * 1000)}`
-            l2.openGroups.push({ instanceId, savedId: saved.id, collapsed: false, pinned: false })
-            ensureStripToken(l2, `g:${instanceId}`, false)
-            const id = createTab(l2, START_URL)
-            l2.tabs.get(id)!.groupId = instanceId
-            removeStripToken(l2, `t:${id}`)
-            pushTabsState(l2)
-          })
+          void createSavedGroup({ name: t('groups.defaultName'), urls: [START_URL] }).then(
+            (saved) => {
+              const l2 = win && !win.isDestroyed() ? getState(win) : undefined
+              if (!l2) return
+              const instanceId = `i${Date.now()}${Math.floor(Math.random() * 1000)}`
+              l2.openGroups.push({ instanceId, savedId: saved.id, collapsed: false, pinned: false })
+              ensureStripToken(l2, `g:${instanceId}`, false)
+              const id = createTab(l2, START_URL)
+              l2.tabs.get(id)!.groupId = instanceId
+              removeStripToken(l2, `t:${id}`)
+              pushTabsState(l2)
+            }
+          )
         } else if (action === 'close-all') {
           // Закрываем по копии порядка: closeTab мутирует tabOrder.
           for (const id of [...live.tabOrder]) closeTab(live, id)
@@ -739,14 +744,18 @@ function registerIpc() {
       }
     ) => {
       const next = await saveSettings(patch)
-      // Shell перечитывает тему/скругление без перезагрузки: пуш во все окна.
+      // Язык меняется ДО рассылки: последующие сборки меню уже на новом
+      // языке, а shell получает код из того же settings:changed.
+      if (patch.locale !== undefined) await setLocalePreference(patch.locale)
+      // Shell перечитывает тему/скругление/язык без перезагрузки: пуш во все окна.
       // Смена сценария F11 сбрасывает контентный fullscreen: view возвращается
       // в обычные bounds, иначе окно останется в рассинхроне с настройкой.
       // Смена темы обновляет color-scheme открытых сайтов (см. applyThemeToViews).
       if (
         patch.theme !== undefined ||
         patch.roundedCorners !== undefined ||
-        patch.fullscreenMode !== undefined
+        patch.fullscreenMode !== undefined ||
+        patch.locale !== undefined
       ) {
         for (const ws of windows.values()) {
           if (patch.fullscreenMode !== undefined && ws.contentFullscreen) {
@@ -754,7 +763,10 @@ function registerIpc() {
             layoutActiveView(ws)
             ws.window?.webContents.send('window:content-fullscreen', false)
           }
-          ws.window?.webContents.send('settings:changed')
+          // locale — сырое значение настройки: shell резолвит 'auto' сам
+          // через navigator.language, как и при старте. Неизменённое значение
+          // в changeLanguage превращается в no-op.
+          ws.window?.webContents.send('settings:changed', { locale: next.locale })
         }
         if (patch.theme !== undefined) applyThemeToViews(next.theme)
       }
@@ -965,29 +977,32 @@ function registerIpc() {
       else createTab(ws, url)
     }
     const items: OverlayMenuItem[] = [
-      { id: 'downloads', label: 'Downloads', icon: '📥' },
-      { id: 'history', label: 'History', icon: '🕘' },
-      { id: 'settings', label: 'Settings', icon: '🛠️' },
+      // Заглушки: разделы в разработке, пункты неактивны.
+      { id: 'profile', label: t('menu.profile'), icon: '👤', disabled: true },
+      { id: 'settings', label: t('menu.settings'), icon: '⚙️' },
+      { id: 'history', label: t('menu.history'), icon: '🕘' },
+      { id: 'downloads', label: t('menu.downloads'), icon: '📥' },
+      { id: 'extensions', label: t('menu.extensions'), icon: '🧩', disabled: true },
       // DevTools активной вкладки. Состояние читаем при открытии меню:
       // панель могли закрыть крестиком в самом DevTools, и подпись пункта
       // обязана это отражать.
       {
         id: 'devtools',
         label: devToolsStateOf(ws, ws.activeTabId ?? -1).open
-          ? 'Close DevTools'
-          : 'Open DevTools',
-        icon: '🛠'
+          ? t('menu.devtoolsClose')
+          : t('menu.devtoolsOpen'),
+        icon: '🛠️'
       },
-      // Заглушки: разделы в разработке, пункты неактивны.
-      { id: 'profile', label: 'Profile', icon: '👤', disabled: true },
-      { id: 'extensions', label: 'Extensions', icon: '🧩', disabled: true },
+      // Debug — dev-only пункт, не переводится (см. I18N.md).
       { id: 'debug', label: 'Debug', icon: '🐞', disabled: true },
       // Пункт виден всегда: он переключает режим ТЕКУЩЕГО окна, а не
       // создаёт новое. В приватном окне он предлагает обратный переход,
       // поэтому скрывать его было бы неверно.
       {
         id: 'incognito',
-        label: ws.incognito ? 'Switch to normal mode' : 'Switch to incognito mode',
+        label: ws.incognito
+          ? t('menu.incognitoToNormal')
+          : t('menu.incognitoToPrivate'),
         icon: '🕵️'
       }
     ]
@@ -1052,35 +1067,41 @@ function registerIpc() {
   watchPaintedOnce()
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  // Язык интерфейса: init до регистрации страниц и первого окна —
+  // иначе сборки страниц и меню ушли бы на неготовом i18next.
+  await initI18n()
   // Внутренние страницы: один хендл на схему, роутинг по host.
   // protocol.handle привязан к сессии — регистрируем на всех трех,
   // иначе view с persist-партицией не резолвит konstruktor://*.
+  // HTML собирается на каждый запрос с текущим языком: готовая строка
+  // при импорте модуля успела бы устареть к моменту смены настроек.
   const handleInternal = (ses: Electron.Session) => {
     try {
       ses.protocol.handle('konstruktor', (req) => {
         const host = new URL(req.url).host
+        const lang = currentLang()
         if (host === 'start') {
-          return new Response(START_PAGE_HTML, {
+          return new Response(buildStartPage(lang), {
             headers: { 'content-type': 'text/html; charset=utf-8' }
           })
         }
         if (host === 'history') {
-          return new Response(HISTORY_PAGE_HTML, {
+          return new Response(buildHistoryPage(lang), {
             headers: { 'content-type': 'text/html; charset=utf-8' }
           })
         }
         if (host === 'settings') {
-          return new Response(SETTINGS_PAGE_HTML, {
+          return new Response(buildSettingsPage(lang), {
             headers: { 'content-type': 'text/html; charset=utf-8' }
           })
         }
         if (host === 'downloads') {
-          return new Response(DOWNLOADS_PAGE_HTML, {
+          return new Response(buildDownloadsPage(lang), {
             headers: { 'content-type': 'text/html; charset=utf-8' }
           })
         }
-        return new Response('Not found', { status: 404 })
+        return new Response(t('internal.notFound'), { status: 404 })
       })
     } catch {
       // Хендл уже зарегистрирован для этой сессии — игнорим.

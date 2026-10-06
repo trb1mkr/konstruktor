@@ -1,0 +1,219 @@
+{
+  "common": {
+    "ok": "ОК",
+    "cancel": "Отмена",
+    "save": "Сохранить"
+  },
+  "menu": {
+    "downloads": "Загрузки",
+    "history": "История",
+    "settings": "Настройки",
+    "devtoolsOpen": "DevTools",
+    "devtoolsClose": "Закрыть DevTools",
+    "profile": "Профиль",
+    "extensions": "Расширения",
+    "incognitoToPrivate": "Перейти в режим инкогнито",
+    "incognitoToNormal": "Перейти в обычный режим"
+  },
+  "tabs": {
+    "newTab": "Новая вкладка",
+    "newTitle": "Новая вкладка",
+    "pin": "Свернуть",
+    "unpin": "Развернуть",
+    "duplicate": "Дублировать вкладку",
+    "addToGroup": "Добавить в группу",
+    "removeFromGroup": "Убрать из группы",
+    "rename": "Переименовать вкладку",
+    "changeIcon": "Сменить иконку",
+    "copyUrl": "Копировать URL",
+    "reload": "Обновить",
+    "close": "Закрыть вкладку",
+    "closedGroup": "{{name}} (закрыта)"
+  },
+  "groups": {
+    "defaultName": "Группа",
+    "menu": {
+      "new": "Новая группа",
+      "rename": "Переименовать",
+      "color": "Сменить цвет",
+      "icon": "Сменить иконку",
+      "nest": "Вложить в другую группу",
+      "pinToBookmarks": "Закрепить на панели закладок",
+      "unpinFromBookmarks": "Открепить от панели закладок",
+      "close": "Закрыть группу",
+      "ungroup": "Разгруппировать",
+      "delete": "Удалить группу",
+      "moveTabs": "Переместить вкладки в другую группу"
+    }
+  },
+  "dialogs": {
+    "groupName": "Название группы",
+    "groupColor": "Цвет группы (например, #ff5555)"
+  },
+  "window": {
+    "menu": {
+      "maximize": "Развернуть",
+      "restore": "Восстановить",
+      "minimize": "Свернуть",
+      "close": "Закрыть",
+      "newWindow": "Открыть новое окно",
+      "cloneWindow": "Клонировать окно"
+    }
+  },
+  "icon": {
+    "tabTitle": "Иконка вкладки",
+    "groupTitle": "Иконка группы",
+    "placeholder": "URL, путь к файлу или эмодзи (пусто — сброс)",
+    "url": "URL",
+    "file": "Файл",
+    "emoji": "Эмодзи",
+    "tipUrl": "Использовать введённое как URL картинки",
+    "tipFile": "Выбрать локальный файл изображения",
+    "tipEmoji": "Использовать введённое как эмодзи",
+    "error": {
+      "empty": "Введите URL, путь к файлу или эмодзи",
+      "fileMissing": "Файл не найден",
+      "cannotRead": "Не удалось прочитать файл",
+      "notEmoji": "Это не эмодзи",
+      "emptyEmoji": "Пустое эмодзи",
+      "useEmojiButton": "Для эмодзи используйте кнопку «Эмодзи»"
+    },
+    "fileDialog": {
+      "title": "Выберите иконку",
+      "images": "Изображения",
+      "allFiles": "Все файлы"
+    }
+  },
+  "toast": {
+    "downloadComplete": "Загрузка завершена"
+  },
+  "find": {
+    "counter": "{{active}} из {{total}}",
+    "none": "Нет результатов",
+    "invalid": "Неверное выражение",
+    "placeholder": "Поиск на странице",
+    "matchCase": "Учитывать регистр (Aa)",
+    "wholeWord": "Слово целиком",
+    "regex": "Регулярное выражение (.*)",
+    "prev": "Предыдущее совпадение (Shift+Enter)",
+    "next": "Следующее совпадение (Enter)",
+    "close": "Закрыть (Esc)"
+  },
+  "zoom": {
+    "badge": "Масштаб",
+    "out": "Уменьшить масштаб",
+    "in": "Увеличить масштаб",
+    "reset": "Сбросить масштаб на 100%"
+  },
+  "addressBar": {
+    "back": "Назад",
+    "forward": "Вперёд",
+    "reload": "Обновить",
+    "go": "Перейти",
+    "placeholder": "Введите URL или поисковый запрос"
+  },
+  "bookmarks": {
+    "add": "Добавить в закладки",
+    "remove": "Убрать из закладок",
+    "groupTabs_one": "{{name}} — {{count}} вкладка",
+    "groupTabs_few": "{{name}} — {{count}} вкладки",
+    "groupTabs_many": "{{name}} — {{count}} вкладок",
+    "groupTabs_other": "{{name}} — {{count}} вкладки"
+  },
+  "shell": {
+    "browserMenu": "Меню браузера",
+    "incognito": "Окно в инкогнито"
+  },
+  "settings": {
+    "title": "Настройки",
+    "searchEngine": "URL поисковика (%s — запрос)",
+    "homepage": "Домашняя страница",
+    "devtools": "Открывать инструменты разработчика при запуске",
+    "dns": {
+      "label": "Безопасный DNS (после перезапуска)",
+      "system": "Системный DNS",
+      "customOption": "Свой DoH-сервер…",
+      "customUrl": "URL своего DoH-сервера"
+    },
+    "language": "Язык браузера",
+    "languageAuto": "Авто",
+    "animations": "Анимации (меню, диалоги, уведомления)",
+    "roundedCorners": "Скруглённые углы окна (оконный режим)",
+    "rememberBounds": "Запоминать размер и положение окна",
+    "rememberTabs": "Запоминать открытые вкладки",
+    "pageZoom": "Масштаб страниц",
+    "zoomOrigin": "Для сайта — общий по URL (как в Chrome)",
+    "zoomTab": "Для вкладки — не зависит от URL, сбрасывается при закрытии",
+    "zoomSync": "Один масштаб для всех вкладок",
+    "theme": "Тема браузера",
+    "themeDark": "Тёмная",
+    "themeLight": "Светлая",
+    "themeSystem": "Системная",
+    "themeSlate": "Серо-синяя",
+    "themeDarkTip": "Тёмная тема",
+    "themeLightTip": "Светлая тема",
+    "themeSystemTip": "Следовать за темой ОС",
+    "themeSlateTip": "Серо-синяя тема",
+    "themeHint": "Пользовательские компоненты могут отказаться от темы обёрткой <code>.theme-lock</code>.",
+    "f11": "Режим полноэкранного F11",
+    "f11Window": "Весь браузер — со всеми панелями",
+    "f11Content": "Только страница — интерфейс браузера скрыт",
+    "saved": "Сохранено.",
+    "savedDns": "Сохранено. Перезапустите браузер, чтобы применить безопасный DNS.",
+    "footer": "Пресеты расположения лежат в <code>src/renderer/layouts/</code> — скопируйте один в <code>src/renderer/App.vue</code>, чтобы переключиться. История и закладки хранятся в папке userData приложения. DevTools также включаются переменной окружения <code>KONSTRUKTOR_DEVTOOLS=1</code> или флагом <code>--devtools</code>.",
+    "heading": "Настройки браузера",
+    "layoutPreset": "Пресет расположения",
+    "presetClassicTop": "Классический сверху",
+    "presetAddressBottom": "Адрес снизу",
+    "presetMinimal": "Минималистичный"
+  },
+  "history": {
+    "title": "История",
+    "search": "Поиск по истории…",
+    "modeDay": "День",
+    "modeMonth": "Месяц",
+    "modeYear": "Год",
+    "clear": "Очистить",
+    "clearAll": "Очистить всю историю",
+    "clearConfirm": "Удалить всю историю просмотра?",
+    "loading": "Загрузка…",
+    "today": "Сегодня",
+    "yesterday": "Вчера",
+    "stats": "{{visits}} посещений · {{sites}} сайтов",
+    "empty": "История пока пуста. Сначала посетите какие-нибудь сайты.",
+    "loadFailed": "Не удалось загрузить историю.",
+    "deleteVisit": "Удалить этот визит",
+    "groupCount_one": "{{count}} посещение",
+    "groupCount_few": "{{count}} посещения",
+    "groupCount_many": "{{count}} посещений",
+    "groupCount_other": "{{count}} посещения"
+  },
+  "downloads": {
+    "title": "Загрузки",
+    "search": "Поиск по загрузкам…",
+    "clear": "Очистить список",
+    "clearConfirm": "Очистить список загрузок? Файлы останутся на диске.",
+    "loading": "Загрузка…",
+    "empty": "Загрузок пока нет.",
+    "loadFailed": "Не удалось получить список загрузок.",
+    "open": "Открыть",
+    "cancelled": "Отменено",
+    "interrupted": "Прервано",
+    "progress": "{{percent}}% · {{received}} / {{total}}",
+    "downloading": "{{size}} загружено…"
+  },
+  "start": {
+    "slogan": "Браузер, который подстраиваешь под себя.",
+    "cta": "Устали подстраиваться под браузеры? Переставьте интерфейс в <code>src/renderer/App.vue</code> — каждая панель ваш компонент.",
+    "hint": "Клик по плитке — открыть · наведение — удалить · плитки лежат в userData/shortcuts.json",
+    "newShortcut": "Новый ярлык",
+    "fieldName": "Название",
+    "fieldUrl": "URL",
+    "addShortcut": "Добавить ярлык",
+    "remove": "Удалить"
+  },
+  "internal": {
+    "bridgeUnavailable": "Мост недоступен. Перезагрузите страницу.",
+    "notFound": "Не найдено"
+  }
+}

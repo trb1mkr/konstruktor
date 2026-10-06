@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { componentFor } from './registry'
+import { changeLanguage } from '../i18n'
 
 // Стек уровней: нижний рисуется первым, верхний — последним и поверх.
 //
@@ -56,6 +57,9 @@ interface OverlayPayload {
   // окно прозрачным, пока renderer не вернёт его через overlay:painted.
   stack: Level[]
   theme: 'dark' | 'light' | 'slate'
+  // Язык интерфейса оверлея из PushMessage: применяется до отрисовки
+  // стека, чтобы FindBar и диалог иконки не мелькнули чужим языком.
+  language: string
   animations: boolean
 }
 
@@ -190,6 +194,10 @@ function applyPayload(msg: OverlayPayload): void {
   const html = document.documentElement
   html.dataset.theme = msg.theme
   html.classList.toggle('no-anim', msg.animations === false)
+  // Язык — до установки payload: changeLanguage при вшитых каталогах
+  // эмитит languageChanged синхронно, компоненты монтируются уже
+  // на новом языке (changeLanguage — no-op, если язык не изменился).
+  if (msg.language) void changeLanguage(msg.language)
   // error сбрасываем в обе стороны: сессия может прийти с пустой моделью
   // (тогда показываем ошибку), а может сменить валидную на невалидную.
   error.value = msg.stack && msg.stack.length > 0 ? '' : 'Empty overlay model.'

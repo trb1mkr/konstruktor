@@ -8,7 +8,7 @@
 
 ## 🎨 Тема
 
-`useTheme.ts` держит `theme` и `effectiveTheme`. `system` резолвится через `matchMedia`, смена ОС пересчитывается подпиской. `loadTheme` читает настройки при старте и на каждое `settings:changed`.
+`useTheme.ts` держит `theme` и `effectiveTheme`. `system` резолвится через `matchMedia`, смена ОС пересчитывается подпиской. `loadTheme` читает настройки при старте и на каждом `settings:changed`. Тот же колбэк получает поле `locale` и вызывает `changeLanguage` (i18n shell, см. [I18N.md](../../shared/i18n/I18N.md)): стартовый язык shell читает из настроек до `app.mount()`.
 
 ```mermaid
 flowchart LR
@@ -21,7 +21,7 @@ flowchart LR
 
 ## 🔀 Подписки
 
-Shell слушает `tabs:state`, `tabs:navigated`, `tabs:tab-action`, `settings:changed`, `window:maximized`, `window:fullscreen`, `window:content-fullscreen`. Опрос таймером не используется.
+Shell слушает `tabs:state`, `tabs:navigated`, `tabs:tab-action`, `settings:changed` (тема, скругление, F11-режим, поле `locale`), `window:maximized`, `window:fullscreen`, `window:content-fullscreen`. Опрос таймером не используется.
 
 ## ⌨️ Клавиши shell
 

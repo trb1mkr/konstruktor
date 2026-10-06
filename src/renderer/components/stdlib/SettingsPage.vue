@@ -39,21 +39,21 @@ onMounted(load)
 
 <template>
   <div class="settings">
-    <h2>Browser settings</h2>
+    <h2>{{ $t('settings.heading') }}</h2>
     <label class="row">
-      <span>Layout preset</span>
+      <span>{{ $t('settings.layoutPreset') }}</span>
       <select v-model="settings.preset" @change="save">
-        <option value="classic-top">Classic top</option>
-        <option value="address-bottom">Address bottom</option>
-        <option value="minimal">Minimal</option>
+        <option value="classic-top">{{ $t('settings.presetClassicTop') }}</option>
+        <option value="address-bottom">{{ $t('settings.presetAddressBottom') }}</option>
+        <option value="minimal">{{ $t('settings.presetMinimal') }}</option>
       </select>
     </label>
     <label class="row">
-      <span>Search engine URL (%s = query)</span>
+      <span>{{ $t('settings.searchEngine') }}</span>
       <input v-model="settings.searchEngine" @change="save" spellcheck="false" />
     </label>
     <label class="row">
-      <span>Homepage</span>
+      <span>{{ $t('settings.homepage') }}</span>
       <input v-model="settings.homepage" @change="save" spellcheck="false" />
     </label>
   </div>

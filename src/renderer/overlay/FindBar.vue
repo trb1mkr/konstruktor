@@ -79,7 +79,7 @@ onUnmounted(() => {
         ref="input"
         v-model="query"
         class="find-input"
-        placeholder="Find in page"
+        :placeholder="$t('find.placeholder')"
         spellcheck="false"
         @input="sendDebounced"
         @keydown="onKey"
@@ -88,24 +88,24 @@ onUnmounted(() => {
       <button
         class="find-btn"
         :class="{ on: matchCase }"
-        title="Match Case (Aa)"
+        :title="$t('find.matchCase')"
         @click="matchCase = !matchCase"
       >Aa</button>
       <button
         class="find-btn"
         :class="{ on: wholeWord }"
-        title="Match Whole Word"
+        :title="$t('find.wholeWord')"
         @click="wholeWord = !wholeWord"
       ><span class="wb">ab</span></button>
       <button
         class="find-btn"
         :class="{ on: useRegex }"
-        title="Use Regular Expression (.*)"
+        :title="$t('find.regex')"
         @click="useRegex = !useRegex"
       >.*</button>
-      <button class="find-btn nav" title="Previous match (Shift+Enter)" @click="prev">↑</button>
-      <button class="find-btn nav" title="Next match (Enter)" @click="next">↓</button>
-      <button class="find-btn close" title="Close (Esc)" @click="close">✕</button>
+      <button class="find-btn nav" :title="$t('find.prev')" @click="prev">↑</button>
+      <button class="find-btn nav" :title="$t('find.next')" @click="next">↓</button>
+      <button class="find-btn close" :title="$t('find.close')" @click="close">✕</button>
     </div>
     <div class="find-status" data-find-status></div>
   </div>

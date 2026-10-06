@@ -58,17 +58,17 @@ function openZoomPopup() {
 
 <template>
   <div class="addressbar">
-    <button class="nav-btn" title="Back" @click="back">←</button>
-    <button class="nav-btn" title="Forward" @click="forward">→</button>
-    <button class="nav-btn" title="Reload" @click="reload">⟳</button>
+    <button class="nav-btn" :title="$t('addressBar.back')" @click="back">←</button>
+    <button class="nav-btn" :title="$t('addressBar.forward')" @click="forward">→</button>
+    <button class="nav-btn" :title="$t('addressBar.reload')" @click="reload">⟳</button>
     <input
       v-model="input"
       class="url-input"
-      placeholder="Enter URL or search query"
+      :placeholder="$t('addressBar.placeholder')"
       spellcheck="false"
       @keydown.enter="go"
     />
-    <button class="go-btn" title="Go" @click="go">🔍</button>
+    <button class="go-btn" :title="$t('addressBar.go')" @click="go">🔍</button>
     <!-- Бейдж масштаба: виден только при проценте != 100. При исчезновении
          url-input снова занимает ширину через flex: 1 — инсеты layout
          (высота панели) от ширины бейджа не зависят. Класс menu-trigger
@@ -78,7 +78,7 @@ function openZoomPopup() {
       v-if="zoomPercent !== 100"
       ref="zoomBtn"
       class="zoom-badge menu-trigger"
-      title="Zoom"
+      :title="$t('zoom.badge')"
       @click="openZoomPopup"
     >🔬 {{ zoomPercent }}%</button>
     <slot />

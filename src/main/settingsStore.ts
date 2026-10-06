@@ -11,7 +11,8 @@ export interface BrowserSettings {
   // Secure DNS: off | cloudflare | google | custom. При custom — dnsCustom.
   dnsMode: string
   dnsCustom: string
-  // Заглушка: UI-язык браузера. Пока только хранится, перевод позже.
+  // Язык интерфейса: 'auto' (локаль системы) | код из LANGUAGES.
+  // Резолв — shared/i18n.resolveLocale, смена — через settings:save.
   locale: string
   // Анимации оверлея (меню/диалоги/тосты). false = открывать моментально.
   animations: boolean
@@ -50,7 +51,7 @@ const DEFAULTS: BrowserSettings = {
   devtools: false,
   dnsMode: 'off',
   dnsCustom: '',
-  locale: 'en',
+  locale: 'auto',
   animations: true,
   theme: 'dark',
   roundedCorners: false,

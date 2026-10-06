@@ -3,7 +3,7 @@
 // Отдельный модуль по образцу groupsMenu.ts: здесь только сборка
 // пунктов и их действия, без знания об устройстве оверлея.
 //
-// Системное меню окна на Windows заменено намеренно. Ото��алось само —
+// Системное меню окна на Windows заменено намеренно. Осталось само —
 // правый клик по drag-области заголовка отдавался ОС, минуя renderer.
 // Оно и светлое, и не стилизуется, и не знает про проект: в нём нет ни
 // «Clone window», ни «Open new window». Убрать его можно было только
@@ -16,13 +16,11 @@
 // «окно ждёт границ» — только setBounds/setSize, то есть действие без
 // курсора. Реализация выходила заметно объёмнее пункта, который в меню
 // окна занимает одну строку и вряд ли кем-то используется.
-//
-// Пока локализации нет: подписи по-английски напрямую. Когда появится
-// i18n, единственное место для правки — labels().
 import { BrowserWindow } from 'electron'
 import { showOverlay, type OverlayMenuItem } from './overlay'
+import { t } from './i18n'
 
-/** Подписи меню. Отдельная функция — будущий i18n меняет только её. */
+/** Подписи меню. Отдельная функция — смена языка меняет только её. */
 function labels(): {
   maximize: string
   restore: string
@@ -32,12 +30,12 @@ function labels(): {
   cloneWindow: string
 } {
   return {
-    maximize: 'Maximize',
-    restore: 'Restore',
-    minimize: 'Minimize',
-    close: 'Close',
-    newWindow: 'Open new window',
-    cloneWindow: 'Clone window'
+    maximize: t('window.menu.maximize'),
+    restore: t('window.menu.restore'),
+    minimize: t('window.menu.minimize'),
+    close: t('window.menu.close'),
+    newWindow: t('window.menu.newWindow'),
+    cloneWindow: t('window.menu.cloneWindow')
   }
 }
 

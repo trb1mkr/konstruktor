@@ -8,7 +8,7 @@
 
 ## ⚙️ Настройки
 
-`settingsStore.ts` хранит поисковик, homepage, devtools, DNS, локаль, анимации, тему, скругление, fullscreen, `rememberBounds`, `rememberTabs`, режим зума (`zoomMode`: origin/tab) и единый зум (`zoomSync`), геометрию и сессию вкладок. Чтение идет через `getSettings`, синхронное через `getSettingsSync`, запись через `saveSettings`.
+`settingsStore.ts` хранит поисковик, homepage, devtools, DNS, язык интерфейса (`locale`: `auto` | код из реестра LANGUAGES, дефолт `auto` — резолв и смена описаны в [I18N.md](../../shared/i18n/I18N.md)), анимации, тему, скругление, fullscreen, `rememberBounds`, `rememberTabs`, режим зума (`zoomMode`: origin/tab) и единый зум (`zoomSync`), геометрию и сессию вкладок. Чтение идет через `getSettings`, синхронное через `getSettingsSync`, запись через `saveSettings`.
 
 ```mermaid
 flowchart LR

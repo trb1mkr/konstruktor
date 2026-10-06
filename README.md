@@ -60,6 +60,10 @@ Renderer:
 - [🧩 Stdlib-компоненты](./src/renderer/docs/STDLIB.md)
 - [💬 Overlay UI](./src/renderer/docs/OVERLAY_UI.md)
 
+Shared:
+
+- [🌐 Локализация](./src/shared/i18n/I18N.md)
+
 Мосты:
 
 - [🔌 Мост shell](./src/preload/SHELL_BRIDGE.md)

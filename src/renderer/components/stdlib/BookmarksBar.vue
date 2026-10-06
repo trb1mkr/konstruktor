@@ -104,7 +104,7 @@ onMounted(load)
     <button
       class="bm-add"
       :class="{ active: isBookmarked }"
-      :title="isBookmarked ? 'Remove bookmark' : 'Bookmark current page'"
+      :title="isBookmarked ? $t('bookmarks.remove') : $t('bookmarks.add')"
       @click="addCurrent"
     >{{ isBookmarked ? '★' : '☆' }}</button>
     <button
@@ -125,7 +125,7 @@ onMounted(load)
       :key="g.id"
       class="bm-item bm-group"
       :style="{ '--group-color': g.color }"
-      :title="`${g.name} — ${g.urls.length} tabs`"
+      :title="$t('bookmarks.groupTabs', { name: g.name, count: g.urls.length })"
       @click="openSavedGroup(g.id)"
       @contextmenu.prevent="deleteSavedGroup(g.id)"
     >

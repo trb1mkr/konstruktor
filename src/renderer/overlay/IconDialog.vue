@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import DialogForm from './components/DialogForm.vue'
+import { t } from '../i18n'
 
 // Диалог иконки для вкладок и групп: одно поле ввода + 4 кнопки (URL,
 // локальный файл, emoji, отмена). В поле вводится любой из трёх источников,
@@ -35,7 +36,9 @@ async function onSubmit(buttonId: string, value: string): Promise<void> {
     props.sessionId
   )
   // false = main отклонил источник: показываем ошибку, диалог жив.
-  if (!ok) localError.value = 'Enter a URL, file path or emoji'
+  // Текст берётся тем же ключом, что и ошибки верификации в main —
+  // ключ общий, но лежит в каталоге и переводится с остальными.
+  if (!ok) localError.value = t('icon.error.empty')
 }
 
 async function onDismiss(): Promise<void> {
@@ -51,10 +54,10 @@ async function onDismiss(): Promise<void> {
     :initial="icon.initial"
     :error="error"
     :buttons="[
-      { id: 'url', label: 'URL', icon: '🔗', title: 'Use input as image URL', group: 'sources' },
-      { id: 'file', label: 'File', icon: '📁', title: 'Pick local image file', group: 'sources' },
-      { id: 'emoji', label: 'Emoji', icon: '😀', title: 'Use input as emoji', group: 'sources' },
-      { id: '__cancel__', label: 'Cancel' }
+      { id: 'url', label: $t('icon.url'), icon: '🔗', title: $t('icon.tipUrl'), group: 'sources' },
+      { id: 'file', label: $t('icon.file'), icon: '📁', title: $t('icon.tipFile'), group: 'sources' },
+      { id: 'emoji', label: $t('icon.emoji'), icon: '😀', title: $t('icon.tipEmoji'), group: 'sources' },
+      { id: '__cancel__', label: $t('common.cancel') }
     ]"
     :session-id="props.sessionId"
     @submit="onSubmit"

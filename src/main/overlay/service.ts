@@ -1,6 +1,7 @@
 import { BrowserWindow, app, dialog, ipcMain, nativeTheme, screen } from 'electron'
 import { getSettingsSync } from '../settingsStore'
 import { verifyIconSource, verifyEmojiButton, fileToIconDataUrl } from '../iconVerify'
+import { currentLang, t } from '../i18n'
 import { log, mark, perf, recordOpen, now, logError } from './logger'
 import {
   createOverlay,
@@ -691,7 +692,7 @@ function buildPushMessage(
       offset: levelOffsetInUnion(rect, union)
     }
   })
-  return { stack, theme, animations: settings.animations !== false }
+  return { stack, theme, animations: settings.animations !== false, language: currentLang() }
 }
 
 /**
@@ -2069,11 +2070,14 @@ export async function resolveOverlaySubmitIcon(
         let res: Electron.OpenDialogReturnValue
         try {
           res = await dialog.showOpenDialog(parent ?? (null as never), {
-            title: 'Choose icon',
+            title: t('icon.fileDialog.title'),
             properties: ['openFile'],
             filters: [
-              { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'] },
-              { name: 'All files', extensions: ['*'] }
+              {
+                name: t('icon.fileDialog.images'),
+                extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp']
+              },
+              { name: t('icon.fileDialog.allFiles'), extensions: ['*'] }
             ]
           })
         } finally {
@@ -2111,7 +2115,7 @@ export async function resolveOverlaySubmitIcon(
     } else {
       check = verifyIconSource(value)
       if (check.ok && check.icon.startsWith('emoji:')) {
-        check = { ok: false, error: 'Use Emoji button for emoji' }
+        check = { ok: false, error: t('icon.error.useEmojiButton') }
       }
     }
     if (!check.ok) return false

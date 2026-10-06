@@ -12,6 +12,7 @@ import {
 } from './groupsStore'
 import { showOverlay, type OverlayMenuItem } from './overlay'
 import { START_URL } from './startPage'
+import { t } from './i18n'
 import {
   allocInstance,
   syncSavedUrls,
@@ -52,19 +53,21 @@ export function showGroupContextMenu(
   // Закрепление шаблона: подпись зависит от текущего состояния (async).
   void getGroups().then((list) => {
     const savedNow = list.find((g) => g.id === inst.savedId)
-    const pinLabel = savedNow?.pinned ? 'Unpin from bookmarks bar' : 'Pin to bookmarks bar'
+    const pinLabel = savedNow?.pinned
+      ? t('groups.menu.unpinFromBookmarks')
+      : t('groups.menu.pinToBookmarks')
   const items: OverlayMenuItem[] = [
-    { id: 'new-group', label: 'New group', icon: '＋' },
-    { id: 'rename', label: 'Rename', icon: '✏️' },
-    { id: 'color', label: 'Change color', icon: '🎨' },
-    { id: 'icon', label: 'Change icon', icon: '🖼️' },
-    { id: 'nest-into', label: 'Nest into another group', icon: '📥' },
+    { id: 'new-group', label: t('groups.menu.new'), icon: '＋' },
+    { id: 'rename', label: t('groups.menu.rename'), icon: '✏️' },
+    { id: 'color', label: t('groups.menu.color'), icon: '🎨' },
+    { id: 'icon', label: t('groups.menu.icon'), icon: '🖼️' },
+    { id: 'nest-into', label: t('groups.menu.nest'), icon: '📥' },
     { id: 'toggle-bookmark-pin', label: pinLabel, icon: '📌' },
-    { id: 'close-tabs', label: 'Close group', icon: '✕' },
-    { id: 'ungroup', label: 'Ungroup', icon: '📂' },
-    { id: 'delete-group', label: 'Delete group', icon: '🗑️' },
+    { id: 'close-tabs', label: t('groups.menu.close'), icon: '✕' },
+    { id: 'ungroup', label: t('groups.menu.ungroup'), icon: '📂' },
+    { id: 'delete-group', label: t('groups.menu.delete'), icon: '🗑️' },
     ...(others.length > 0
-      ? [{ id: 'move-tabs', label: 'Move tabs to another group', icon: '➡️' }]
+      ? [{ id: 'move-tabs', label: t('groups.menu.moveTabs'), icon: '➡️' }]
       : [])
   ]
   showOverlay(win, {
@@ -79,25 +82,32 @@ export function showGroupContextMenu(
       if (!cur) return
       // onSelect у showOverlay синхронный: async-ветки уходят в void-промисы.
       if (action === 'new-group') {
-        void createSavedGroup({ name: 'Group', urls: [START_URL] }).then((saved) => {
-          const nid = allocInstance()
-          live.openGroups.push({ instanceId: nid, savedId: saved.id, collapsed: false, pinned: false })
-          pushTabsState(live)
-        })
+        void createSavedGroup({ name: t('groups.defaultName'), urls: [START_URL] }).then(
+          (saved) => {
+            const nid = allocInstance()
+            live.openGroups.push({
+              instanceId: nid,
+              savedId: saved.id,
+              collapsed: false,
+              pinned: false
+            })
+            pushTabsState(live)
+          }
+        )
       } else if (action === 'rename' || action === 'color') {
         // Ввод значения — через центральный диалог, результат в onSelect.
         const titles: Record<string, string> = {
-          rename: 'Group name',
-          color: 'Group color (e.g. #ff5555)'
+          rename: t('dialogs.groupName'),
+          color: t('dialogs.groupColor')
         }
         showOverlay(win, {
           kind: 'dialog',
           anchor: { x: 0, y: 0 },
           dialog: {
-            title: titles[action] ?? 'Group',
+            title: titles[action] ?? t('groups.defaultName'),
             buttons: [
-              { id: 'ok', label: 'OK' },
-              { id: '__cancel__', label: 'Cancel' }
+              { id: 'ok', label: t('common.ok') },
+              { id: '__cancel__', label: t('common.cancel') }
             ]
           },
           onSelect: (raw) => {
@@ -120,8 +130,8 @@ export function showGroupContextMenu(
             kind: 'icon',
             anchor: { x: 0, y: 0 },
             icon: {
-              title: 'Group icon',
-              placeholder: 'URL, file path or emoji (empty resets)',
+              title: t('icon.groupTitle'),
+              placeholder: t('icon.placeholder'),
               initial: saved?.icon ?? ''
             },
             onIconApply: (icon) => {
@@ -171,7 +181,7 @@ export function showGroupContextMenu(
               const s = byId.get(g.savedId)
               return {
                 id: g.instanceId,
-                label: s?.name ?? 'Group',
+                label: s?.name ?? t('groups.defaultName'),
                 icon: s?.icon?.startsWith('emoji:')
                   ? s.icon.replace(/^emoji:/, '')
                   : s?.icon || '📁',

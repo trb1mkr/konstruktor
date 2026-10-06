@@ -2,10 +2,18 @@
 // кастомизировать и сетка прямоугольных плиток на любимые сайты.
 // Плитки хранятся в userData/shortcuts.json, правятся прямо на странице
 // (add/edit/remove). Мост window.konstruktor ставит session-preload.
+//
+// HTML собирается функцией от языка на каждый запрос (см. pageI18nScript):
+// статические строки переводятся t(), скрипт страницы — встроенным tr().
+import { langTag } from '../shared/i18n'
+import { pageI18nScript } from '../shared/i18n/pageRuntime'
+import { t } from './i18n'
+
 export const START_URL = 'konstruktor://start'
 
-export const START_PAGE_HTML = `<!DOCTYPE html>
-<html lang="en">
+export function buildStartPage(lang: string): string {
+  return `<!DOCTYPE html>
+<html lang="${langTag(lang)}">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -91,6 +99,7 @@ export const START_PAGE_HTML = `<!DOCTYPE html>
   dialog button.primary:hover { filter: brightness(1.1); }
   .hint { color: var(--pg-hint); font-size: 12px; margin-bottom: 40px; }
 </style>
+${pageI18nScript(lang)}
 <script>
   // Тема shell применяется к стартовой странице до отрисовки.
   try {
@@ -107,19 +116,18 @@ export const START_PAGE_HTML = `<!DOCTYPE html>
 <body>
   <div class="hero">
     <div class="logo">Konstruktor</div>
-    <div class="slogan">A browser you adapt to yourself.</div>
-    <div class="cta">Tired of adapting to browsers? Rearrange the UI in
-      <code>src/renderer/App.vue</code> — every panel is your component.</div>
+    <div class="slogan">${t('start.slogan')}</div>
+    <div class="cta">${t('start.cta')}</div>
   </div>
   <div class="board" id="board"></div>
-  <div class="hint">Click a tile to open · hover to remove · tiles live in userData/shortcuts.json</div>
+  <div class="hint">${t('start.hint')}</div>
   <dialog id="dlg">
-    <h3>New shortcut</h3>
-    <label>Name<input id="f-name" placeholder="GitHub" /></label>
-    <label>URL<input id="f-url" placeholder="https://github.com" spellcheck="false" /></label>
+    <h3>${t('start.newShortcut')}</h3>
+    <label>${t('start.fieldName')}<input id="f-name" placeholder="GitHub" /></label>
+    <label>${t('start.fieldUrl')}<input id="f-url" placeholder="https://github.com" spellcheck="false" /></label>
     <div class="row">
-      <button id="f-cancel">Cancel</button>
-      <button id="f-save" class="primary">Save</button>
+      <button id="f-cancel">${t('common.cancel')}</button>
+      <button id="f-save" class="primary">${t('common.save')}</button>
     </div>
   </dialog>
   <script>
@@ -145,7 +153,7 @@ export const START_PAGE_HTML = `<!DOCTYPE html>
         const fav = t.favicon
           ? '<span class="fav"><img src="' + t.favicon + '" /></span>'
           : '<span class="fav">' + letter + '</span>';
-        b.innerHTML = fav + '<span class="name"></span><span class="url"></span><span class="x" title="Remove">✕</span>';
+        b.innerHTML = fav + '<span class="name"></span><span class="url"></span><span class="x" title="' + tr('start.remove') + '">✕</span>';
         b.querySelector('.name').textContent = t.name || t.url;
         b.querySelector('.url').textContent = hostOf(t.url);
         b.title = t.url;
@@ -162,7 +170,7 @@ export const START_PAGE_HTML = `<!DOCTYPE html>
       const add = document.createElement('button');
       add.className = 'tile add';
       add.textContent = '+';
-      add.title = 'Add shortcut';
+      add.title = tr('start.addShortcut');
       add.addEventListener('click', () => {
         fName.value = '';
         fUrl.value = '';
@@ -194,3 +202,4 @@ export const START_PAGE_HTML = `<!DOCTYPE html>
 </body>
 </html>
 `
+}

@@ -1,0 +1,219 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save"
+  },
+  "menu": {
+    "downloads": "Downloads",
+    "history": "History",
+    "settings": "Settings",
+    "devtoolsOpen": "DevTools",
+    "devtoolsClose": "Close DevTools",
+    "profile": "Profile",
+    "extensions": "Extensions",
+    "incognitoToPrivate": "Switch to incognito mode",
+    "incognitoToNormal": "Switch to normal mode"
+  },
+  "tabs": {
+    "newTab": "New tab",
+    "newTitle": "New Tab",
+    "pin": "Minimize",
+    "unpin": "Unminimize",
+    "duplicate": "Duplicate tab",
+    "addToGroup": "Add to group",
+    "removeFromGroup": "Remove from group",
+    "rename": "Rename tab",
+    "changeIcon": "Change icon",
+    "copyUrl": "Copy URL",
+    "reload": "Reload",
+    "close": "Close tab",
+    "closedGroup": "{{name}} (closed)"
+  },
+  "groups": {
+    "defaultName": "Group",
+    "menu": {
+      "new": "New group",
+      "rename": "Rename",
+      "color": "Change color",
+      "icon": "Change icon",
+      "nest": "Nest into another group",
+      "pinToBookmarks": "Pin to bookmarks bar",
+      "unpinFromBookmarks": "Unpin from bookmarks bar",
+      "close": "Close group",
+      "ungroup": "Ungroup",
+      "delete": "Delete group",
+      "moveTabs": "Move tabs to another group"
+    }
+  },
+  "dialogs": {
+    "groupName": "Group name",
+    "groupColor": "Group color (e.g. #ff5555)"
+  },
+  "window": {
+    "menu": {
+      "maximize": "Maximize",
+      "restore": "Restore",
+      "minimize": "Minimize",
+      "close": "Close",
+      "newWindow": "Open new window",
+      "cloneWindow": "Clone window"
+    }
+  },
+  "icon": {
+    "tabTitle": "Tab icon",
+    "groupTitle": "Group icon",
+    "placeholder": "URL, file path or emoji (empty resets)",
+    "url": "URL",
+    "file": "File",
+    "emoji": "Emoji",
+    "tipUrl": "Use input as image URL",
+    "tipFile": "Pick local image file",
+    "tipEmoji": "Use input as emoji",
+    "error": {
+      "empty": "Enter a URL, file path or emoji",
+      "fileMissing": "File not found",
+      "cannotRead": "Cannot read file",
+      "notEmoji": "Not an emoji",
+      "emptyEmoji": "Empty emoji",
+      "useEmojiButton": "Use Emoji button for emoji"
+    },
+    "fileDialog": {
+      "title": "Choose icon",
+      "images": "Images",
+      "allFiles": "All files"
+    }
+  },
+  "toast": {
+    "downloadComplete": "Download complete"
+  },
+  "find": {
+    "counter": "{{active}} of {{total}}",
+    "none": "No results",
+    "invalid": "Invalid expression",
+    "placeholder": "Find in page",
+    "matchCase": "Match Case (Aa)",
+    "wholeWord": "Match Whole Word",
+    "regex": "Use Regular Expression (.*)",
+    "prev": "Previous match (Shift+Enter)",
+    "next": "Next match (Enter)",
+    "close": "Close (Esc)"
+  },
+  "zoom": {
+    "badge": "Zoom",
+    "out": "Zoom out",
+    "in": "Zoom in",
+    "reset": "Reset zoom to 100%"
+  },
+  "addressBar": {
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "go": "Go",
+    "placeholder": "Enter URL or search query"
+  },
+  "bookmarks": {
+    "add": "Bookmark current page",
+    "remove": "Remove bookmark",
+    "groupTabs_one": "{{name}} — {{count}} tab",
+    "groupTabs_few": "{{name}} — {{count}} tabs",
+    "groupTabs_many": "{{name}} — {{count}} tabs",
+    "groupTabs_other": "{{name}} — {{count}} tabs"
+  },
+  "shell": {
+    "browserMenu": "Browser menu",
+    "incognito": "Incognito window"
+  },
+  "settings": {
+    "title": "Settings",
+    "searchEngine": "Search engine URL (%s = query)",
+    "homepage": "Homepage",
+    "devtools": "Open developer tools at startup",
+    "dns": {
+      "label": "Secure DNS (applies after restart)",
+      "system": "System DNS",
+      "customOption": "Custom DoH server…",
+      "customUrl": "Custom DoH URL"
+    },
+    "language": "Browser language",
+    "languageAuto": "Auto",
+    "animations": "Animations (menus, dialogs, toasts)",
+    "roundedCorners": "Rounded window corners (windowed mode)",
+    "rememberBounds": "Remember window size and position",
+    "rememberTabs": "Remember open tabs",
+    "pageZoom": "Page zoom",
+    "zoomOrigin": "Per site — shared by URL (like Chrome)",
+    "zoomTab": "Per tab — independent of URL, resets on tab close",
+    "zoomSync": "Same zoom for all tabs",
+    "theme": "Browser theme",
+    "themeDark": "Dark",
+    "themeLight": "Light",
+    "themeSystem": "System",
+    "themeSlate": "Slate",
+    "themeDarkTip": "Dark theme",
+    "themeLightTip": "Light theme",
+    "themeSystemTip": "Follow OS theme",
+    "themeSlateTip": "Slate gray-blue theme",
+    "themeHint": "Custom components can opt out with a <code>.theme-lock</code> wrapper.",
+    "f11": "F11 fullscreen mode",
+    "f11Window": "Whole browser — with all controls",
+    "f11Content": "Page only — browser UI hidden",
+    "saved": "Saved.",
+    "savedDns": "Saved. Restart the browser to apply Secure DNS.",
+    "footer": "Layout presets live in <code>src/renderer/layouts/</code> — copy one into <code>src/renderer/App.vue</code> to switch. History and bookmarks are stored in the app userData folder. DevTools can also be forced with env <code>KONSTRUKTOR_DEVTOOLS=1</code> or flag <code>--devtools</code>.",
+    "heading": "Browser settings",
+    "layoutPreset": "Layout preset",
+    "presetClassicTop": "Classic top",
+    "presetAddressBottom": "Address bottom",
+    "presetMinimal": "Minimal"
+  },
+  "history": {
+    "title": "History",
+    "search": "Search history…",
+    "modeDay": "Day",
+    "modeMonth": "Month",
+    "modeYear": "Year",
+    "clear": "Clear",
+    "clearAll": "Clear all history",
+    "clearConfirm": "Delete all browsing history?",
+    "loading": "Loading…",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "stats": "{{visits}} visits · {{sites}} sites",
+    "empty": "No history yet. Visit some sites first.",
+    "loadFailed": "Failed to load history.",
+    "deleteVisit": "Delete this visit",
+    "groupCount_one": "{{count}} visit",
+    "groupCount_few": "{{count}} visits",
+    "groupCount_many": "{{count}} visits",
+    "groupCount_other": "{{count}} visits"
+  },
+  "downloads": {
+    "title": "Downloads",
+    "search": "Search downloads…",
+    "clear": "Clear list",
+    "clearConfirm": "Clear the downloads list? Files stay on disk.",
+    "loading": "Loading…",
+    "empty": "No downloads yet.",
+    "loadFailed": "Failed to load downloads.",
+    "open": "Open",
+    "cancelled": "Cancelled",
+    "interrupted": "Interrupted",
+    "progress": "{{percent}}% · {{received}} / {{total}}",
+    "downloading": "{{size}} downloaded…"
+  },
+  "start": {
+    "slogan": "A browser you adapt to yourself.",
+    "cta": "Tired of adapting to browsers? Rearrange the UI in <code>src/renderer/App.vue</code> — every panel is your component.",
+    "hint": "Click a tile to open · hover to remove · tiles live in userData/shortcuts.json",
+    "newShortcut": "New shortcut",
+    "fieldName": "Name",
+    "fieldUrl": "URL",
+    "addShortcut": "Add shortcut",
+    "remove": "Remove"
+  },
+  "internal": {
+    "bridgeUnavailable": "Bridge unavailable. Reload the page.",
+    "notFound": "Not found"
+  }
+}

@@ -1,13 +1,15 @@
 // Верификация источника иконки: нормализует ввод к хранимому виду.
-// Выделено из сервиса оверлеев: чистая функция без зависимостей от окон,
-// тестируется без Electron. Возвращает { ok: true, icon } или { ok: false, error }.
+// Выделено из сервиса оверлеев: без зависимостей от окон. Ошибки
+// возвращаются уже переведёнными (t) — их видит overlay-рендерер.
+// Возвращает { ok: true, icon } или { ok: false, error }.
+import { t } from './i18n'
 export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok: false; error: string } {
   const text = raw.trim()
   if (!text) return { ok: true, icon: '' }
   if (text.startsWith('emoji:')) {
     return text.length > 'emoji:'.length
       ? { ok: true, icon: text }
-      : { ok: false, error: 'Empty emoji' }
+      : { ok: false, error: t('icon.error.emptyEmoji') }
   }
   if (/^(https?:|file:|data:|konstruktor:)/i.test(text)) return { ok: true, icon: text }
   if (/^([a-zA-Z]:[\\/]|\\\\|\.{0,2}[\\/]|\/)/.test(text) || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(text)) {
@@ -17,17 +19,17 @@ export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok
       const path = require('path') as typeof import('path')
       const unquoted = text.replace(/^"|"$/g, '')
       const normalized = path.normalize(unquoted)
-      if (!fs.existsSync(normalized)) return { ok: false, error: 'File not found' }
+      if (!fs.existsSync(normalized)) return { ok: false, error: t('icon.error.fileMissing') }
       return { ok: true, icon: pathToFileURL(normalized).href }
     } catch {
-      return { ok: false, error: 'Cannot read file' }
+      return { ok: false, error: t('icon.error.cannotRead') }
     }
   }
   const graphemes = [...text]
   if (!/\s/.test(text) && !text.includes('.') && graphemes.length <= 4 && /\p{Extended_Pictographic}|\p{Emoji}/u.test(text)) {
     return { ok: true, icon: `emoji:${text}` }
   }
-  return { ok: false, error: 'Enter a URL, file path or emoji' }
+  return { ok: false, error: t('icon.error.empty') }
 }
 
 // Строгая проверка emoji для кнопки Emoji диалога: только pictographic,
@@ -37,7 +39,7 @@ export function verifyEmojiButton(value: string): { ok: true; icon: string } | {
   if (text && [...text].length <= 4 && /\p{Extended_Pictographic}|\p{Emoji}/u.test(text)) {
     return { ok: true, icon: `emoji:${text.replace(/^emoji:/, '')}` }
   }
-  return { ok: false, error: 'Not an emoji' }
+  return { ok: false, error: t('icon.error.notEmoji') }
 }
 
 // Локальный файл в dataURL 16px: читаем, ресайзим через nativeImage, храним dataURL.
@@ -49,12 +51,12 @@ export function fileToIconDataUrl(filePath: string): { ok: true; icon: string } 
     const path = require('path') as typeof import('path')
     const unquoted = filePath.replace(/^"|"$/g, '')
     const normalized = path.normalize(unquoted)
-    if (!fs.existsSync(normalized)) return { ok: false, error: 'File not found' }
+    if (!fs.existsSync(normalized)) return { ok: false, error: t('icon.error.fileMissing') }
     const img = nativeImage.createFromPath(normalized)
-    if (img.isEmpty()) return { ok: false, error: 'Cannot read file' }
+    if (img.isEmpty()) return { ok: false, error: t('icon.error.cannotRead') }
     const small = img.resize({ width: 16, height: 16, quality: 'good' })
     return { ok: true, icon: small.toDataURL() }
   } catch {
-    return { ok: false, error: 'Cannot read file' }
+    return { ok: false, error: t('icon.error.cannotRead') }
   }
 }

@@ -17,4 +17,9 @@ Thumbs.db
 
 # Dot folders
 /.*/
+# Workspace-конфиг проекта — в репозитории: директорию разрешаем явно
+# (иначе git не заходит внутрь), содержимое открываем точечно.
+!/.vscode/
+.vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json

@@ -37,7 +37,7 @@ function toggle() {
     <button
       ref="btn"
       class="dropdown-toggle menu-trigger"
-      title="Browser menu"
+      :title="$t('shell.browserMenu')"
       @click="toggle"
     >{{ title ?? '☰' }}</button>
   </div>

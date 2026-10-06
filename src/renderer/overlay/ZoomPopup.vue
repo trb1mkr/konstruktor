@@ -70,11 +70,11 @@ onMounted(() => {
         spellcheck="false"
         @keydown="onKey"
       />
-      <button class="zoom-step" title="Zoom out" @click="step('zoom-out')">−</button>
-      <button class="zoom-step" title="Zoom in" @click="step('zoom-in')">+</button>
+      <button class="zoom-step" :title="$t('zoom.out')" @click="step('zoom-out')">−</button>
+      <button class="zoom-step" :title="$t('zoom.in')" @click="step('zoom-in')">+</button>
       <!-- Сброс — символом и в том же стиле, что `−`/`+`: текстовая
            кнопка выпадала из ряда и делала карточку шире. -->
-      <button class="zoom-step zoom-reset" title="Reset zoom to 100%" @click="step('zoom-reset')">
+      <button class="zoom-step zoom-reset" :title="$t('zoom.reset')" @click="step('zoom-reset')">
         ↺
       </button>
     </div>

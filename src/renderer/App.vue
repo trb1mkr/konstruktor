@@ -3,6 +3,8 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useTabs, isIncognito } from './core/useTabs'
 import { useLayoutInsets } from './core/layoutEngine'
 import { effectiveTheme, roundedCorners, loadTheme } from './core/useTheme'
+import { changeLanguage } from './i18n'
+import { resolveLocale } from '../shared/i18n'
 import TabStrip from './components/stdlib/TabStrip.vue'
 import BookmarksBar from './components/stdlib/BookmarksBar.vue'
 import AddressBar from './components/stdlib/AddressBar.vue'
@@ -134,7 +136,12 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onMounted(() => {
   void refreshMaximized()
   void loadTheme()
-  const unsubSettings = window.browserAPI.onSettingsChanged(() => void loadTheme())
+  const unsubSettings = window.browserAPI.onSettingsChanged((info) => {
+    void loadTheme()
+    // Язык: main шлёт сырое значение настройки, резолв тем же,
+    // что и при старте. Неизменённый язык в changeLanguage — no-op.
+    if (info?.locale) void changeLanguage(resolveLocale(info.locale, navigator.language))
+  })
   const unsubMax = window.browserAPI.onMaximizedChanged((v) => {
     isMaximized.value = v
   })
@@ -197,7 +204,7 @@ onMounted(() => {
                  обозначает окно, а не начало панели вкладок. Раньше стоял
                  отдельным элементом слева от TabStrip и висел в стороне от
                  кнопок окна, к которым относится. -->
-            <span v-if="isIncognito" class="incognito-badge" title="Incognito window">🕵️</span>
+            <span v-if="isIncognito" class="incognito-badge" :title="$t('shell.incognito')">🕵️</span>
             <DropdownMenu title="☰" class="menu" />
           </template>
         </WindowControls>

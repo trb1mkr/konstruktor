@@ -5,6 +5,7 @@
 
 // Favicon вкладки: emoji-иконка (emoji:...) рисуется текстом,
 // остальное — картинкой. Без проверки emoji ломал <img>.
+import { t } from '../../i18n'
 export function faviconIsEmoji(favicon?: string): boolean {
   return !!favicon && favicon.startsWith('emoji:')
 }
@@ -24,8 +25,10 @@ export function groupIconText(icon?: string): string {
 }
 
 // Заголовок вкладки: название страницы или URL.
-export function shortTitle(t: { title: string; url: string }): string {
-  return t.title || t.url || 'New Tab'
+// t здесь — сырой импорт: перерисовка при смене языка приходит от
+// компонентов панели, которые используют $t/useTranslation.
+export function shortTitle(tab: { title: string; url: string }): string {
+  return tab.title || tab.url || t('tabs.newTitle')
 }
 
 // Горизонтальный скролл колесом: вертикальное колесо листает вправо,

@@ -87,7 +87,7 @@ function onBodyWheel(e: WheelEvent) {
   >
     <div
       class="tabgroup-head"
-      :title="saved?.name ?? 'Group'"
+      :title="saved?.name ?? $t('groups.defaultName')"
       @click="emit('toggle-group', instanceId)"
       @contextmenu.prevent="emit('open-group-menu', { instanceId, ev: $event })"
       @dragover="emit('group-drag-over', $event)"
