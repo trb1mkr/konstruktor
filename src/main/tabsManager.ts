@@ -199,9 +199,16 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
       void rec.view.webContents.loadURL(validatedUrl).catch(() => undefined)
     }
   })
-  // Внешние ссылки открываем в системном браузере.
+  // Внешние ссылки (target=_blank, window.open) открываем вкладкой в этом же
+  // окне, а не в системном браузере. Вкладка активируется сразу — поведение
+  // как в Chrome. Не-http схемы (mailto:, tel:) в вкладку не ложатся —
+  // они остаются за системным обработчиком.
   view.webContents.setWindowOpenHandler(({ url: popupUrl }) => {
-    void shell.openExternal(popupUrl)
+    if (/^(https?|konstruktor):/i.test(popupUrl)) {
+      createTab(ws, deps, popupUrl)
+    } else {
+      void shell.openExternal(popupUrl)
+    }
     return { action: 'deny' }
   })
   // Ctrl+F внутри страницы: перехватываем до сайта и открываем свою панель.

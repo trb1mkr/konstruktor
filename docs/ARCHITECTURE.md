@@ -59,6 +59,7 @@ src/
     SHELL_BRIDGE.md     документация моста shell и overlay
   view-preload/
     internal.ts         window.konstruktor для view
+    pip.ts              кнопка PiP над HTML5-плеером в каждом фрейме
     VIEW_BRIDGE.md      документация моста view
   shared/
     overlay-types.ts    контракт сообщений и типов overlay

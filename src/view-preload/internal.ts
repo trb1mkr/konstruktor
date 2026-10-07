@@ -4,6 +4,11 @@
 // фрейме до загрузки документа. contextBridge доступен, require('electron')
 // не нужен — мост строится штатно через ipcRenderer + exposeInMainWorld.
 import { contextBridge, ipcRenderer } from 'electron'
+import { installPipHover } from './pip'
+
+// Кнопка PiP поверх HTML5-плееров: ставится в каждом фрейме, работает
+// без бриджа — чистый DOM внутри изолированного мира прелоада.
+installPipHover()
 
 contextBridge.exposeInMainWorld('konstruktor', {
   historyList: (limit?: number) => ipcRenderer.invoke('history:list', limit),
