@@ -8,7 +8,7 @@
 // Корневая группа -> 'g:<instanceId>' в своей зоне по флагу pinned.
 // Вкладка внутри группы токена не имеет. Нарушение инварианта = невидимая
 // группа или дубль (см. баг stray 't:'-токена у New Group).
-import type { WindowState } from './browserState'
+import type { WindowState } from '../windows/browserState'
 
 export function rootGroupIds(ws: WindowState): string[] {
   return ws.openGroups.filter((g) => !g.parentInstanceId).map((g) => g.instanceId)

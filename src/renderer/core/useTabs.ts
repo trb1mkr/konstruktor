@@ -1,5 +1,5 @@
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { TabInfo, OpenGroupInfo, SavedGroupInfo } from '../../preload/index'
+import type { TabInfo, OpenGroupInfo, SavedGroupInfo } from '../../preload/shell/index'
 
 // Общее состояние вкладок для всех SFC-компонентов.
 export const tabs = ref<TabInfo[]>([])

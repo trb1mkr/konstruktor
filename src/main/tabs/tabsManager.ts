@@ -2,6 +2,15 @@
 // Выделено из index.ts: здесь весь жизненный цикл WebContentsView.
 // Окна (createWindow/layout/fullscreen) живут в windowsManager.ts,
 // этот модуль принимает их через deps во избежание циклических импортов.
+//
+// ГРАНИЦА ФАЙЛА: жизненный цикл view вкладки + TabsDeps-контракт.
+// ЧТО ВЫНОСИТЬ ПРИ РОСТЕ:
+// - IPC-каналы tabs:* -> tabsIpc.ts, меню вкладки -> tabsMenu.ts;
+// - инварианты ряда -> stripOrder.ts, группы -> groups/;
+// - тема/зум/поисковые вызовы остаются точечными (applyThemeToTab,
+//   setZoom, openFindOverlay) — свои модули их не импортируют сюда.
+// Сигнал к разделению: новая ветка в createTab, раздувающая партиционный
+// выбор, — вынести в отдельный модуль партиций.
 import { WebContentsView, shell } from 'electron'
 import {
   allocTabId,
@@ -9,10 +18,10 @@ import {
   INCOGNITO_PARTITION,
   type WindowState,
   type TabRecord
-} from './browserState'
-import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from './browserTheme'
+} from '../windows/browserState'
+import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from '../browserTheme'
 import { ensureStripToken, removeStripToken, reorderStrip } from './stripOrder'
-import { openFindOverlay } from './findManager'
+import { openFindOverlay } from '../find/findManager'
 import { closeDevToolsFor, toggleDevTools } from './devtools'
 import {
   applyZoomToWs,
@@ -23,12 +32,12 @@ import {
   syncZoomPopup,
   zoomModeFor,
   zoomShortcut
-} from './zoomManager'
-import { getActiveOverlay, closeOverlay, updateActiveOverlay } from './overlay'
-import { getSettingsSync } from './settingsStore'
-import { t } from './i18n'
-import { recordVisit, updateMetadata } from './historyStore'
-import { START_URL } from './startPage'
+} from '../zoomManager'
+import { getActiveOverlay, closeOverlay, updateActiveOverlay } from '../overlay'
+import { getSettingsSync } from '../store/settingsStore'
+import { t } from '../i18n'
+import { recordVisit, updateMetadata } from '../store/historyStore'
+import { START_URL } from '../pages/internalPages'
 
 export interface TabsDeps {
   layoutView: (ws: WindowState, view: WebContentsView) => void

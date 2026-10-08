@@ -1,7 +1,19 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick } from 'vue'
-import { componentFor } from './registry'
 import { changeLanguage } from '../i18n'
+import { buildRenderedLevels, isStalePush, mergePatch } from './payload'
+import type { Level, OverlayPayload, OverlayUpdate } from './payload'
+
+// ГРАНИЦА ФАЙЛА: стек уровней, подписки на IPC и разметка.
+// Разбор payload (типы, пропсы уровней, мерж патчей, сверка
+// устаревших push) — в payload.ts; выбор компонента — в registry.ts;
+// сами панели — в components/.
+//
+// ЧТО ВЫНОСИТЬ ПРИ РОСТЕ:
+// - новая панель -> компонент в registry, НЕ ветка v-if здесь;
+// - новый тип payload -> поля в payload.ts, не локально;
+// - логика конкретной панели (формы, валидация) -> components/.
+// Сигнал к разделению: второй обработчик IPC со своей логикой сверки.
 
 // Стек уровней: нижний рисуется первым, верхний — последним и поверх.
 //
@@ -14,54 +26,11 @@ import { changeLanguage } from '../i18n'
 // позиционируется по своему offset из сообщения. Окно — объединение
 // уровней, поэтому система отсчёта у них одна: левый верхний угол окна.
 
-import type {
-  DialogModel,
-  FindModel,
-  IconModel,
-  MenuItem,
-  StackEntry,
-  ToastModel,
-  UpdateMessage
-} from '../../shared/overlay-types'
+import type { MenuItem } from './payload'
 
 // `MenuItem` реэкспортируется: его импортирует BrowserMenu.vue. Экспорт
 // из .vue оставлен, чтобы менять потребителей не пришлось.
 export type { MenuItem }
-
-/** Модель уровня — плоская: шаблон читает поля напрямую. */
-interface OverlayModel {
-  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom'
-  items?: MenuItem[]
-  toast?: ToastModel
-  dialog?: DialogModel
-  icon?: IconModel
-  find?: FindModel
-  zoom?: { percent: number }
-}
-
-// Один уровень стека, ровно как его прислал main. Форма задана
-// контрактом StackEntry, но здесь объявлена отдельно: renderer держит
-// уровни в ref и мержит патчи, а контрактный union пришлось бы сузить в
-// каждом месте.
-interface Level extends Omit<StackEntry, 'model'> {
-  model: OverlayModel
-}
-
-// То, что приходит из main одним сообщением overlay:push.
-interface OverlayPayload {
-  // Стек уровней снизу вверх. Токен каждого уровня лежит в нём самом,
-  // а не в сообщении: при двух уровнях одно общее поле означало бы,
-  // каким оно помечено — верхним или нижним.
-  //
-  // Токен верхнего уровня работает и подтверждением отрисовки: main держит
-  // окно прозрачным, пока renderer не вернёт его через overlay:painted.
-  stack: Level[]
-  theme: 'dark' | 'light' | 'slate'
-  // Язык интерфейса оверлея из PushMessage: применяется до отрисовки
-  // стека, чтобы FindBar и диалог иконки не мелькнули чужим языком.
-  language: string
-  animations: boolean
-}
 
 const payload = ref<OverlayPayload | null>(null)
 
@@ -73,99 +42,9 @@ const topLevel = computed<Level | null>(() => {
   return stack[stack.length - 1]
 })
 
-// Пропы уровня: форма та же, что была для единственной модели, но
-// sessionId и anchorLeft берутся из самого уровня, а не из сообщения.
-function propsFor(level: Level): Record<string, unknown> | null {
-  const model = level.model
-  const base = {
-    sessionId: level.sessionId,
-    anchorLeft: level.anchorLeft
-  }
-  switch (model.view) {
-    case 'menu':
-      return {
-        ...base,
-        items: model.items ?? [],
-        align: level.anchorLeft ? 'start' : 'end'
-      }
-    // Меню окна: та же карточка, но без бейджа инкогнито — вкладка и окно
-    // не могут быть одновременно инкогнито-вкладкой и обычным окном.
-    case 'window-menu':
-      return {
-        ...base,
-        items: model.items ?? [],
-        align: level.anchorLeft ? 'start' : 'end'
-      }
-    case 'toast':
-      // Модель может прийти без toast — тогда компонент не рендерим
-      // вовсе, а не показываем пустую карточку.
-      return model.toast ? { ...base, toast: model.toast } : null
-    case 'dialog':
-      return model.dialog ? { ...base, dialog: model.dialog } : null
-    case 'icon':
-      return model.icon ? { ...base, icon: model.icon } : null
-    case 'find':
-      return {
-        ...base,
-        initial: model.find?.query ?? '',
-        counter: model.find?.counter ?? ''
-      }
-    // Попап зума: процент приходит в push (открытие) и в overlay:update
-    // (каждое `+`/`−`/`Reset`) — компонент живёт на пропе, своего
-    // состояния вне модели у него нет.
-    case 'zoom':
-      return { ...base, percent: model.zoom?.percent ?? 100 }
-    default:
-      return null
-  }
-}
+// Пропсы уровней, сборка отрисовки и мерж патчей — в payload.ts.
+const renderedLevels = computed(() => buildRenderedLevels(payload.value?.stack ?? []))
 
-const renderedLevels = computed(() => {
-  const stack = payload.value?.stack ?? []
-  return stack
-    .map((level, index) => ({
-      key: level.sessionId,
-      index,
-      level,
-      component: componentFor(level.model.view),
-      props: propsFor(level)
-    }))
-    .filter((entry) => entry.props !== null)
-})
-
-// Типы берём из контракта, а не дублируем локально. Прежний комментарий
-// утверждал, что общий тип в бандл renderer не попадает и его приходится
-// дублировать — это неверно: типы стираются при сборке, и
-// `renderer/core/useTabs.ts` уже импортирует их из preload. Локальная копия
-// разошлась с общей на шаге 4b: counter и error добавились в модель, а
-// локальный OverlayModel молча остался без них.
-type OverlayUpdate = UpdateMessage
-
-// Глубокий мерж патча в модель. Намеренно локальный: патчи всегда плоские
-// (find.counter, icon.error), и общий deep-merge был бы лишней
-// абстракцией.
-//
-// null и undefined НЕ перезаписывают поле — иначе нельзя было бы стереть
-// сообщение об ошибке, не отправляя полную сессию заново.
-function mergePatch<T extends object>(base: T, patch: unknown): T {
-  if (typeof patch !== 'object' || patch === null) return base
-  const out = { ...(base as Record<string, unknown>) }
-  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
-    if (value === null || value === undefined) continue
-    const cur = out[key]
-    const bothPlainObjects =
-      typeof value === 'object' &&
-      value !== null &&
-      !Array.isArray(value) &&
-      typeof cur === 'object' &&
-      cur !== null &&
-      !Array.isArray(cur)
-    out[key] = bothPlainObjects
-      ? mergePatch(cur as Record<string, unknown>, value)
-      : value
-  }
-  return out as T
-}
 const error = ref('')
 // Парковка: main уводит окно и просит убрать содержимое из рендера.
 // Прозрачности и увода за экран НЕДОСТАТОЧНО: на Linux с несколькими
@@ -282,41 +161,15 @@ onMounted(() => {
     // одно, и main шлёт данные прямо в него: если сессия успела смениться
     // между отправкой и доставкой, на экране оказались бы пункты
     // предыдущего меню. Токен приходит в каждом push, поэтому сверка
-    // точная.
-    //
-    // Сверка по ТОКЕНУ ВЕРХНЕГО уровня, а не по всему стеку. Push несёт
-    // весь стек, и укороченный стек после Esc имеет меньший верхний токен,
-    // чем предыдущий: сравнение «меньше — значит устарел» отбросило бы
-    // возврат к меню как позднее сообщение.
-    //
-    // Сверка устаревших push. Правило НЕ «верхний токен меньше — значит
-    // позднее»: снятие верхнего уровня (Esc) укорачивает стек, и у
-    // возврата к меню верхний токен МЕНЬШЕ, чем у диалога, который только
-    // что показали. Такое сравнение отбрасывало возврат как позднее
-    // сообщение — и это зафиксировано в логе:
-    //
-    //   returned to lower level { popped: 2, depth: 1, kind: 'menu' }
-    //   STALE, dropped push: got stack 1, current 1+2
-    //
-    // Попытка с правилом «укороченный стек — всегда устарел» была хуже:
-    // 15 абортов подряд, приложение переставало открывать меню вовсе.
-    //
-    // Верное правило: токены монотонны, поэтому push, верхний токен
-    // которого МЕНЬШЕ текущего, устарел лишь тогда, когда этого токена нет
-    // НИГДЕ в текущем стеке. У возврата токен меню в стеке есть, и он
-    // устаревшим не является.
-    const currentStack = payload.value?.stack
-    const incomingTop = msg.stack[msg.stack.length - 1]
-    if (currentStack && incomingTop) {
-      const currentTop = currentStack[currentStack.length - 1]
-      const knownSomewhere = currentStack.some((l) => l.sessionId === incomingTop.sessionId)
-      if (!knownSomewhere && incomingTop.sessionId < currentTop.sessionId) {
-        window.overlayAPI?.trace(
-          `STALE, dropped push: got ${incomingTop.sessionId}, current ` +
-            `${currentTop.sessionId} (stack ${msg.stack.map((l) => l.sessionId).join("+")})`
-        )
-        return
-      }
+    // точная. Правило сверки — isStalePush в payload.ts (там же история
+    // про 15 абортов и возврат по Esc).
+    if (isStalePush(msg, payload.value)) {
+      window.overlayAPI?.trace(
+        `STALE, dropped push: got ${msg.stack[msg.stack.length - 1]?.sessionId}, current ` +
+          `${payload.value?.stack[payload.value.stack.length - 1]?.sessionId} ` +
+          `(stack ${msg.stack.map((l) => l.sessionId).join("+")})`
+      )
+      return
     }
 
     const wasUnmounted = contentUnmounted.value

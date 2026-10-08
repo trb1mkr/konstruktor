@@ -5,9 +5,9 @@
 //
 // HTML собирается функцией от языка на каждый запрос (см. pageI18nScript):
 // статические строки переводятся t(), скрипт страницы — встроенным tr().
-import { langTag } from '../shared/i18n'
-import { pageI18nScript } from '../shared/i18n/pageRuntime'
-import { t } from './i18n'
+import { langTag } from '../../shared/i18n'
+import { pageI18nScript } from '../../shared/i18n/pageRuntime'
+import { t } from '../i18n'
 
 export const START_URL = 'konstruktor://start'
 

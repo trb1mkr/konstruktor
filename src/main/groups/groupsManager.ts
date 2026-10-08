@@ -7,17 +7,18 @@ import {
   findTab,
   windows,
   type WindowState
-} from './browserState'
+} from '../windows/browserState'
 import {
   ensureStripToken,
   removeStripToken
-} from './stripOrder'
+} from '../tabs/stripOrder'
+import { wsOf, createTab, closeTab, setActiveTab, pushTabsState, pruneEmptyGroup } from '../windows/deps'
 import {
   getGroups,
   updateSavedGroup,
   deleteSavedGroup
 } from './groupsStore'
-import { START_URL } from './startPage'
+import { START_URL } from '../pages/internalPages'
 import {
   openInstance,
   createAndOpen,
@@ -32,10 +33,16 @@ import { showGroupContextMenu } from './groupsMenu'
 
 export type { GroupTabDeps }
 
-type WsOf = (e: { sender: Electron.WebContents }) => WindowState
-
-export function registerGroupsIpc(wsOf: WsOf, deps: GroupTabDeps): void {
-  const { closeTab, pushTabsState, pruneEmptyGroup } = deps
+// Wiring — в windows/deps: те же createTab/closeTab, что и у остальных
+// register*Ipc, без передачи аргументами из index.ts.
+export function registerGroupsIpc(): void {
+  const deps: GroupTabDeps = {
+    createTab,
+    closeTab,
+    setActiveTab,
+    pushTabsState,
+    pruneEmptyGroup
+  }
 
   // Моментальная синхронизация шаблонов: после каждой мутации store
   // рассылаем свежий список во все окна — shell не ждет tabs:state.

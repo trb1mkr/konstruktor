@@ -2,7 +2,7 @@
 // Выделено из сервиса оверлеев: без зависимостей от окон. Ошибки
 // возвращаются уже переведёнными (t) — их видит overlay-рендерер.
 // Возвращает { ok: true, icon } или { ok: false, error }.
-import { t } from './i18n'
+import { t } from '../i18n'
 export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok: false; error: string } {
   const text = raw.trim()
   if (!text) return { ok: true, icon: '' }

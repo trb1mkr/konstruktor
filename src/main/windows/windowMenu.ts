@@ -17,8 +17,8 @@
 // курсора. Реализация выходила заметно объёмнее пункта, который в меню
 // окна занимает одну строку и вряд ли кем-то используется.
 import { BrowserWindow } from 'electron'
-import { showOverlay, type OverlayMenuItem } from './overlay'
-import { t } from './i18n'
+import { showOverlay, type OverlayMenuItem } from '../overlay'
+import { t } from '../i18n'
 
 /** Подписи меню. Отдельная функция — смена языка меняет только её. */
 function labels(): {

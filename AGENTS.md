@@ -47,8 +47,8 @@
 
 | Документ | О чём | Когда читать |
 |---|---|---|
-| `src/preload/SHELL_BRIDGE.md` | `window.browserAPI` для shell и `window.overlayAPI` для overlay-окна, направления вызовов, контракт `src/shared/overlay-types.ts`, изоляция контекста | Любой новый IPC-канал или вызов из renderer |
-| `src/view-preload/VIEW_BRIDGE.md` | `window.konstruktor` для сайтов и внутренних страниц, кнопка PiP над HTML5-плеером (`pip.ts`), `registerPreloadScript` вместо `webPreferences.preload` | Задачи, где renderer или страница идёт в main через view-мост, в том числе про плееры и PiP |
+| `src/preload/docs/SHELL_BRIDGE.md` | `window.browserAPI` для shell и `window.overlayAPI` для overlay-окна, направления вызовов, контракт `src/shared/overlay-types.ts`, изоляция контекста | Любой новый IPC-канал или вызов из renderer |
+| `src/preload/docs/VIEW_BRIDGE.md` | `window.konstruktor` для сайтов и внутренних страниц, кнопка PiP над HTML5-плеером (`pip.ts`), `registerPreloadScript` вместо `webPreferences.preload` | Задачи, где renderer или страница идёт в main через view-мост, в том числе про плееры и PiP |
 
 ## 🧭 Как выбирать документ по задаче
 

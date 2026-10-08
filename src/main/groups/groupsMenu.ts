@@ -2,17 +2,17 @@
 // Выделено из groupsManager.ts: здесь только showOverlay + onSelect.
 // Мутации экземпляров — через groupsInstances.ts, шаблоны — через groupsStore.
 import { BrowserWindow } from 'electron'
-import { getState, windows, type WindowState } from './browserState'
-import { removeStripToken } from './stripOrder'
+import { getState, windows, type WindowState } from '../windows/browserState'
+import { removeStripToken } from '../tabs/stripOrder'
 import {
   getGroups,
   createSavedGroup,
   updateSavedGroup,
   deleteSavedGroup
 } from './groupsStore'
-import { showOverlay, type OverlayMenuItem } from './overlay'
-import { START_URL } from './startPage'
-import { t } from './i18n'
+import { showOverlay, type OverlayMenuItem } from '../overlay'
+import { START_URL } from '../pages/internalPages'
+import { t } from '../i18n'
 import {
   allocInstance,
   syncSavedUrls,

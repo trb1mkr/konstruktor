@@ -12,8 +12,8 @@
 // приходит аргументом, и цикла tabsManager -> zoomManager -> tabsManager
 // не возникает.
 import type { BrowserWindow, WebContents } from 'electron'
-import { windows, type WindowState } from './browserState'
-import { getSettingsSync } from './settingsStore'
+import { windows, type WindowState } from './windows/browserState'
+import { getSettingsSync } from './store/settingsStore'
 import { getActiveRequest, showOverlay, updateActiveOverlay } from './overlay'
 
 // Границы зума. Потолок и пол — ОБЪЕКТИВНЫЕ: Chromium клампит

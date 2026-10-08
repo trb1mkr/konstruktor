@@ -2,8 +2,26 @@
 // Выделено из index.ts (п.3 рефакторинга): чистые функции + один проход
 // по пулу окон из browserState. Циклов нет — browserState никого не импортирует.
 import { nativeTheme } from 'electron'
-import { windows, type TabData } from './browserState'
-import { buildPageThemeScript } from './findScripts'
+import { windows, type TabData } from './windows/browserState'
+import { getSettings } from './store/settingsStore'
+
+// Живое перекрашивание внутренней страницы без перезагрузки.
+export function buildPageThemeScript(pageTheme: string): string {
+  return `document.documentElement.dataset.theme = ${JSON.stringify(pageTheme)}; true`
+}
+
+// Системная тема ОС: nativeTheme следит сам и шлет обновления —
+// пересчитываем color-scheme сайтов при смене темы ОС.
+// Выделено из index.ts: подписка ставится один раз после ready.
+export function watchSystemTheme(): void {
+  nativeTheme.on('updated', () => {
+    void getSettings()
+      .then((s) => {
+        if ((s.theme ?? 'dark') === 'system') applyThemeToViews('system')
+      })
+      .catch(() => undefined)
+  })
+}
 
 export function effectiveColorScheme(theme: string): 'dark' | 'light' {
   if (theme === 'light') return 'light'

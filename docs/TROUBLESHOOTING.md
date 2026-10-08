@@ -225,7 +225,7 @@ await waitPageReady(win)
 
 Меню живёт в отдельном окне над `WebContentsView` и клика по вкладке, адресной строке или сайту не видит. Пользователь ждёт обычного поведения — меню гаснет.
 
-Оба места ловят `mousedown` в фазе capture и шлют `menu:dismiss-on-shell-click`: shell (`App.vue`) и страница (`view-preload/internal.ts`, работает во всех вкладках, включая инкогнито). Main закрывает **только** `kind: 'menu'` — диалоги и панель поиска живут своей логикой.
+Оба места ловят `mousedown` в фазе capture и шлют `menu:dismiss-on-shell-click`: shell (`App.vue`) и страница (`preload/view/internal.ts`, работает во всех вкладках, включая инкогнито). Main закрывает **только** `kind: 'menu'` — диалоги и панель поиска живут своей логикой.
 
 Тонкости:
 

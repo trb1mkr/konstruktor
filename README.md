@@ -29,7 +29,7 @@ npm run clean        # удалить out/
 
 ## 🧩 Кастомизация
 
-Корневой layout — `src/renderer/App.vue`. Стандартные блоки лежат в `src/renderer/components/stdlib/` (`AddressBar`, `TabStrip`, `BookmarksBar`, `DropdownMenu`, `WindowControls`). Общее состояние вкладок хранится в `core/useTabs.ts`, отступы под WebContentsView считает `layoutEngine.ts`. Группы вкладок живут в `src/main/groupsStore.ts` и `src/main/groupsManager.ts`, рисуются через `TabGroupNode.vue`.  
+Корневой layout — `src/renderer/App.vue`. Стандартные блоки лежат в `src/renderer/components/stdlib/` (`AddressBar`, `TabStrip`, `BookmarksBar`, `DropdownMenu`, `WindowControls`). Общее состояние вкладок хранится в `core/useTabs.ts`, отступы под WebContentsView считает `layoutEngine.ts`. Группы вкладок живут в `src/main/groups/groupsStore.ts` и `src/main/groups/groupsManager.ts`, рисуются через `TabGroupNode.vue`.  
 
 ## 📄 Документация
 
@@ -66,6 +66,6 @@ Shared:
 
 Мосты:
 
-- [🔌 Мост shell](./src/preload/SHELL_BRIDGE.md)
-- [🔌 Мост view](./src/view-preload/VIEW_BRIDGE.md)
+- [🔌 Мост shell](./src/preload/docs/SHELL_BRIDGE.md)
+- [🔌 Мост view](./src/preload/docs/VIEW_BRIDGE.md)
 

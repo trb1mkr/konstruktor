@@ -3,8 +3,8 @@ import {
   OVERLAY_CHANNELS,
   OVERLAY_PUSH_CHANNEL,
   OVERLAY_UPDATE_CHANNEL
-} from '../shared/overlay-types'
-import type { MeasureMessage, OverlayCommand, PushMessage, UpdateMessage } from '../shared/overlay-types'
+} from '../../shared/overlay-types'
+import type { MeasureMessage, OverlayCommand, PushMessage, UpdateMessage } from '../../shared/overlay-types'
 
 // Канал управления парковкой: main сообщает окну, нужно ли убрать
 // содержимое из рендера. Главный механизм скрытия, парковка координатами

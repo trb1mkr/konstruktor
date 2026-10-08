@@ -14,11 +14,6 @@ export interface CustomFindOptions {
   useRegex: boolean
 }
 
-// Живое перекрашивание внутренней страницы без перезагрузки.
-export function buildPageThemeScript(pageTheme: string): string {
-  return `document.documentElement.dataset.theme = ${JSON.stringify(pageTheme)}; true`
-}
-
 // Собственный поиск для wholeWord/regex: findInPage их не умеет
 // (только подстрока + matchCase). Разбиваем текст на слова границами
 // Unicode-букв/цифр — пробелы и пунктуация считаются разделителями.

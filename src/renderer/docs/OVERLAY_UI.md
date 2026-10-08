@@ -4,7 +4,7 @@
 
 ## 🧩 Корень
 
-`OverlayRoot.vue` парсит payload из hash синхронно до первого рендера, ставит `dataset.theme`, класс `no-anim` и применяет язык из `PushMessage.language` (до установки payload — см. [I18N.md](../../shared/i18n/I18N.md)). Пустой payload показывает ошибку. Клик по прозрачной области закрывает окно без выбора.
+`OverlayRoot.vue` держит стек уровней и подписки на IPC, разбор payload (типы push, пропсы уровней, мерж патчей, сверка устаревших push) — в `payload.ts`, выбор компонента — в `registry.ts`. Тема (`dataset.theme`), класс `no-anim` и язык из `PushMessage.language` ставятся до установки payload (см. [I18N.md](../../shared/i18n/I18N.md)). Пустой payload показывает ошибку. Клик по прозрачной области закрывает окно без выбора.
 
 ## 🗂️ Панели
 

@@ -50,6 +50,18 @@ export interface UiInsets {
   right: number
 }
 
+// ГРАНИЦА ФАЙЛА: один тонкий метод на IPC-канал + публичные типы API.
+// Сюда не переносится логика: только invoke/send и подписка.
+//
+// ЧТО ВЫНОСИТЬ ПРИ РОСТЕ:
+// - обработчик состояния/маппинг данных -> renderer/core (useTabs и др.),
+//   preload не должен знать про форму ответа глубже его типа;
+// - третий подряд метод одного канала с общим маппингом -> хелпер-обёртка
+//   над ipcRenderer внизу файла;
+// - новый канал: сначала тип в shared/ (overlay-types для оверлея) или
+//   здесь рядом с API, потом метод, потом регистратор в src/main.
+// Сигнал к разделению: файл > ~400 строк или второй набор типов,
+// не относящийся к browserAPI (они уходят в shared/).
 const browserAPI = {
   createTab: (url?: string): Promise<number> => ipcRenderer.invoke('tabs:create', url),
   closeTab: (id: number): Promise<boolean> => ipcRenderer.invoke('tabs:close', id),

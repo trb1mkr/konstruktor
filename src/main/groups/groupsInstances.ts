@@ -1,10 +1,10 @@
 // Открытые экземпляры групп: alloc, sync urls, open/create/close/add/remove.
 // Выделено из groupsManager.ts: здесь мутации WindowState.openGroups + вкладки.
 // Меню (groups:context-menu) и nest/unnest живут в groupsMenu.ts.
-import type { WindowState } from './browserState'
-import { ensureStripToken, removeStripToken, moveStripToken } from './stripOrder'
+import type { WindowState } from '../windows/browserState'
+import { ensureStripToken, removeStripToken, moveStripToken } from '../tabs/stripOrder'
 import { getGroups, createSavedGroup, updateSavedGroup } from './groupsStore'
-import { START_URL } from './startPage'
+import { START_URL } from '../pages/internalPages'
 
 let nextInstance = 1
 

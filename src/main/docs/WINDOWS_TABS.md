@@ -6,7 +6,7 @@
 
 `browserState.ts` хранит типы `WindowState` и `TabData`, пул `windows`, партиции `persist:konstruktor` и `incognito-mem`. Поиск вкладки идет через `findTab`, окно-родитель через `parentOfTab`, id выдает `allocTabId`.
 
-Окна живут в `windowsManager.ts` (`createWindow`, `layoutView`, `layoutActiveView`, `toggleFullscreenMode`, `startWindowDrag`, `snapshotSessionTabs`), вкладки — в `tabsManager.ts` (`createTab`, `setActiveTab`, `closeTab`, `cloneWindow`, `detachTabToNewWindow`, `pushTabsState`), шаблоны групп — в `groupsStore.ts`, экземпляры — в `groupsInstances.ts`, меню групп — в `groupsMenu.ts`, меню окна — в `windowMenu.ts`. `index.ts` связывает их через deps и держит IPC-роутер.
+Окна живут в `windows/`: `windowsManager.ts` (`createWindow`, `layoutView`, `layoutActiveView`, `startWindowDrag`, `snapshotSessionTabs`), F11-сценарий и сброс контентного режима — в `fullscreen.ts` (`toggleFullscreenMode`, `clearContentFullscreen`), меню окна — в `windowMenu.ts`. Вкладки и панель живут в `tabs/`: `tabsManager.ts` (`createTab`, `setActiveTab`, `closeTab`, `cloneWindow`, `detachTabToNewWindow`, `pushTabsState`), шаблоны групп — в `groupsStore.ts`, экземпляры — в `groupsInstances.ts`, меню групп — в `groupsMenu.ts`. Общее ядро — `browserState.ts` (типы и пул окон) и `windows/deps.ts`, связывающий оба кластера через deps (createTab/createWindow без циклов); каналы держат `tabs/tabsIpc.ts`, `windows/windowIpc.ts`, `tabs/tabsMenu.ts` и `windows/browserMenu.ts` — `index.ts` только собирает `register*Ipc`.
 
 ```mermaid
 flowchart LR
@@ -120,7 +120,7 @@ Renderer сообщает отступы UI через `layout:update`. `layoutV
 
 ## 📱 Fullscreen
 
-Сценарий выбирает `toggleFullscreenMode`. Режим `window` разворачивает все окно, режим `content` прячет панели и растягивает view. Исконные bounds лежат в `savedBounds` и возвращаются при выходе. Выход из fullscreen не через F11 (Esc, Win-жесты) тоже сбрасывает контентный режим.
+Сценарий выбирает `toggleFullscreenMode` из `windows/fullscreen.ts`. Режим `window` разворачивает все окно, режим `content` прячет панели и растягивает view. Исконные bounds лежат в `savedBounds` и возвращаются при выходе. Выход из fullscreen не через F11 (Esc, Win-жесты) тоже сбрасывает контентный режим (`clearContentFullscreen`).
 
 ## 🕵️ Инкогнито
 

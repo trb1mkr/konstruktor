@@ -8,21 +8,21 @@ import {
   parentOfTab,
   type TabData,
   type WindowState
-} from './browserState'
+} from '../windows/browserState'
 import {
   showOverlay,
   closeOverlay,
   getActiveOverlay,
   getParentOfOverlay,
   updateActiveOverlay
-} from './overlay'
+} from '../overlay'
 import {
   buildRunCustomFindScript,
   buildStepCustomFindScript,
   buildClearCustomFindScript,
   type CustomFindOptions
 } from './findScripts'
-import { t } from './i18n'
+import { t } from '../i18n'
 
 // Панель поиска поверх страницы: один конструктор на все точки входа
 // (before-input-event view, Ctrl+F shell, find:open). Повторный вызов

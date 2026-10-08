@@ -1,15 +1,24 @@
-// Окна браузера: создание, геометрия, layout view, fullscreen, сессии.
-// Выделено из index.ts: здесь createWindow + layout + fullscreen + bounds + session.
+// Окна браузера: создание, геометрия, layout view, bounds, сессии.
+// Выделено из index.ts: здесь createWindow + layout + bounds + session.
 // Вкладки (createTab/closeTab/detach) живут в tabsManager.ts, этот модуль
 // принимает их через deps во избежание циклических импортов.
+// F11-сценарий и сброс контентного режима — в fullscreen.ts.
+//
+// ГРАНИЦА ФАЙЛА: BrowserWindow и геометрия WebContentsView внутри него.
+// ЧТО ВЫНОСИТЬ ПРИ РОСТЕ:
+// - IPC window:*/zoom:* -> windowIpc.ts, меню окна -> windowMenu.ts;
+// - чтение settings.json напрямую (readSettingsFileSync) — намеренно
+//   здесь, в store/ оно задержало бы создание первого окна;
+// - сессии/партиции -> browserState (константы) или отдельный модуль,
+//   если появятся правила миграции сессий.
 import { app, BrowserWindow, WebContentsView } from 'electron'
 import { join } from 'path'
 import { windows, type WindowState, INCOGNITO_PARTITION } from './browserState'
-import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
-import { openFindOverlay } from './findManager'
-import { toggleDevTools } from './devtools'
-import { applyZoomToWs, stepActiveZoom, zoomShortcut } from './zoomManager'
-import { ensureOverlayWindow } from './overlay'
+import { getSettings, getSettingsSync, saveSettings } from '../store/settingsStore'
+import { openFindOverlay } from '../find/findManager'
+import { toggleDevTools } from '../tabs/devtools'
+import { applyZoomToWs, stepActiveZoom, zoomShortcut } from '../zoomManager'
+import { ensureOverlayWindow } from '../overlay'
 import { readFileSync, existsSync } from 'fs'
 
 // NOTE: dev = не упакованное приложение.
@@ -86,36 +95,9 @@ export function persistSessionTabs(ws: WindowState): void {
   void saveSettings({ sessionTabs: snapshotSessionTabs(ws) }).catch(() => undefined)
 }
 
-// F11: сценарий из настроек. 'window' — fullscreen всего окна,
-// 'content' — только WebContentsView (панели прячутся через shell).
-// Контентный режим тоже разворачивает ОКНО на весь экран (иначе видны
-// смещение окна и таскбар), но панели скрыты и view занимает все окно.
-// Исходные bounds запоминаем: setFullScreen(false) сам их не вернет,
-// т.к. окно уже было немаксимизированным — восстанавливаем вручную.
-export function toggleFullscreenMode(ws: WindowState): boolean {
-  if (!ws.window || ws.window.isDestroyed()) return false
-  const mode = getSettingsSync().fullscreenMode === 'content' ? 'content' : 'window'
-  if (mode === 'content') {
-    if (!ws.contentFullscreen) {
-      ws.savedBounds = ws.window.getBounds()
-      ws.contentFullscreen = true
-      ws.window.setFullScreen(true)
-    } else {
-      ws.contentFullscreen = false
-      ws.window.setFullScreen(false)
-      // Возвращаем исконный размер: fullscreen его затирает.
-      if (ws.savedBounds) {
-        ws.window.setBounds(ws.savedBounds)
-        ws.savedBounds = undefined
-      }
-    }
-    layoutActiveView(ws)
-    ws.window.webContents.send('window:content-fullscreen', ws.contentFullscreen)
-    return ws.contentFullscreen
-  }
-  ws.window.setFullScreen(!ws.window.isFullScreen())
-  return ws.window.isFullScreen()
-}
+// F11-сценарий и сброс контентного режима — в fullscreen.ts: они
+// крутятся вокруг ws.contentFullscreen и должны отрабатывать одинаково.
+import { toggleFullscreenMode, clearContentFullscreen } from './fullscreen'
 
 export interface WindowDeps {
   createTab: (ws: WindowState, url?: string) => number
@@ -321,15 +303,7 @@ export function createWindow(
   win.on('leave-full-screen', () => {
     // Выход из fullscreen не через F11 (Esc, Win-жесты): контентный режим
     // тоже сбрасываем, иначе панели останутся скрытыми в обычном окне.
-    if (ws.contentFullscreen) {
-      ws.contentFullscreen = false
-      if (ws.savedBounds && !ws.window?.isDestroyed()) {
-        ws.window?.setBounds(ws.savedBounds)
-        ws.savedBounds = undefined
-      }
-      layoutActiveView(ws)
-      ws.window?.webContents.send('window:content-fullscreen', false)
-    }
+    clearContentFullscreen(ws, layoutActiveView)
     pushWindowState()
   })
   win.on('resized', pushWindowState)
@@ -408,7 +382,7 @@ export function createWindow(
       !input.alt
     ) {
       e.preventDefault()
-      if (!win.isDestroyed()) toggleFullscreenMode(ws)
+      if (!win.isDestroyed()) toggleFullscreenMode(ws, layoutActiveView)
       return
     }
     if (

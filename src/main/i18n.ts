@@ -5,7 +5,7 @@
 // (контекст требует синхронности, как у getSettingsSync()).
 import { app } from 'electron'
 import i18next from 'i18next'
-import { getSettings } from './settingsStore'
+import { getSettings } from './store/settingsStore'
 import { i18nOptions, resolveLocale } from '../shared/i18n'
 
 // Логи только в dev-сборке, общий префикс [i18n] (см. shared/i18n/I18N.md).

@@ -4,7 +4,7 @@
 
 ## 🧩 Адреса
 
-Поддерживаются `konstruktor://start`, `history`, `settings`, `downloads`. HTML собирают функции `buildStartPage` в `startPage.ts` и `build*Page` в `internalPages.ts` без внешних ресурсов — работают офлайн. Каждая страница собирается на запрос с текущим языком: статические строки переводятся `t()`, динамические строки скриптов — встроенным `tr()` по каталогу из `window.__I18N__`, даты — по `window.__I18N_INTL__` (см. [I18N.md](../../shared/i18n/I18N.md)).
+Поддерживаются `konstruktor://start`, `history`, `settings`, `downloads`. HTML собирают `build*Page` в `startPage.ts`/`historyPage.ts`/`settingsPage.ts`/`downloadsPage.ts` (общий каркас — `shell.ts`); URL всех четырёх адресов и реэкспорт builders — `internalPages.ts`, единая точка входа для `protocol.ts`, меню и кластеров windows/groups. Страницы без внешних ресурсов — работают офлайн. Каждая страница собирается на запрос с текущим языком: статические строки переводятся `t()`, динамические строки скриптов — встроенным `tr()` по каталогу из `window.__I18N__`, даты — по `window.__I18N_INTL__` (см. [I18N.md](../../shared/i18n/I18N.md)).
 
 | Адрес | Назначение | Хранилище |
 |---|---|---|
@@ -15,7 +15,7 @@
 
 ## 🔀 Роутинг
 
-`index.ts` регистрирует `protocol.handle` на трех сессиях: default, обычной и инкогнито. Роутинг идет по host URL. Схема объявлена privileged до ready, иначе view ее не рендерит.
+`pages/protocol.ts` регистрирует `protocol.handle` на трех сессиях: default, обычной и инкогнито. Роутинг идет по host URL. Схема объявлена privileged до ready в `index.ts`, иначе view ее не рендерит.
 
 ```mermaid
 flowchart LR

@@ -25,8 +25,8 @@
 // Про mode: 'right'/'left'/'bottom' док-ится внутрь view. mode: 'detach'
 // и 'undocked' открывают отдельное системное окно — это уже другой UX
 // (окно поверх окна, свой таскбар), его в конструктор не берём.
-import { log } from './overlay/logger'
-import type { WindowState } from './browserState'
+import { log } from '../overlay/logger'
+import type { WindowState } from '../windows/browserState'
 
 // Док-режимы, которые Chromium умеет рисовать внутри view.
 // 'right' — как в Chrome при первом открытии, 'bottom' — для широких окон,

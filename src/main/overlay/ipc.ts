@@ -29,13 +29,15 @@ import {
   resolveOverlaySelect,
   resolveOverlaySubmit,
   resolveOverlaySubmitIcon,
-  resolveOverlayDismiss,
-  showOverlay
-} from './service'
-import { getStateBySender } from '../browserState'
-import { openFindOverlay, queryFind, nextFind, prevFind, closeFind } from '../findManager'
+  resolveOverlayDismiss
+} from './resolve'
+import { showOverlay } from './service'
+import { getStateBySender } from '../windows/browserState'
+import { openFindOverlay, queryFind, nextFind, prevFind, closeFind } from '../find/findManager'
 import { isCommandCurrent } from './session'
-import { applyMeasured, confirmUnmounted, getParentOfOverlay } from './service'
+import { applyMeasured } from './push'
+import { confirmUnmounted } from './service'
+import { getParentOfOverlay } from './close'
 import { OVERLAY_CHANNELS } from '../../shared/overlay-types'
 import type { MeasureMessage } from '../../shared/overlay-types'
 

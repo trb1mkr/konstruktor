@@ -13,11 +13,13 @@ export default defineConfig({
       outDir: 'out/preload',
       // Три entry: основное окно, session-preload вкладок, оверлей-окно.
       // Формат cjs: песочница не понимает ESM-import, только require.
+      // Имена ключей = имена выходных cjs (index.cjs/internal.cjs/overlay.cjs),
+      // на них ссылаются windowsManager/internalBridge/overlay pool.
       lib: {
         entry: {
-          index: 'src/preload/index.ts',
-          internal: 'src/view-preload/internal.ts',
-          overlay: 'src/preload/overlay.ts'
+          index: 'src/preload/shell/index.ts',
+          internal: 'src/preload/view/internal.ts',
+          overlay: 'src/preload/overlay-window/overlay.ts'
         }
       },
       rollupOptions: { output: { format: 'cjs' } }
