@@ -21,6 +21,8 @@ import {
 } from './windowsManager'
 import { toggleFullscreenMode as toggleFullscreen } from './fullscreen'
 import { closeOverlayOnTabChange } from '../overlay'
+import { inspectElementAt } from '../tabs/devtools'
+import type { PageMenuDeps } from '../tabs/pageMenu'
 import { START_URL } from '../pages/internalPages'
 
 // wsOf: sender -> окно. Бросает, если окна нет: такое возможно только
@@ -34,6 +36,27 @@ export function wsOf(e: { sender: Electron.WebContents }): WindowState {
 
 // Оба набора deps собираются здесь: tabsManager получает layout-хелперы
 // windowsManager, windowsManager — createTab tabsManager.
+// Действия контекстного меню страницы (pageMenu.ts) — тот же случай: сам
+// модуль меню окон не знает, поэтому openTab/openWindow/inspectAt приходят
+// отсюда, а не импортом.
+const pageMenuDeps: PageMenuDeps = {
+  openTab: (ws, url) => {
+    createTab(ws, url)
+  },
+  openWindow: (url) => {
+    // Порядок как в cloneWindow: сначала окно, затем вкладка. Первую вкладку
+    // createWindow создаёт только на did-finish-load шелла, поэтому грузить
+    // URL «в активную вкладку» сразу после вызова нельзя — активной ещё нет.
+    // Явный createTab кладёт вкладку раньше, и обработчик did-finish-load
+    // уходит в ветку «вкладки уже есть», не подменяя её стартовой.
+    const ws = createWindow({ restoreSession: false })
+    createTab(ws, url)
+  },
+  inspectAt: (ws, tabId, x, y) => {
+    inspectElementAt(ws, tabId, x, y)
+  }
+}
+
 const tabsDeps: TabsDeps = {
   layoutView,
   layoutActiveView,
@@ -42,7 +65,8 @@ const tabsDeps: TabsDeps = {
   toggleFullscreenMode: (ws) => toggleFullscreen(ws, layoutActiveView),
   persistSessionTabs,
   createWindow: (opts) => createWindow(opts),
-  pruneEmptyGroup
+  pruneEmptyGroup,
+  pageMenu: pageMenuDeps
 }
 
 export function createTab(ws: WindowState, url = START_URL): number {

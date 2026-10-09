@@ -75,6 +75,27 @@ export function toggleDevTools(
   return { open: true, mode }
 }
 
+/**
+ * Инспектор из контекстного меню страницы: подсветить элемент в точке x/y.
+ *
+ * Порядок обязателен: панель сначала открывается (если закрыта), и только
+ * потом идёт `inspectElement` — у закрытой панели фронтенд DevTools ещё не
+ * принимает команду, и подсветка теряется. `toggleDevTools` здесь именно
+ * «открыть», а не «переключить»: повторный вызов на открытой панели закрыл бы
+ * её, и инспектировать стало бы нечем.
+ *
+ * Координаты — те же, что в params события `context-menu`: DIP viewport
+ * вкладки, поэтому зум, прокрутка и сабфреймы компенсаций не требуют.
+ */
+export function inspectElementAt(ws: WindowState, tabId: number, x: number, y: number): void {
+  const rec = ws.tabs.get(tabId)
+  if (!rec) return
+  const wc = rec.view.webContents
+  if (wc.isDestroyed()) return
+  if (!wc.isDevToolsOpened()) toggleDevTools(ws, tabId)
+  wc.inspectElement(Math.round(x), Math.round(y))
+}
+
 // Закрыть, если открыты. Вызывается при закрытии вкладки и при пересоздании
 // view (инкогнито-переключение): закрытый webContents уносит DevTools с собой,
 // и держать протухшую запись значило бы показать в меню «открыто» у мёртвой

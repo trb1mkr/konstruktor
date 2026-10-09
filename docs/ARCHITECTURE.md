@@ -28,7 +28,7 @@ src/
     zoomManager.ts      масштаб страницы, единый зум
     i18n.ts             t(), init языка, смена через settings:save
     windows/            кластер окон
-      deps.ts           wiring createTab/createWindow без циклов, wsOf
+      deps.ts           wiring createTab/createWindow, wsOf и действий меню страницы
       browserState.ts   типы WindowState/TabData, пул окон
       windowsManager.ts окна, layout view, bounds, сессии, drag
       windowMenu.ts     меню окна (ПКМ по навигации)
@@ -39,8 +39,9 @@ src/
       tabsManager.ts    вкладки, detach/attach, pushTabsState
       tabsIpc.ts        каналы tabs:*/devtools:*/layout:update
       tabsMenu.ts       контекстные меню вкладки и панели
+      pageMenu.ts       контекстное меню веб-страницы (ПКМ, Shift+F10)
       stripOrder.ts     единый ряд t:/g:, инвариант
-      devtools.ts       DevTools страницы: док в WebContentsView вкладки
+      devtools.ts       DevTools страницы: док в view, toggleDevTools, инспектор
     groups/             кластер групп вкладок
       groupsManager.ts  роутер groups:*
       groupsInstances.ts экземпляры групп, collapse/pin

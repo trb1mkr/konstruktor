@@ -34,6 +34,7 @@ import {
   zoomShortcut
 } from '../zoomManager'
 import { getActiveOverlay, closeOverlay, updateActiveOverlay } from '../overlay'
+import { showPageContextMenu, type PageMenuDeps } from './pageMenu'
 import { getSettingsSync } from '../store/settingsStore'
 import { t } from '../i18n'
 import { recordVisit, updateMetadata } from '../store/historyStore'
@@ -51,6 +52,10 @@ export interface TabsDeps {
   // переключается на живом через switchIncognito.
   createWindow: (opts: { x?: number; y?: number; restoreSession?: boolean }) => WindowState
   pruneEmptyGroup: (ws: WindowState, instanceId: string) => void
+  // Действия контекстного меню страницы (pageMenu.ts): открыть вкладку,
+  // открыть окно, инспектор. Собираются в windows/deps.ts — там же, где
+  // остальной wiring окон и вкладок, чтобы модуль меню не тянул их сам.
+  pageMenu: PageMenuDeps
 }
 
 export function pushTabsState(ws: WindowState): void {
@@ -334,6 +339,15 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     const live = ws.tabs.get(id)
     if (!live) return
     stepActiveZoom(ws, direction === 'out' ? -1 : 1, pushTabsState)
+  })
+
+  // Контекстное меню страницы (ПКМ и Shift+F10). Состояние на момент показа
+  // перечитывает сам pageMenu: замыкание хранит только id, а view может
+  // переехать в другое окно через attach/detach. preventDefault обязателен —
+  // иначе Electron покажет своё меню поверх нашего, и отменить его нечем.
+  view.webContents.on('context-menu', (e, params) => {
+    e.preventDefault()
+    showPageContextMenu(deps.pageMenu, id, params)
   })
 
   if (url !== 'about:blank') {

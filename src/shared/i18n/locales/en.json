@@ -15,6 +15,26 @@
     "incognitoToPrivate": "Switch to incognito mode",
     "incognitoToNormal": "Switch to normal mode"
   },
+  "pageMenu": {
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "savePage": "Save page as",
+    "print": "Print",
+    "openImageTab": "Open image in new tab",
+    "openImageWindow": "Open image in new window",
+    "saveImage": "Save image as",
+    "copyImageAddress": "Copy image address",
+    "copy": "Copy",
+    "openLinkTab": "Open link in new tab",
+    "openLinkWindow": "Open link in new window",
+    "saveLink": "Save link as",
+    "copyLinkAddress": "Copy link address",
+    "copyLinkText": "Copy link text",
+    "search": "Search",
+    "viewSource": "View page source",
+    "inspect": "Inspect"
+  },
   "tabs": {
     "newTab": "New tab",
     "newTitle": "New Tab",
