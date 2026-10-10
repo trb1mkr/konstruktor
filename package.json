@@ -6,6 +6,7 @@
   "scripts": {
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "test": "npm run typecheck",
+    "postinstall": "node node_modules/electron/install.js",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

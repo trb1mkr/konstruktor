@@ -4,7 +4,7 @@
 
 ## 🧩 Файлы
 
-Настройки лежат в `settings.json`, история в `history.json`, загрузки в `downloads.json`, плитки в `shortcuts.json`. Все файлы живут в userData. Каждый store держит кэш в памяти и пишет через debounce или по событию.
+Настройки лежат в `settings.json`, история в `history.json`, загрузки в `downloads.json`, плитки в `shortcuts.json`. Все файлы живут в userData. Каждый store держит кэш в памяти и пишет через debounce или по событию. Каналы `history:*` / `downloads:*` / `settings:*` / `shortcuts:*` сводит `ipc.ts`.
 
 ## ⚙️ Настройки
 
@@ -25,3 +25,15 @@ flowchart LR
 ## 🔒 Secure DNS
 
 `dnsConfig.ts` маппит режим в DoH-сервер через `dnsServersFor` и ставит switches через `applySecureDns`. Применение идет при старте из сохраненных настроек, смена в UI требует рестарта.
+
+## 🛠️ Проблемы и решения
+
+Накопленные грабли этого модуля: причина → следствие.
+
+### 📜 История без дублей
+
+`page-title-updated`/`page-favicon-updated` — только `updateMetadata`, новый визит не засчитывать, иначе один заход = ×2 в истории.
+
+### 💾 Кэш настроек пуст на старте
+
+`getSettingsSync()` до первого `load()` возвращает дефолты. Геометрия/сессия первого окна читаются синхронно с диска (`readSettingsFileSync`), иначе окно стартует не с тех bounds.

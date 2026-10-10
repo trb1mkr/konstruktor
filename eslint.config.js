@@ -11,9 +11,7 @@ import vue from 'eslint-plugin-vue'
 
 export default tseslint.config(
   {
-    // .kilo/worktrees — чужие git-worktree внутри репозитория: там лежит
-    // отдельная копия исходников, линтить её не нужно.
-    ignores: ['out/**', 'dist/**', 'node_modules/**', '*.tsbuildinfo', '.kilo/**'],
+    ignores: ['out/**', 'dist/**', 'node_modules/**', '*.tsbuildinfo', '.worktree/**'],
   },
 
   js.configs.recommended,

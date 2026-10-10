@@ -268,7 +268,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
       return
     }
     // Масштаб страницы: Ctrl/Cmd + = / - / 0. Физический code, не key —
-    // раскладка (см. TROUBLESHOOTING.md «Ctrl+F и раскладка»).
+    // раскладка (см. FIND.md «Ctrl+F и раскладка»).
     const zoomAct = zoomShortcut(input)
     if (zoomAct !== null) {
       e.preventDefault()

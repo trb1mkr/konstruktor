@@ -1,10 +1,26 @@
 # 🏗️ Архитектура приложения
 
-Документ объясняет общую архитектуру браузера: процессы Electron, пул `WebContentsView`, мосты `browserAPI` и `konstruktor`, overlay-окна.
+Документ объясняет, как устроен браузер в целом: из каких процессов он состоит, какие в нём есть поверхности и как они общаются друг с другом. Карта папок `src` и их назначение — ниже; список документов по отдельным системам — в `README.md`.
 
-## 🧩 Состав процессов
+## 🌐 Работа браузера
 
-Main владеет окнами, вкладками, overlay и хранилищами. Renderer рисует shell вокруг свободной области, где живет `WebContentsView`. View показывает сайты и внутренние страницы. Overlay показывает меню, тосты, диалоги и поиск поверх всего.
+Пользователь работает с браузером как с обычным окном: перед ним рамка с панелями и областью страницы. Клики и клавиатура попадают либо в интерфейс, либо в саму страницу — туда, куда указывает курсор и где сейчас фокус. То, что видит пользователь, собирается из нескольких независимых слоёв, наложенных друг на друга.
+
+Главное окно задаёт рамку приложения. Внутри него живёт область страницы, которую рисует отдельный нативный слой, и интерфейсная обвязка вокруг неё. Поверх этого слоя из интерфейса ничего нарисовать нельзя: страница непрозрачна для остальной отрисовки. Поэтому меню, диалоги, тосты и панель поиска показываются в отдельном прозрачном окне поверх всего — окне оверлея.
+
+Роли процессов разделены. Main владеет состоянием — окнами, вкладками, настройками и хранилищами — и только он умеет обращаться к системе. Renderer отвечает за три поверхности: интерфейс (shell), страницу (view) и оверлей. Ни одна поверхность не работает с системой напрямую: каждая общается с main через свой узкий мост, а вне этих мостов у renderer доступа к системе нет.
+
+Общение идёт в обе стороны. Поверхность сообщает main о действии пользователя — открыть вкладку, выбрать пункт меню, отправить поисковый запрос; это команда. Main, в свою очередь, рассылает поверхностям обновления состояния и данные для отрисовки: тему, список вкладок, содержимое меню. Общего состояния поверхности не держат — они показывают то, что прислал main, и сообщают ему о действиях.
+
+Роли поверхностей:
+
+- **Shell** рисует интерфейс вокруг страницы и сообщает main, сколько места занимают панели, чтобы main расставил область страницы.
+- **View** показывает сайт или внутреннюю страницу; остальным слоям его содержимое недоступно.
+- **Оверлей** показывает меню, диалоги, тосты и поиск поверх страницы; данные для них приходят от main.
+
+Каждая поверхность общается с main через свой мост: shell — через `window.browserAPI`, страница — через `window.konstruktor`, окно оверлея — через `window.overlayAPI`. Main отвечает обновлениями: shell присылает состояние интерфейса (`tabs:state`, `settings:changed`, `window:*`), странице — приёмы оформления (`insertCSS`, `executeJavaScript`), оверлею — данные для отрисовки (`payload` в hash).
+
+Схема ниже показывает направления общения: стрелки от поверхностей к main — команды и действия пользователя, стрелки от main к поверхностям — обновления состояния и данные для отрисовки.
 
 ```mermaid
 flowchart LR
@@ -20,116 +36,26 @@ flowchart LR
 
 ```
 src/
-  main/                 ядро: окна, вкладки, overlay, поиск, темы, stores
-    docs/               документация систем main
-    index.ts            wiring: схема, DNS, register*Ipc, жизненный цикл app
-    diagnostics.ts      dev-диагностика по флагам окружения
-    browserTheme.ts     color-scheme сайтов, dataset.theme страниц
-    zoomManager.ts      масштаб страницы, единый зум
-    i18n.ts             t(), init языка, смена через settings:save
-    windows/            кластер окон
-      deps.ts           wiring createTab/createWindow, wsOf и действий меню страницы
-      browserState.ts   типы WindowState/TabData, пул окон
-      windowsManager.ts окна, layout view, bounds, сессии, drag
-      windowMenu.ts     меню окна (ПКМ по навигации)
-      fullscreen.ts     F11-сценарий, сброс контентного режима
-      windowIpc.ts      каналы window:*/zoom:*
-      browserMenu.ts    меню браузера (menu:popup) и его гашение
-    tabs/               кластер вкладок и панели
-      tabsManager.ts    вкладки, detach/attach, pushTabsState
-      tabsIpc.ts        каналы tabs:*/devtools:*/layout:update
-      tabsMenu.ts       контекстные меню вкладки и панели
-      pageMenu.ts       контекстное меню веб-страницы (ПКМ, Shift+F10)
-      stripOrder.ts     единый ряд t:/g:, инвариант
-      devtools.ts       DevTools страницы: док в view, toggleDevTools, инспектор
-    groups/             кластер групп вкладок
-      groupsManager.ts  роутер groups:*
-      groupsInstances.ts экземпляры групп, collapse/pin
-      groupsMenu.ts     контекстное меню группы
-      groupsStore.ts    groups.json
-    overlay/            overlay-окна menu/toast/dialog/find
-      index.ts          точка входа для потребителей
-      service.ts        показ: сессия, токены, present(), painted
-      close.ts          закрытие сессий, стек, возврат фокуса
-      resolve.ts        команды renderer: select/dismiss/submit
-      push.ts           сборка push и геометрия уровней
-      pool.ts           окна оверлея и прогрев
-      ipc.ts            каналы overlay:* и их разбор
-      session.ts        сессии, токены, стек вложенности
-      geometry.ts       позиция и размер поверхностей
-      logger.ts         логирование по OVERLAY_DEBUG
-      iconVerify.ts     верификация иконок URL/file/emoji
-    find/               кластер поиска по странице
-      findManager.ts    состояние поиска, findInPage и custom-поиск
-      findScripts.ts    builder-функции JS-инъекций
-    store/              JSON-хранилища в userData
-      settingsStore.ts  settings.json
-      historyStore.ts   history.json
-      downloadsStore.ts downloads.json
-      shortcutsStore.ts shortcuts.json
-      dnsConfig.ts      Secure DNS switches
-      ipc.ts            каналы history:*/downloads:*/settings:*/shortcuts:*
-    pages/              внутренние страницы konstruktor://
-      internalPages.ts  URL-константы и реэкспорт builder'ов
-      shell.ts          общий HTML-каркас и базовый CSS
-      historyPage.ts    история: хронология и поиск
-      settingsPage.ts   настройки и выбор темы
-      downloadsPage.ts  загрузки с прогрессом
-      startPage.ts      konstruktor://start
-      protocol.ts       роутинг konstruktor:// по host на всех партициях
-      internalBridge.ts registerPreloadScript на сессии
-  preload/              три прелоада в одной папке
-    docs/               SHELL_BRIDGE.md, VIEW_BRIDGE.md
-    shell/index.ts      window.browserAPI для shell
-    overlay-window/overlay.ts  window.overlayAPI для overlay-окна
-    view/internal.ts    window.konstruktor для view
-    view/pip.ts         кнопка PiP над HTML5-плеером в каждом фрейме
-  shared/
-    overlay-types.ts    контракт сообщений и типов overlay
-    i18n/               локализация: каталоги, реестр языков, runtime страниц
-      locales/          en.json — язык-источник
-      languages.ts      реестр LANGUAGES
-      index.ts          resolveLocale, ресурсы, опции i18next
-      pageRuntime.ts    window.tr для внутренних страниц
-      I18N.md           документация системы перевода
-  renderer/
-    docs/               документация shell и UI
-    App.vue             корневой layout, panel-top и panel-bottom
-    main.ts             точка входа renderer
-    overlay.ts          точка входа overlay-окна
-    i18n.ts             фабрика i18next для shell и overlay
-    index.html          документ shell
-    menu.html           документ overlay-окна
-    styles.css          базовые стили shell
-    core/               useTabs, useTheme, layoutEngine, registry
-    components/stdlib/  TabStrip, TabGroupNode, tabShared, useStripDrag, useTabStripDrag и другие
-    overlay/            BrowserMenu, ToastStack, PromptDialog, FindBar, IconDialog
-      payload.ts        типы push, пропсы уровней, мерж патчей, сверка stale
-      components/       MenuList, DialogForm
-      registry.ts       выбор компонента по model.view
-    layouts/            пресеты ClassicTop, Minimal
-docs/
-  ARCHITECTURE.md       этот файл
-  DOCS.md               правила документирования
-  GIT.md                правила работы с git
-  TROUBLESHOOTING.md    разбор проблем
-  UPDATE_PLAN.md        план автообновления
+  main/               ядро main-процесса: окна, вкладки, оверлей, поиск, темы, хранилища, диагностика
+    windows/          окна: пул, layout, сессии, fullscreen, инкогнито
+    tabs/             вкладки и панель: единый ряд, detach/attach, контекстные меню, DevTools
+    groups/           группы вкладок: шаблоны и экземпляры, вложенность, закрепление
+    overlay/          overlay-окна: позиционирование, фокус, жизненный цикл, сессии
+    find/             поиск по странице: findInPage и собственный DOM-поиск
+    store/            JSON-хранилища в userData и Secure DNS
+    pages/            внутренние страницы konstruktor://: роутинг, HTML, preload на сессиях
+    docs/             документация систем main, у которых нет своей папки
+  preload/            прелоады: мосты между main и тремя поверхностями renderer
+    shell/            мост интерфейса: window.browserAPI
+    overlay-window/   мост окна оверлея: window.overlayAPI
+    view/             мост страницы: window.konstruktor
+    docs/             документация мостов
+  renderer/           shell: layout, состояние, stdlib, overlay-панели, пресеты
+    core/             состояние shell: вкладки, тема, layout-инсеты, реестр компонентов
+    components/stdlib/ готовые Vue-компоненты панелей
+    overlay/          Vue-панели окна оверлея
+    layouts/          пресеты расположения панелей
+    docs/             документация shell
+  shared/             общий код процессов: контракт оверлея и локализация
+    i18n/             локализация: каталоги переводов, реестр языков, runtime страниц
 ```
-
-## 📦 Карта модулей
-
-| Область | Ответственность | Документы |
-|---|---|---|
-| Окна и вкладки | Окна — `windows/`, вкладки и панель — `tabs/`, layout, сессии | `src/main/docs/WINDOWS_TABS.md` |
-| Оверлей main | Позиционирование, фокус, жизненный цикл | `src/main/docs/OVERLAY.md` |
-| Поиск | `findInPage`, custom DOM-поиск, подсветка | `src/main/docs/FIND.md` |
-| Темы | `dark`, `light`, `system`, `slate` | `src/main/docs/THEMES.md` |
-| Хранилища | JSON в userData, DNS | `src/main/docs/STORES.md` |
-| Локализация | Каталоги, ключи, детект и смена языка | `src/shared/i18n/I18N.md` |
-| Внутренние страницы | `konstruktor://`, preload на сессиях | `src/main/docs/INTERNAL_PAGES.md` |
-| Shell и layout | `App.vue`, инсеты, пресеты | `src/renderer/docs/SHELL_LAYOUT.md` |
-| Состояние shell | Подписки IPC, тема, `theme-lock` | `src/renderer/docs/CORE_STATE.md` |
-| Stdlib | Готовые Vue-компоненты | `src/renderer/docs/STDLIB.md` |
-| Overlay UI | Vue-панели поверх страницы | `src/renderer/docs/OVERLAY_UI.md` |
-| Мост shell | `browserAPI`, `overlayAPI` | `src/preload/docs/SHELL_BRIDGE.md` |
-| Мост view | `window.konstruktor` | `src/preload/docs/VIEW_BRIDGE.md` |
