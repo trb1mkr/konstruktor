@@ -54,6 +54,7 @@ import {
 } from './close'
 import { buildPushMessage, pendingGeometry, provisionalSize } from './push'
 import type { LevelGeometry } from './push'
+import type { ExtensionMenuEntry } from '../../shared/extensions-types'
 
 // Сервис оверлеев: единственная точка входа для показа, закрытия и
 // разрешения команд поверхности.
@@ -104,7 +105,15 @@ export interface IconDialogState {
 export { verifyIconSource } from './iconVerify'
 
 export interface OverlayRequest {
-  kind: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom'
+  kind:
+    | 'menu'
+    | 'toast'
+    | 'dialog'
+    | 'find'
+    | 'icon'
+    | 'window-menu'
+    | 'zoom'
+    | 'extensions'
   anchor: { x: number; y: number }
   items?: OverlayMenuItem[]
   toast?: { title: string; body?: string; timeout?: number }
@@ -120,6 +129,10 @@ export interface OverlayRequest {
   // onSelect мутирует его, и пересборка push (измерение, возврат по Esc)
   // показывает уже применённый процент, а не тот, что был на открытии.
   zoom?: { percent: number }
+  // Меню расширений: строки и глобальный выключатель. Действия строк
+  // (закрепить, открыть попап, включить) приходят через onSelect
+  // с префиксом, разбор — в extensions/ipc.ts.
+  extensions?: { items: ExtensionMenuEntry[]; enabled: boolean }
   onSelect?: (id: string) => void
   // Не закрывать сессию после select. Нужно попапу зума: `+`/`−`/`Reset`
   // обновляют процент через overlay:update и держат попап открытым,
@@ -678,6 +691,13 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     }
   }
 
+  // Метка времени открытия: present() печатает по ней, сколько занял показ
+  // (метка снимается там же). Ставится после обработки тоггла: промах по
+  // триггеру — это закрытие, а не открытие, и время показа к нему не
+  // относится. Без этой метки лог ругался «mark "overlay:open" not found»,
+  // и таймингов открытия не было вовсе.
+  mark('overlay:open')
+
   // Дисплей родителя — источник истины по координатам. При раскладке,
   // где окно на левом мониторе, его workArea.x отрицателен, и любая
   // арифметика в положительных координатах уводит окно на соседний
@@ -907,13 +927,18 @@ if (!overlay || overlay.isDestroyed()) {
     // 'menu' в списке обязателен: он в фокусе с момента открытия, а
     // родитель, теряя фокус, посчитал бы это уходом из приложения и
     // закрыл меню тем самым фокусированием.
+    //
+    // 'extensions' в списке по той же причине: без пометки меню расширений
+    // закрывалось сразу после открытия — в логе «app left focus -> close
+    // overlay» и `closing` при пустом стеке (parentId, holderId: 1).
     if (
       request.kind === 'find' ||
       request.kind === 'icon' ||
       request.kind === 'dialog' ||
       request.kind === 'menu' ||
       request.kind === 'window-menu' ||
-      request.kind === 'zoom'
+      request.kind === 'zoom' ||
+      request.kind === 'extensions'
     ) {
       noteFocusHandoff(parent.id)
     }
@@ -1038,11 +1063,15 @@ if (!overlay || overlay.isDestroyed()) {
     // Меню и панель поиска забирают фокус; диалоги — через автофокус поля
     // ввода, тост фокуса не берёт вовсе (он пассивен). Попап зума — как
     // меню: без focus() стрелки/Enter в поле процента не доходили бы.
+    //
+    // Меню расширений — тоже меню: стрелки/Esc и переход к попапу
+    // расширения требуют, чтобы фокус был у окна оверлея, а не у shell.
     if (
       request.kind === 'find' ||
       request.kind === 'menu' ||
       request.kind === 'window-menu' ||
-      request.kind === 'zoom'
+      request.kind === 'zoom' ||
+      request.kind === 'extensions'
     ) {
       try {
         win.focus()

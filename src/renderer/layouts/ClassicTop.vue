@@ -6,6 +6,8 @@ import TabStrip from '../components/stdlib/TabStrip.vue'
 import AddressBar from '../components/stdlib/AddressBar.vue'
 import BookmarksBar from '../components/stdlib/BookmarksBar.vue'
 import DropdownMenu from '../components/stdlib/DropdownMenu.vue'
+import ExtensionActions from '../components/stdlib/ExtensionActions.vue'
+import ExtensionsButton from '../components/stdlib/ExtensionsButton.vue'
 
 // Пресет: классика — всё сверху, сайт под панелями.
 useTabs()
@@ -20,7 +22,10 @@ useLayoutInsets({ top: topPanel })
         <TabStrip class="grow" />
         <DropdownMenu title="☰" />
       </div>
-      <AddressBar />
+      <AddressBar>
+        <ExtensionActions />
+        <ExtensionsButton />
+      </AddressBar>
       <BookmarksBar />
     </div>
   </div>

@@ -6,6 +6,7 @@
 // на IPC и разметку. НОВЫЙ тип payload — сюда + панель в registry,
 // не в OverlayRoot.
 import { componentFor } from './registry'
+import type { ExtensionsMenuModel } from '../../shared/extensions-types'
 import type {
   DialogModel,
   FindModel,
@@ -20,13 +21,14 @@ export type { MenuItem }
 
 /** Модель уровня — плоская: шаблон читает поля напрямую. */
 export interface OverlayModel {
-  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom'
+  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom' | 'extensions'
   items?: MenuItem[]
   toast?: ToastModel
   dialog?: DialogModel
   icon?: IconModel
   find?: FindModel
   zoom?: { percent: number }
+  extensions?: ExtensionsMenuModel
 }
 
 // Один уровень стека, ровно как его прислал main. Форма задана
@@ -102,6 +104,17 @@ export function propsFor(level: Level): Record<string, unknown> | null {
     // состояния вне модели у него нет.
     case 'zoom':
       return { ...base, percent: model.zoom?.percent ?? 100 }
+    // Меню расширений: список строк и глобальный тумблер. Без этой ветки
+    // propsFor возвращал null, уровень молча отфильтровывался в
+    // buildRenderedLevels, и окно открывалось пустым — при этом показа
+    // завершался «успешно» (подтверждение отрисовки приходило всё равно),
+    // поэтому в логе не было ни ошибки, ни причины.
+    case 'extensions':
+      return {
+        ...base,
+        items: model.extensions?.items ?? [],
+        enabled: model.extensions?.enabled ?? true
+      }
     default:
       return null
   }

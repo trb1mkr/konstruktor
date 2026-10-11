@@ -5,6 +5,7 @@
 // не нужен — мост строится штатно через ipcRenderer + exposeInMainWorld.
 import { contextBridge, ipcRenderer } from 'electron'
 import { installPipHover } from './pip'
+import type { ExtensionsState } from '../../shared/extensions-types'
 
 // Кнопка PiP поверх HTML5-плееров: ставится в каждом фрейме, работает
 // без бриджа — чистый DOM внутри изолированного мира прелоада.
@@ -47,7 +48,27 @@ contextBridge.exposeInMainWorld('konstruktor', {
   downloadsRemove: (id: string) => ipcRenderer.invoke('downloads:remove', id),
   downloadsClear: () => ipcRenderer.invoke('downloads:clear'),
   downloadsOpen: (id: string) => ipcRenderer.invoke('downloads:open', id),
-  downloadsIcon: (id: string) => ipcRenderer.invoke('downloads:icon', id)
+  downloadsIcon: (id: string) => ipcRenderer.invoke('downloads:icon', id),
+  // Расширения: страница konstruktor://extensions работает только через них.
+  extensionsList: (): Promise<ExtensionsState> => ipcRenderer.invoke('extensions:list'),
+  extensionsInstallFolder: () => ipcRenderer.invoke('extensions:install-folder'),
+  extensionsInstallArchive: () => ipcRenderer.invoke('extensions:install-archive'),
+  extensionsInstallPath: (path: string) => ipcRenderer.invoke('extensions:install-path', path),
+  extensionsEnable: (id: string) => ipcRenderer.invoke('extensions:enable', id),
+  extensionsDisable: (id: string) => ipcRenderer.invoke('extensions:disable', id),
+  extensionsRemove: (id: string) => ipcRenderer.invoke('extensions:remove', id),
+  extensionsReload: (id: string) => ipcRenderer.invoke('extensions:reload', id),
+  extensionsOpenFolder: (id: string) => ipcRenderer.invoke('extensions:open-folder', id),
+  extensionsSetEnabled: (on: boolean): Promise<ExtensionsState> =>
+    ipcRenderer.invoke('extensions:set-enabled', on),
+  extensionsSetDevMode: (on: boolean): Promise<ExtensionsState> =>
+    ipcRenderer.invoke('extensions:set-dev-mode', on),
+  extensionsCheckUpdates: () => ipcRenderer.invoke('extensions:check-updates'),
+  onExtensionsChanged: (cb: (state: ExtensionsState) => void): (() => void) => {
+    const listener = (_e: unknown, state: ExtensionsState): void => cb(state)
+    ipcRenderer.on('extensions:state', listener as never)
+    return () => ipcRenderer.removeListener('extensions:state', listener as never)
+  }
 })
 
 // Клик по странице мимо открытого меню закрывает это меню: меню живёт

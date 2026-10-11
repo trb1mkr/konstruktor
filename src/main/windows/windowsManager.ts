@@ -18,6 +18,8 @@ import { getSettings, getSettingsSync, saveSettings } from '../store/settingsSto
 import { openFindOverlay } from '../find/findManager'
 import { toggleDevTools } from '../tabs/devtools'
 import { applyZoomToWs, stepActiveZoom, zoomShortcut } from '../zoomManager'
+import { fireExtensionCommand } from '../extensions/bridge'
+import { matchCommands } from '../extensions/commands'
 import { ensureOverlayWindow } from '../overlay'
 import { readFileSync, existsSync } from 'fs'
 
@@ -351,8 +353,9 @@ export function createWindow(
     // ввод доходил до окна, но не до того webContents, который его
     // обрабатывает. Симптом совпадал с замером — не срабатывало НИЧЕГО.
     const rec = ws.activeTabId !== null ? ws.tabs.get(ws.activeTabId) : undefined
-    if (rec && !rec.view.webContents.isDestroyed()) {
-      rec.view.webContents.focus()
+    const wc = rec?.view?.webContents
+    if (wc && !wc.isDestroyed()) {
+      wc.focus()
     }
   }
   win.once('ready-to-show', () => {
@@ -426,6 +429,14 @@ export function createWindow(
     ) {
       e.preventDefault()
       openFindOverlay(ws)
+      return
+    }
+    // Команды расширений — последними: свои горячие клавиши браузера
+    // приоритетнее, иначе расширение могло бы забрать Ctrl+F или зум.
+    const commandHits = matchCommands(input)
+    if (commandHits.length > 0) {
+      e.preventDefault()
+      for (const hit of commandHits) fireExtensionCommand(hit)
     }
   })
 

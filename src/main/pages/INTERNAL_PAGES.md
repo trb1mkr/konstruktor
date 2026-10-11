@@ -4,7 +4,7 @@
 
 ## 🧩 Адреса
 
-Поддерживаются `konstruktor://start`, `history`, `settings`, `downloads`. HTML собирают `build*Page` в `startPage.ts`/`historyPage.ts`/`settingsPage.ts`/`downloadsPage.ts` (общий каркас — `shell.ts`); URL всех четырёх адресов и реэкспорт builders — `internalPages.ts`, единая точка входа для `protocol.ts`, меню и кластеров windows/groups. Страницы без внешних ресурсов — работают офлайн. Каждая страница собирается на запрос с текущим языком: статические строки переводятся `t()`, динамические строки скриптов — встроенным `tr()` по каталогу из `window.__I18N__`, даты — по `window.__I18N_INTL__` (см. [I18N.md](../../shared/i18n/I18N.md)).
+Поддерживаются `konstruktor://start`, `history`, `settings`, `downloads`, `extensions` и `ext/<id>/<файл>` для страниц собственных расширений. HTML собирают `build*Page` в `startPage.ts`/`historyPage.ts`/`settingsPage.ts`/`downloadsPage.ts`/`extensionsPage.ts` (общий каркас — `shell.ts`); URL адресов и реэкспорт builders — `internalPages.ts`, единая точка входа для `protocol.ts`, меню и кластеров windows/groups. Файлы расширений читает `protocol.ts` напрямую из каталога расширения (см. [EXTENSIONS.md](../extensions/EXTENSIONS.md)). Страницы без внешних ресурсов — работают офлайн. Каждая страница собирается на запрос с текущим языком: статические строки переводятся `t()`, динамические строки скриптов — встроенным `tr()` по каталогу из `window.__I18N__`, даты — по `window.__I18N_INTL__` (см. [I18N.md](../../shared/i18n/I18N.md)).
 
 | Адрес | Назначение | Хранилище |
 |---|---|---|
@@ -12,6 +12,8 @@
 | `konstruktor://history` | История визитов с хронологией по дням, месяцам и годам | `history.json`, инкогнито не пишет и не читает |
 | `konstruktor://downloads` | Хранилище загрузок с системными иконками | `downloads.json` |
 | `konstruktor://settings` | Поиск, домашняя страница, DNS, тема, режимы зума | `settings.json` |
+| `konstruktor://extensions` | Расширения: установка, тумблеры, предупреждения совместимости | `extensions.json` |
+| `konstruktor://ext/<id>/<файл>` | Страницы собственных расширений (только из их каталога) | файлы расширения |
 
 ## 🔀 Роутинг
 

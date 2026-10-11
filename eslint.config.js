@@ -11,7 +11,13 @@ import vue from 'eslint-plugin-vue'
 
 export default tseslint.config(
   {
-    ignores: ['out/**', 'dist/**', 'node_modules/**', '*.tsbuildinfo', '.worktree/**'],
+    ignores: [
+      'out/**',
+      'dist/**',
+      'node_modules/**',
+      '*.tsbuildinfo',
+      '.worktree/**'
+    ],
   },
 
   js.configs.recommended,

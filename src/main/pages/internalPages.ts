@@ -18,8 +18,10 @@
 export const HISTORY_URL = 'konstruktor://history'
 export const SETTINGS_URL = 'konstruktor://settings'
 export const DOWNLOADS_URL = 'konstruktor://downloads'
+export const EXTENSIONS_URL = 'konstruktor://extensions'
 
 export { START_URL, buildStartPage } from './startPage'
 export { buildHistoryPage } from './historyPage'
 export { buildSettingsPage } from './settingsPage'
 export { buildDownloadsPage } from './downloadsPage'
+export { buildExtensionsPage } from './extensionsPage'

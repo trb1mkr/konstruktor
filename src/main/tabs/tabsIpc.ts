@@ -19,7 +19,7 @@ import { layoutActiveView } from '../windows/windowsManager'
 import { percentOf } from '../zoomManager'
 import { pushTabsState, createTab, closeTab, setActiveTab, detachTabToNewWindow, wsOf } from '../windows/deps'
 import { getSettings } from '../store/settingsStore'
-import { HISTORY_URL, SETTINGS_URL, DOWNLOADS_URL } from '../pages/internalPages'
+import { HISTORY_URL, SETTINGS_URL, DOWNLOADS_URL, EXTENSIONS_URL } from '../pages/internalPages'
 
 export function registerTabsIpc(): void {
   ipcMain.handle('tabs:create', (e, url?: string) => createTab(wsOf(e), url ?? undefined))
@@ -152,6 +152,10 @@ export function registerTabsIpc(): void {
   })
   ipcMain.handle('tabs:open-downloads', (e) => {
     openInternalPage(wsOf(e), DOWNLOADS_URL)
+    return true
+  })
+  ipcMain.handle('tabs:open-extensions', (e) => {
+    openInternalPage(wsOf(e), EXTENSIONS_URL)
     return true
   })
   // Вынос вкладки за окно — новое окно браузера с этой вкладкой.

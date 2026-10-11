@@ -32,12 +32,14 @@
   },
   "packageManager": "npm@11.19.0",
   "dependencies": {
+    "adm-zip": "^0.6.1",
     "i18next": "^26.4.2",
     "i18next-vue": "^5.4.0",
     "vue": "^3.5.43"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^24.13.6",
     "@vitejs/plugin-vue": "^5.2.4",
     "electron": "^44.5.1",

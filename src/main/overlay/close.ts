@@ -39,7 +39,7 @@ import type { OverlayRequest } from './service'
  * не закрывался кликом по странице, либо закрывался при каждом `+`.
  */
 export function isDismissableMenuLike(kind: OverlayRequest['kind']): boolean {
-  return kind === 'menu' || kind === 'window-menu' || kind === 'zoom'
+  return kind === 'menu' || kind === 'window-menu' || kind === 'zoom' || kind === 'extensions'
 }
 
 // parentId -> { toggleKey, at } последнего ЗАКРЫТОГО меню. Нужно, чтобы

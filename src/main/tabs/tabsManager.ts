@@ -34,6 +34,8 @@ import {
   zoomShortcut
 } from '../zoomManager'
 import { getActiveOverlay, closeOverlay, updateActiveOverlay } from '../overlay'
+import { fireExtensionCommand } from '../extensions/bridge'
+import { matchCommands } from '../extensions/commands'
 import { showPageContextMenu, type PageMenuDeps } from './pageMenu'
 import { getSettingsSync } from '../store/settingsStore'
 import { t } from '../i18n'
@@ -65,9 +67,15 @@ export function pushTabsState(ws: WindowState): void {
       if (!t) return null
       // Опрос DevTools вместо чтения rec.devTools: пользователь может
       // закрыть панель крестиком в самом DevTools, и тогда запись в rec
-      // устареет, а меню покажет «открыто». isDestroyed обязателен —
-      // умирающий webContents бросает на любом обращении.
-      const wc = t.view.webContents
+      // устареет, а меню покажет «открыто». isDestroyed обязателен — умирающий
+      // webContents бросает на любом обращении.
+      //
+      // Проверяем И view, И webContents: у записи, чей webContents уже закрыт,
+      // обращение к нему возвращает undefined. Призраков быть не должно (их
+      // убирает событие 'destroyed' — см. createTab), но падать из-за них
+      // главным процессом нельзя: пропуск здесь дешевле диалога об ошибке.
+      const wc = t.view?.webContents
+      if (!wc) return null
       return {
         id,
         viewId: wc.id,
@@ -131,7 +139,17 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   view.webContents.on('did-finish-load', () => {
     if (getSettingsSync().zoomSync) setZoom(view.webContents, seedZoomPercent())
   })
+  // Вкладка может закрыться сама: страница зовёт window.close() (так делают
+  // служебные страницы расширений, например ask.html у Tampermonkey), и
+  // Chromium уничтожает webContents. Без уборки запись остаётся «призраком»
+  // в ряду, а pushTabsState падает на пустом webContents — исключение в
+  // главном процессе с диалогом.
   const id = allocTabId()
+  view.webContents.on('destroyed', () => {
+    if (!ws.tabs.has(id)) return
+    ws.window?.contentView.removeChildView(view)
+    dropTabRecord(ws, deps, id)
+  })
   ws.tabs.set(id, { view, url, title: t('tabs.newTitle'), pinned: false, favicon: '', retriedWithChromeUA: false, customTitle: undefined, customFavicon: undefined })
   ws.tabOrder.push(id)
   // Новая вкладка без группы — в конец обычного ряда панели.
@@ -278,6 +296,16 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
       else stepActiveZoom(ws, zoomAct, pushTabsState)
       return
     }
+    // Команды расширений: сочетание из секции commands манифеста.
+    // Проверяются ПОСЛЕ своих горячих клавиш, чтобы расширение не могло
+    // отобрать у браузера F11/F12/Ctrl+F и зум. Событие уходит в фон
+    // расширения через мост, как в Chrome.
+    const commandHits = matchCommands(input)
+    if (commandHits.length > 0) {
+      e.preventDefault()
+      for (const hit of commandHits) fireExtensionCommand(hit)
+      return
+    }
     const key = (input.key ?? '').toLowerCase()
     // code KeyF — физическая клавиша, не зависит от раскладки (русская 'а' = KeyF).
     const isF = key === 'f' || input.code === 'KeyF'
@@ -392,13 +420,31 @@ export function setActiveTab(ws: WindowState, deps: TabsDeps, id: number): void 
 export function closeTab(ws: WindowState, deps: TabsDeps, id: number): void {
   const rec = ws.tabs.get(id)
   if (!rec || !ws.window) return
-  const groupId = rec.groupId
   // DevTools закрываем ДО уничтожения webContents: умирающий view уносит
   // панель с собой, а closeDevTools на живом сбрасывает состояние явно.
   // При закрытии неактивной вкладки состояние всё равно уходит с записью.
   closeDevToolsFor(ws, id)
   ws.window.contentView.removeChildView(rec.view)
-  rec.view.webContents.close()
+  rec.view.webContents?.close()
+  dropTabRecord(ws, deps, id)
+}
+
+/**
+ * Убрать запись вкладки из окна, не трогая её view.
+ *
+ * Отделено от closeTab, потому что webContents вкладки может быть закрыт
+ * ИЗВНЕ — страница расширения (или сам сайт) вызывает `window.close()`,
+ * Chromium уничтожает webContents, а запись в карте остаётся. Такой «призрак»
+ * остаётся в ряду и ломает pushTabsState: обращение к `view.webContents`
+ * возвращает undefined, и опрос падал исключением в главном процессе
+ * (замер: вкладка Tampermonkey `ask.html`, 29 повторов в логе).
+ * Повторное закрытие view здесь не только лишнее, но и опасное — webContents
+ * уже нет.
+ */
+function dropTabRecord(ws: WindowState, deps: TabsDeps, id: number): void {
+  const rec = ws.tabs.get(id)
+  if (!rec) return
+  const groupId = rec.groupId
   ws.tabs.delete(id)
   ws.tabOrder = ws.tabOrder.filter((t) => t !== id)
   // Вкладка без группы жила в едином ряду — убираем токен.

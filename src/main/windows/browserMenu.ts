@@ -10,7 +10,7 @@ import { t } from '../i18n'
 import { devToolsStateOf, toggleDevTools } from '../tabs/devtools'
 import { switchIncognito } from '../tabs/tabsManager'
 import { createTab, pushTabsState, tabsDeps } from './deps'
-import { HISTORY_URL, SETTINGS_URL, DOWNLOADS_URL } from '../pages/internalPages'
+import { HISTORY_URL, SETTINGS_URL, DOWNLOADS_URL, EXTENSIONS_URL } from '../pages/internalPages'
 
 export function registerBrowserMenuIpc(): void {
   // Renderer шлет якорь ПРАВОГО НИЖНЕГО угла кнопки относительно
@@ -31,7 +31,7 @@ export function registerBrowserMenuIpc(): void {
       { id: 'settings', label: t('menu.settings'), icon: '⚙️' },
       { id: 'history', label: t('menu.history'), icon: '🕘' },
       { id: 'downloads', label: t('menu.downloads'), icon: '📥' },
-      { id: 'extensions', label: t('menu.extensions'), icon: '🧩', disabled: true },
+      { id: 'extensions', label: t('menu.extensions'), icon: '🧩' },
       // DevTools активной вкладки. Состояние читаем при открытии меню:
       // панель могли закрыть крестиком в самом DevTools, и подпись пункта
       // обязана это отражать.
@@ -65,6 +65,7 @@ export function registerBrowserMenuIpc(): void {
         if (id === 'downloads') openPage(DOWNLOADS_URL)
         else if (id === 'history') openPage(HISTORY_URL)
         else if (id === 'settings') openPage(SETTINGS_URL)
+        else if (id === 'extensions') openPage(EXTENSIONS_URL)
         else if (id === 'devtools') {
           // Меню закрываем ДО открытия панели: оверлей лежит поверх view,
           // и докнутые DevTools перерисовали бы его область. Плюс панель

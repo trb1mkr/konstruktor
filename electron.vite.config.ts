@@ -19,7 +19,11 @@ export default defineConfig({
         entry: {
           index: 'src/preload/shell/index.ts',
           internal: 'src/preload/view/internal.ts',
-          overlay: 'src/preload/overlay-window/overlay.ts'
+          overlay: 'src/preload/overlay-window/overlay.ts',
+          // Preload окна попапа расширения: подменяет tabs.query (вкладка
+          // пользователя вместо самого попапа) и греет service worker
+          // перед первым sendMessage. Причины — в самом файле.
+          popup: 'src/preload/popup/index.ts'
         }
       },
       rollupOptions: { output: { format: 'cjs' } }

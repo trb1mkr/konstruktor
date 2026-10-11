@@ -13,7 +13,10 @@ flowchart LR
   Active --> Clone[cloneWindow]
   Active --> Detach[detachTabToNewWindow]
   Detach --> Win2[новое WindowState]
+  Self[destroyed webContents] --> Drop[dropTabRecord]
 ```
+
+Вкладка может закрыться **сама**: страница вызывает `window.close()` — так делают служебные страницы расширений (например `ask.html` у Tampermonkey), — и Chromium уничтожает её `webContents` в обход `closeTab`. Раньше запись оставалась в `ws.tabs` и `tabOrder`: «призрак» висел в ряду, а `pushTabsState` падал в главном процессе исключением `Cannot read properties of undefined (reading 'id')` (замер: одна и та же вкладка `ask.html` в 29 пушах). Поэтому `createTab` подписывается на `destroyed` у `webContents` вкладки и убирает запись через `dropTabRecord` — уборка **без** обращения к view (её уже нет), в отличие от `closeTab`, который сначала закрывает view, а потом вызывает ту же уборку. Защита в `pushTabsState` (пропуск записи без `webContents`) оставлена как страховка: пропустить дешевле, чем уронить процесс диалогом.
 
 ## 📋 Панель вкладок
 

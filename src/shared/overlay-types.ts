@@ -1,6 +1,7 @@
 // Общий контракт системы оверлея: main <-> preload <-> renderer overlay.
 // Единственный источник правды по формам сообщений. Никаких импортов из
 // electron/vue — файл должен собираться в любом из трёх контекстов.
+import type { ExtensionsMenuModel } from './extensions-types'
 
 // Какие поверхности умеет показывать оверлей-окно. Renderer держит реестр
 // view -> Vue-компонент, main — описание геометрии/фокуса.
@@ -16,6 +17,8 @@ export type ViewKind =
   | 'toast'
   | 'window-menu'
   | 'zoom'
+  // Меню расширений: список, закрепление, переход на страницу расширений.
+  | 'extensions'
 
 // Как меню выравнивается относительно точки вызова.
 // 'anchor' — левый верхний угол в точке клика (контекстное меню).
@@ -130,6 +133,7 @@ export type OverlayModel =
   | { view: 'find'; find: FindModel }
   | { view: 'toast'; toast: ToastModel }
   | { view: 'zoom'; zoom: ZoomModel }
+  | { view: 'extensions'; extensions: ExtensionsMenuModel }
 
 // Один уровень стека оверлея.
 //

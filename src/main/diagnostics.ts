@@ -3,13 +3,114 @@
 // Выделено из index.ts: всё включается только флагами окружения,
 // в проде код мёртвый. Флаги НЕ входят в обычный OVERLAY_DEBUG,
 // кроме сводки статистики (см. OVERLAY_DEBUG в OVERLAY.md).
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { getState, type WindowState } from './windows/browserState'
 import { showOverlay, closeOverlay, getActiveOverlay } from './overlay'
 import { openFindOverlay } from './find/findManager'
 import { log, dumpStats as dumpOverlayStats } from './overlay/logger'
+import {
+  activateExtension,
+  extensionsMenuModel,
+  extensionsState,
+  installFromPath,
+  setExtensionPinned
+} from './extensions/manager'
+import { bridgePort } from './extensions/bridge'
 
 export function setupDiagnostics(bootState: WindowState): void {
+  // Корректный выход приложения через N мс — проверка хука before-quit
+  // с выгрузкой расширений.
+  const quitAt = Number(process.env['KONSTRUKTOR_APP_QUIT_MS'] ?? '0') || 0
+  if (quitAt > 0) setTimeout(() => app.quit(), quitAt)
+  // Автопрогон расширений: KONSTRUKTOR_EXT_SMOKE=<путь к папке или .crx>
+  // ставит расширение, печатает состояние и выходит. Проверяет всю
+  // цепочку разом: распаковку, переписывание манифеста, загрузку в сессию,
+  // запуск фона и работу loopback-моста (в логе видно id и ошибку).
+  const extSmokePath = process.env['KONSTRUKTOR_EXT_SMOKE']
+  if (extSmokePath) {
+    const waitMs = Number(process.env['KONSTRUKTOR_EXT_SMOKE_MS'] ?? '3000') || 3000
+    setTimeout(() => {
+      log('lifecycle', 'ext-smoke: installing', { path: extSmokePath })
+      void installFromPath(extSmokePath)
+        .then(async (result) => {
+          console.log('[ext-smoke] install:', JSON.stringify(result))
+          console.log('[ext-smoke] bridge port:', bridgePort())
+          await new Promise((r) => setTimeout(r, 1500))
+          console.log('[ext-smoke] state:', JSON.stringify(extensionsState()))
+          // Закрепляем ИМЕННО установленное расширение (по id из результата),
+          // а не list[0]: в профиле уже может лежать другое расширение, и
+          // прежняя версия закрепляла его — из-за чего после прогона
+          // «закреплённым» оказывался не тот значок. Фолбэк на первый —
+          // только если установка не отдала id.
+          const installedId = result.info?.id
+          const targetId = installedId ?? extensionsState().list[0]?.id
+          if (targetId) {
+            await setExtensionPinned(targetId, true)
+            const pinned = extensionsState().list.filter((e) => e.pinned).map((e) => e.name)
+            console.log('[ext-smoke] pinned:', JSON.stringify(pinned))
+            console.log('[ext-smoke] menu:', JSON.stringify(extensionsMenuModel()))
+          }
+          return undefined
+        })
+        .catch((e: unknown) => {
+          console.error('[ext-smoke] error:', e)
+        })
+        .finally(() => {
+          // Выход через quit, а не exit: хук before-quit выгружает
+          // расширения и снимает их регистрации в партиции. С app.exit
+          // регистрации остаются, и следующий старт поднимает воркер
+          // расширения в урезанном контексте (DidStartWorkerFail).
+          app.quit()
+        })
+    }, waitMs)
+  }
+  // Диагностика меню расширений: открывает меню расширений тем же вызовом,
+  // что и IPC-обработчик, спустя N мс после старта.
+  const extMenuAt = Number(process.env['KONSTRUKTOR_EXT_MENU_MS'] ?? '0') || 0
+  if (extMenuAt > 0) {
+    setTimeout(() => {
+      const win = bootState.window
+      if (!win || win.isDestroyed()) return
+      // Профиль и полное состояние — видно, куда пишет dev (userData)
+      // и что реально лежит в реестре/меню.
+      console.log('[diag] userData:', app.getPath('userData'))
+      console.log('[diag] ext state:', JSON.stringify(extensionsState()))
+      console.log('[diag] ext menu:', JSON.stringify(extensionsMenuModel()))
+      log('lifecycle', 'auto-opening extensions menu', { afterMs: extMenuAt })
+      showOverlay(win, {
+        kind: 'extensions',
+        anchor: { x: 400, y: 300 },
+        extensions: extensionsMenuModel(),
+        toggleKey: 'extensions-menu',
+        onSelect: (id: string) => console.log('[diag] ext menu select:', id)
+      })
+    }, extMenuAt)
+  }
+
+  // ДИАГНОСТИКА (попап расширения): открывает попап первого расширения с
+  // default_popup тем же вызовом, что и клик по значку. Нужно, чтобы
+  // проверить попап без мыши: в его содержимом (tabs.query, отрисовка,
+  // размер) видно, дошли ли до страницы вкладка и фон.
+  const extPopupAt = Number(process.env['KONSTRUKTOR_EXT_POPUP_MS'] ?? '0') || 0
+  if (extPopupAt > 0) {
+    setTimeout(() => {
+      const win = bootState.window
+      if (!win || win.isDestroyed()) return
+      const rec = extensionsState().list.find((e) => e.action?.hasPopup)
+      if (!rec) {
+        console.log('[diag] popup: нет расширения с default_popup')
+        return
+      }
+      const width = win.getContentBounds().width
+      const ws = getState(win)
+      const activeRec = ws && ws.activeTabId !== null ? ws.tabs.get(ws.activeTabId) : undefined
+      console.log('[diag] popup:', rec.name, 'tab=', activeRec?.url ?? '(нет)')
+      // Якорь — как у закреплённого значка справа в адресной строке:
+      // правый нижний угол под панелью (y ≈ высота панели), а не верх окна.
+      void activateExtension(rec.id, win, { x: width - 48, y: 40, right: width - 48 })
+    }, extPopupAt)
+  }
+
   // ДИАГНОСТИКА: автооткрытие меню через N мс после старта. Нужно, чтобы
   // попасть в окно задержки загрузки страницы (OVERLAY_PAGE_LOAD_DELAY_MS)
   // без ручной гонки мышью. Значение 0 или пусто — выключено.

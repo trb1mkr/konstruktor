@@ -29,6 +29,7 @@ import { getShortcuts, addShortcut, removeShortcut } from './shortcutsStore'
 import { setLocalePreference, t } from '../i18n'
 import { applyThemeToViews } from '../browserTheme'
 import { applyZoomToWs, percentOf, zoomModeFor } from '../zoomManager'
+import { applyExtensionsEnabled } from '../extensions/manager'
 import { showOverlay } from '../overlay'
 import { join } from 'path'
 
@@ -129,6 +130,8 @@ export function registerStoresIpc(): void {
         rememberTabs?: boolean
         zoomMode?: string
         zoomSync?: boolean
+        extensionsEnabled?: boolean
+        extensionsDevMode?: boolean
       }
     ) => {
       const next = await saveSettings(patch)
@@ -180,6 +183,11 @@ export function registerStoresIpc(): void {
         if (seedWs && rec) {
           applyZoomToWs(seedWs, percentOf(rec.view.webContents), pushTabsState)
         }
+      }
+      // Глобальный выключатель расширений: выгрузка из сессии или обратная
+      // загрузка всех включённых. Состояние рассылается своим пушем.
+      if (patch.extensionsEnabled !== undefined) {
+        await applyExtensionsEnabled(patch.extensionsEnabled)
       }
       void e
       return next

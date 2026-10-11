@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ExtensionsState } from '../../shared/extensions-types'
 
 // Типы публичного API браузера для renderer (Vue SFC).
 export interface TabInfo {
@@ -175,6 +176,25 @@ const browserAPI = {
   openHistory: (): Promise<boolean> => ipcRenderer.invoke('tabs:open-history'),
   openSettings: (): Promise<boolean> => ipcRenderer.invoke('tabs:open-settings'),
   openDownloads: (): Promise<boolean> => ipcRenderer.invoke('tabs:open-downloads'),
+  openExtensions: (): Promise<boolean> => ipcRenderer.invoke('tabs:open-extensions'),
+
+  // Расширения: состояние для кнопок на панели и клик по кнопке.
+  listExtensions: (): Promise<ExtensionsState> => ipcRenderer.invoke('extensions:list'),
+  // anchor — правый нижний угол значка в координатах content-области:
+  // попап встаёт под панелью, как у кнопки-пазла (не поверх адресной строки).
+  extensionActionClick: (id: string, anchor: { x: number; y: number }): Promise<boolean> =>
+    ipcRenderer.invoke('extensions:action-click', id, anchor),
+  // Меню расширений под кнопкой-пазлом: якорь в координатах content-области.
+  extensionsMenu: (anchor: { x: number; y: number }): void =>
+    ipcRenderer.send('extensions:menu', anchor),
+  setExtensionPinned: (id: string, pinned: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('extensions:set-pinned', id, pinned),
+  closeExtensionPopup: (): Promise<boolean> => ipcRenderer.invoke('extensions:close-popup'),
+  onExtensionsChanged: (cb: (state: ExtensionsState) => void): (() => void) => {
+    const listener = (_e: unknown, state: ExtensionsState): void => cb(state)
+    ipcRenderer.on('extensions:state', listener as never)
+    return () => ipcRenderer.removeListener('extensions:state', listener as never)
+  },
   // Сообщить main отступы UI, чтобы WebContentsView занял остаток окна.
   updateLayout: (insets: Partial<UiInsets>): void =>
     ipcRenderer.send('layout:update', insets),

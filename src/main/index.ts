@@ -17,6 +17,8 @@ import { registerStoresIpc, setupDownloads } from './store/ipc'
 import { registerInternalProtocol } from './pages/protocol'
 import { registerInternalPreload } from './pages/internalBridge'
 import { registerOverlayIpc } from './overlay/ipc'
+import { registerExtensionsIpc } from './extensions/ipc'
+import { initExtensions, shutdownExtensions } from './extensions/manager'
 import { watchPaintedOnce } from './overlay/service'
 import { initI18n } from './i18n'
 import { watchSystemTheme } from './browserTheme'
@@ -50,6 +52,8 @@ function registerIpc() {
   registerBrowserMenuIpc()
   registerStoresIpc()
   registerGroupsIpc()
+  // Каналы расширений: список, установка, тумблеры, клик по кнопке.
+  registerExtensionsIpc()
   // Оверлейные каналы (overlay:*, find:*) — в overlay/ipc.ts.
   registerOverlayIpc()
   // Учёт подтверждений отрисовки оверлея. Слушатель должен стоять ДО
@@ -82,6 +86,10 @@ void app.whenReady().then(async () => {
   // показывается только в приватном окне.
   setupDownloads(session.fromPartition(INCOGNITO_PARTITION), true)
   registerIpc()
+  // Расширения поднимаются ПОСЛЕ регистрации сессий и ДО первого окна:
+  // контент-скрипты и фоновые service worker'ы должны успеть встать
+  // до навигации первой вкладки. Мост (loopback) стартует внутри.
+  await initExtensions()
   // Системная тема ОС: nativeTheme следит сам и шлет обновления —
   // пересчитываем color-scheme сайтов при смене темы ОС.
   watchSystemTheme()
@@ -94,4 +102,24 @@ void app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// Расширения выгружаются ПЕРЕД выходом, и это не уборка за собой.
+//
+// Chromium хранит регистрацию service worker'а расширения в партиции и на
+// следующем старте поднимает его сам — ДО того, как наш код вызовет
+// loadExtension. В этот момент расширение ещё не загружено, контекст
+// урезанный (chrome без родных API), и фон падает: в логе
+// «Cannot read properties of undefined (reading 'onMessage')» и
+// DidStartWorkerFail. Замерено: со снятием регистраций при выходе
+// следующий старт проходит без единой ошибки расширений.
+let extensionsUnloaded = false
+app.on('before-quit', (event) => {
+  if (extensionsUnloaded) return
+  event.preventDefault()
+  extensionsUnloaded = true
+  const unload = shutdownExtensions().catch(() => undefined)
+  // Выход не должен зависеть от скорости выгрузки: если она почему-то
+  // подвиснет, через секунду всё равно выходим.
+  void Promise.race([unload, new Promise((r) => setTimeout(r, 1200))]).finally(() => app.quit())
 })

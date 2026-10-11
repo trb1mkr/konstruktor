@@ -62,8 +62,8 @@ export function toggleDevTools(
 ): { open: boolean; mode: DevToolsDockMode } {
   const rec = ws.tabs.get(tabId)
   if (!rec) return { open: false, mode: 'right' }
-  const wc = rec.view.webContents
-  if (wc.isDestroyed()) return { open: false, mode: 'right' }
+  const wc = rec.view?.webContents
+  if (!wc || wc.isDestroyed()) return { open: false, mode: 'right' }
   if (wc.isDevToolsOpened()) {
     wc.closeDevTools()
     return { open: false, mode: rec.devTools?.mode ?? 'right' }
@@ -104,8 +104,8 @@ export function closeDevToolsFor(ws: WindowState, tabId: number): void {
   const rec = ws.tabs.get(tabId)
   if (!rec) return
   rec.devTools = undefined
-  const wc = rec.view.webContents
-  if (wc.isDestroyed()) return
+  const wc = rec.view?.webContents
+  if (!wc || wc.isDestroyed()) return
   if (wc.isDevToolsOpened()) wc.closeDevTools()
 }
 
@@ -120,6 +120,7 @@ export function devToolsStateOf(
   const rec = ws.tabs.get(tabId)
   if (!rec) return { open: false, mode: 'right' }
   const mode = rec.devTools?.mode ?? 'right'
-  if (rec.view.webContents.isDestroyed()) return { open: false, mode }
-  return { open: rec.view.webContents.isDevToolsOpened(), mode }
+  const wc = rec.view?.webContents
+  if (!wc || wc.isDestroyed()) return { open: false, mode }
+  return { open: wc.isDevToolsOpened(), mode }
 }

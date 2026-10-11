@@ -7,6 +7,7 @@ import IconDialog from './IconDialog.vue'
 import FindBar from './FindBar.vue'
 import ToastStack from './ToastStack.vue'
 import ZoomPopup from './ZoomPopup.vue'
+import ExtensionsMenu from './ExtensionsMenu.vue'
 
 // Соответствие вида оверлея и компонента.
 //
@@ -15,6 +16,11 @@ import ZoomPopup from './ZoomPopup.vue'
 // шаблон: новое условие забывали, и вид просто не отрисовывался — без
 // ошибок и без логов. Реестр делает вид явным: забыть его можно только
 // тем, что не добавили, а TypeScript скажет об этом на сборке.
+//
+// Второй шаг после реестра — ветка вида в `propsFor` (`payload.ts`): без
+// неё уровень возвращает `null`, `buildRenderedLevels` молча его
+// отбрасывает, и окно открывается пустым. TypeScript эту связь не ловит:
+// `propsFor` возвращает обобщённый `Record<string, unknown>`.
 //
 // Ключи — ViewKind из контракта, а не строковые литералы: опечатка в
 // имени вида становится ошибкой компиляции, а не молчаливым undefined.
@@ -30,7 +36,11 @@ const REGISTRY: Record<ViewKind, Component> = {
   toast: ToastStack,
   // Попап масштаба у бейджа в адресной строке: поле процента, `−`/`+`,
   // Reset. Форма своя, поэтому свой компонент, а не MenuList с пунктом.
-  zoom: ZoomPopup
+  zoom: ZoomPopup,
+  // Меню расширений: строки со значком, закреплением и переходом
+  // на страницу расширений. Замена панели chrome://extensions в том виде,
+  // в каком она нужна в браузере — быстрый доступ, а не управление.
+  extensions: ExtensionsMenu
 }
 
 /**

@@ -10,6 +10,8 @@ import BookmarksBar from './components/stdlib/BookmarksBar.vue'
 import AddressBar from './components/stdlib/AddressBar.vue'
 import DropdownMenu from './components/stdlib/DropdownMenu.vue'
 import WindowControls from './components/stdlib/WindowControls.vue'
+import ExtensionActions from './components/stdlib/ExtensionActions.vue'
+import ExtensionsButton from './components/stdlib/ExtensionsButton.vue'
 
 // Корневой layout-SFC. Пользователь правит этот файл: порядок,
 // позиция, стили компонентов. WebContentsView занимает остаток окна.
@@ -128,7 +130,10 @@ function onTitleDblClick(e: MouseEvent) {
   if (e.button !== 0) return
   const target = e.target
   if (target instanceof Element && target.closest('.tab, .tab-add, .window-controls')) return
-  if (isMaximized.value || isFullscreen.value || isContentFullscreen.value) return
+  // Fullscreen (F11) и контентный fullscreen не трогаем: там разворот
+  // бессмыслен, выход — Esc/F11. Развёрнутое окно разворачиваем И
+  // сворачиваем: toggleMaximize в main сам решает по isMaximized().
+  if (isFullscreen.value || isContentFullscreen.value) return
   void window.browserAPI.toggleMaximize()
 }
 
@@ -210,7 +215,13 @@ onMounted(() => {
         </WindowControls>
       </div>
       <BookmarksBar v-if="!isIncognito" />
-      <AddressBar />
+      <!-- Значки расширений и кнопка-пазл — в строке адреса, справа
+           от кнопки поиска: так они стоят в Chrome и Яндекс Браузере,
+           и не теряются, когда панель вкладок заполнена. -->
+      <AddressBar>
+        <ExtensionActions />
+        <ExtensionsButton />
+      </AddressBar>
     </div>
 
     <!-- Центр пустой: здесь живет WebContentsView (сайт). -->

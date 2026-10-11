@@ -46,7 +46,13 @@ export function provisionalSize(request: OverlayRequest): { width: number; heigh
   if (spec.height !== null) return { width: spec.width, height: spec.height }
   // Меню: хватает на шесть пунктов, дальше окно дорастёт по измерению.
   const isMenuLike = request.kind === 'menu' || request.kind === 'window-menu'
-  const rows = isMenuLike ? (request.items?.length ?? 0) : request.kind === 'zoom' ? 2 : 1
+  const rows = isMenuLike
+    ? (request.items?.length ?? 0)
+    : request.kind === 'zoom'
+      ? 2
+      : request.kind === 'extensions'
+        ? (request.extensions?.items.length ?? 0) + 1
+        : 1
   const estimated = Math.max(rows, 6)
   return { width: spec.width, height: Math.min(estimated * MENU_ROW_FALLBACK_H, MAX_PROVISIONAL_H) }
 }
@@ -323,6 +329,12 @@ export function overlayModel(request: OverlayRequest): OverlayModel {
   }
   if (request.kind === 'zoom') {
     return { view: 'zoom', zoom: { percent: request.zoom?.percent ?? 100 } }
+  }
+  if (request.kind === 'extensions') {
+    return {
+      view: 'extensions',
+      extensions: request.extensions ?? { items: [], enabled: true }
+    }
   }
   return { view: 'toast', toast: request.toast ?? { title: '' } }
 }

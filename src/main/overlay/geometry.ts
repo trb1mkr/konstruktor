@@ -130,6 +130,16 @@ const SURFACES: Record<ViewKind, SurfaceSpec> = {
     height: null,
     align: 'page-bottom-right',
     gap: 16
+  },
+  // Меню расширений: список с иконками, прижат к кнопке-пазлу справа.
+  // Высота из измерения: зависит от числа расширений.
+  extensions: {
+    width: 340,
+    sizing: 'content',
+    minWidth: 280,
+    height: null,
+    align: 'anchor-end',
+    gap: 6
   }
 }
 

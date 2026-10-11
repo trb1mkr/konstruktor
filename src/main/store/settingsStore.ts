@@ -36,6 +36,10 @@ export interface BrowserSettings {
   // Единый зум на все вкладки: любое изменение применяется ко всем
   // вкладкам всех окон, новые открываются с последнего процента.
   zoomSync: boolean
+  // Расширения включены глобально. false — все выгружаются из сессии.
+  extensionsEnabled: boolean
+  // Режим разработчика на странице расширений: показывает пути и ошибки.
+  extensionsDevMode: boolean
   // Последняя геометрия обычного (не maximized/fullscreen) окна.
   windowBounds?: { x: number; y: number; width: number; height: number }
   windowMaximized?: boolean
@@ -59,7 +63,9 @@ const DEFAULTS: BrowserSettings = {
   rememberBounds: true,
   rememberTabs: true,
   zoomMode: 'origin',
-  zoomSync: false
+  zoomSync: false,
+  extensionsEnabled: true,
+  extensionsDevMode: false
 }
 
 let filePath = ''
