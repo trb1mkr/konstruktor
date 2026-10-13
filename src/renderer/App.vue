@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useTabs, isIncognito } from './core/useTabs'
+import { useTabs, isIncognito, activeTabId } from './core/useTabs'
+import { parseAccelerator, matchesInput, type HotkeyInput } from '../shared/hotkeys'
+import {
+  DEFAULT_HOTKEYS,
+  HOTKEY_ACTIONS,
+  type HotkeyActionId
+} from '../shared/hotkey-actions'
 import { useLayoutInsets } from './core/layoutEngine'
 import { effectiveTheme, roundedCorners, loadTheme } from './core/useTheme'
 import { changeLanguage } from './i18n'
@@ -56,21 +62,60 @@ async function refreshMaximized() {
 // F12 из фокуса shell: DevTools активной вкладки. Точка дублирует
 // before-input-event окна, а не заменяет его: в main решается, что именно
 // докнуто, и там же состояние уходит в tabs:state.
+//
+// Ctrl+R / Ctrl+W / Ctrl+T — та же дублирующая точка для действий над
+// вкладками (обновить, закрыть, создать). Разбор по e.code (физическая
+// клавиша), как в main: раскладка не должна влиять. Дубль не даёт
+// двойного срабатывания — main первым гасит событие через preventDefault,
+// и до renderer оно доходит только там, где обработчик окна не выстрелил.
+//
+// Сочетания берутся из настроек: реестр действий и их разрешённые значения
+// общие с main (shared/hotkey-actions), иначе переназначенная в настройках
+// клавиша работала бы, а старая продолжала бы срабатывать здесь.
+const hotkeys = ref<Record<HotkeyActionId, string>>({ ...DEFAULT_HOTKEYS })
+
+function applyHotkeyOverrides(overrides?: Record<string, string>): void {
+  const next = { ...DEFAULT_HOTKEYS }
+  if (overrides) {
+    for (const action of HOTKEY_ACTIONS) {
+      const value = overrides[action.id]
+      // Строка — всегда состояние: пустая = сочетание снято (не дефолт),
+      // разбор её не находит, и действие не срабатывает.
+      if (typeof value === 'string') next[action.id] = value.trim()
+    }
+  }
+  hotkeys.value = next
+}
+
+function matchedAction(input: HotkeyInput): HotkeyActionId | null {
+  for (const action of HOTKEY_ACTIONS) {
+    const parsed = parseAccelerator(hotkeys.value[action.id])
+    if (parsed && matchesInput(input, parsed)) return action.id
+  }
+  return null
+}
+
 function onKey(e: KeyboardEvent) {
-  const mod = e.ctrlKey || e.metaKey
-  const isF = e.key.toLowerCase() === 'f' || e.code === 'KeyF'
-  if (mod && !e.shiftKey && !e.altKey && isF) {
-    e.preventDefault()
+  const action = matchedAction({
+    code: e.code,
+    control: e.ctrlKey,
+    meta: e.metaKey,
+    shift: e.shiftKey,
+    alt: e.altKey
+  })
+  if (!action) return
+  e.preventDefault()
+  if (action === 'reload') {
+    void window.browserAPI.reload()
+  } else if (action === 'new-tab') {
+    void window.browserAPI.createTab()
+  } else if (action === 'close-tab') {
+    if (activeTabId.value !== null) void window.browserAPI.closeTab(activeTabId.value)
+  } else if (action === 'find') {
     void window.browserAPI.openFind()
-    return
-  }
-  if (e.key === 'F12' && !mod && !e.shiftKey && !e.altKey) {
-    e.preventDefault()
+  } else if (action === 'devtools') {
     void window.browserAPI.toggleDevTools()
-    return
-  }
-  if (e.key === 'F11' && !mod && !e.shiftKey && !e.altKey) {
-    e.preventDefault()
+  } else if (action === 'fullscreen') {
     void window.browserAPI.toggleFullscreen()
   }
 }
@@ -141,11 +186,18 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onMounted(() => {
   void refreshMaximized()
   void loadTheme()
+  // Стартовые сочетания: переопределения из настроек поверх дефолтов.
+  void window.browserAPI
+    .getSettings()
+    .then((s?: { hotkeys?: Record<string, string> }) => applyHotkeyOverrides(s?.hotkeys))
+    .catch(() => undefined)
   const unsubSettings = window.browserAPI.onSettingsChanged((info) => {
     void loadTheme()
     // Язык: main шлёт сырое значение настройки, резолв тем же,
     // что и при старте. Неизменённый язык в changeLanguage — no-op.
     if (info?.locale) void changeLanguage(resolveLocale(info.locale, navigator.language))
+    // Хоткеи: смена в настройках приходит тем же каналом.
+    if (info?.hotkeys) applyHotkeyOverrides(info.hotkeys)
   })
   const unsubMax = window.browserAPI.onMaximizedChanged((v) => {
     isMaximized.value = v

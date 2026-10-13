@@ -147,7 +147,20 @@ export function buildPushMessage(
       offset: levelOffsetInUnion(rect, union)
     }
   })
-  return { stack, theme, animations: settings.animations !== false, language: currentLang() }
+  return {
+    stack,
+    theme,
+    animations: settings.animations !== false,
+    language: currentLang(),
+    // Видимость частей пункта меню — из настроек, одним полем на всё
+    // сообщение: это свойство интерфейса, а не уровня стека.
+    menuDisplay: {
+      icons: settings.menuShowIcons !== false,
+      labels: settings.menuShowText !== false,
+      hotkeys: settings.menuShowHotkeys !== false,
+      hotkeysOnHover: settings.menuHotkeysOnHover === true
+    }
+  }
 }
 
 /**

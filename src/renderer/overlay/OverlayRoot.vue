@@ -43,7 +43,21 @@ const topLevel = computed<Level | null>(() => {
 })
 
 // Пропсы уровней, сборка отрисовки и мерж патчей — в payload.ts.
-const renderedLevels = computed(() => buildRenderedLevels(payload.value?.stack ?? []))
+//
+// Видимость частей пункта меню приходит в push. До первого push её нет —
+// берём полный набор: пустое окно всё равно прозрачно, а «по умолчанию
+// всё видно» совпадает с дефолтами настроек.
+const renderedLevels = computed(() =>
+  buildRenderedLevels(
+    payload.value?.stack ?? [],
+    payload.value?.menuDisplay ?? {
+      icons: true,
+      labels: true,
+      hotkeys: true,
+      hotkeysOnHover: false
+    }
+  )
+)
 
 const error = ref('')
 // Парковка: main уводит окно и просит убрать содержимое из рендера.

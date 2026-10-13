@@ -106,7 +106,7 @@ export function detachTabToNewWindow(fromWs: WindowState, id: number, sx: number
 export function createWindow(
   opts: { x?: number; y?: number; restoreSession?: boolean } = {}
 ): WindowState {
-  const windowDeps: WindowDeps = { createTab, setActiveTab, pushTabsState }
+  const windowDeps: WindowDeps = { createTab, setActiveTab, pushTabsState, closeTab }
   return createWindowRaw(opts, windowDeps)
 }
 

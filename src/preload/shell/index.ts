@@ -219,9 +219,13 @@ const browserAPI = {
   // Настройки shell: тема и прочее без перезагрузки внутренних страниц.
   getSettings: () => ipcRenderer.invoke('settings:get'),
   // info.locale — сырое значение настройки (auto|en|код): shell резолвит
-  // его сам через navigator.language, как и при старте.
-  onSettingsChanged: (cb: (info?: { locale?: string }) => void): (() => void) => {
-    const listener = (_e: unknown, info?: { locale?: string }) => cb(info)
+  // его сам через navigator.language, как и при старте. info.hotkeys —
+  // переопределения сочетаний: shell матчит клавиши по ним же, что main.
+  onSettingsChanged: (
+    cb: (info?: { locale?: string; hotkeys?: Record<string, string> }) => void
+  ): (() => void) => {
+    const listener = (_e: unknown, info?: { locale?: string; hotkeys?: Record<string, string> }) =>
+      cb(info)
     ipcRenderer.on('settings:changed', listener as never)
     return () => ipcRenderer.removeListener('settings:changed', listener as never)
   },

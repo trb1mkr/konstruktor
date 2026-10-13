@@ -16,7 +16,13 @@ export default tseslint.config(
       'dist/**',
       'node_modules/**',
       '*.tsbuildinfo',
-      '.worktree/**'
+      // Git-worktree внутри репозитория приносит свой tsconfig, и типовой
+      // парсер падает на нескольких корнях («multiple candidate
+      // TSConfigRootDirs»), роняя проверку целиком. Так каталоги и
+      // называются у разных инструментов — перечисляем оба варианта.
+      '.worktree/**',
+      '.worktrees/**',
+      '.kilo/**'
     ],
   },
 

@@ -18,6 +18,7 @@ import {
 import { findTab, type TabData, type WindowState } from '../windows/browserState'
 import { showOverlay, type OverlayMenuItem } from '../overlay'
 import { getSettingsSync } from '../store/settingsStore'
+import { hotkeyLabel } from '../hotkeys'
 import { t } from '../i18n'
 
 export interface PageMenuDeps {
@@ -134,7 +135,7 @@ export function buildPageMenu(params: ContextMenuParams, ctx: PageMenuContext): 
   return [
     { id: 'back', label: t('pageMenu.back'), icon: '◀️', disabled: !ctx.canGoBack },
     { id: 'forward', label: t('pageMenu.forward'), icon: '▶️', disabled: !ctx.canGoForward },
-    { id: 'reload', label: t('pageMenu.reload'), icon: '🔄' },
+    { id: 'reload', label: t('pageMenu.reload'), icon: '🔄', hotkey: hotkeyLabel('reload') },
     { id: 'sep-nav', label: '', icon: '', separator: true },
     { id: 'save-page', label: t('pageMenu.savePage'), icon: '💾' },
     { id: 'print', label: t('pageMenu.print'), icon: '🖨️' },

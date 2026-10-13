@@ -25,6 +25,7 @@ import {
   type DownloadEntry
 } from './downloadsStore'
 import { getSettings, saveSettings } from './settingsStore'
+import { setHotkeyCapture } from '../hotkeys'
 import { getShortcuts, addShortcut, removeShortcut } from './shortcutsStore'
 import { setLocalePreference, t } from '../i18n'
 import { applyThemeToViews } from '../browserTheme'
@@ -132,6 +133,11 @@ export function registerStoresIpc(): void {
         zoomSync?: boolean
         extensionsEnabled?: boolean
         extensionsDevMode?: boolean
+        menuShowIcons?: boolean
+        menuShowText?: boolean
+        menuShowHotkeys?: boolean
+        menuHotkeysOnHover?: boolean
+        hotkeys?: Record<string, string>
       }
     ) => {
       const next = await saveSettings(patch)
@@ -146,7 +152,10 @@ export function registerStoresIpc(): void {
         patch.theme !== undefined ||
         patch.roundedCorners !== undefined ||
         patch.fullscreenMode !== undefined ||
-        patch.locale !== undefined
+        patch.locale !== undefined ||
+        // Смена хоткеев: shell дублирует обработку клавиш (App.vue), и его
+        // действующие сочетания обязаны совпасть с main.
+        patch.hotkeys !== undefined
       ) {
         for (const ws of windows.values()) {
           if (patch.fullscreenMode !== undefined && ws.contentFullscreen) {
@@ -157,7 +166,10 @@ export function registerStoresIpc(): void {
           // locale — сырое значение настройки: shell резолвит 'auto' сам
           // через navigator.language, как и при старте. Неизменённое значение
           // в changeLanguage превращается в no-op.
-          ws.window?.webContents.send('settings:changed', { locale: next.locale })
+          ws.window?.webContents.send('settings:changed', {
+            locale: next.locale,
+            hotkeys: next.hotkeys
+          })
         }
         if (patch.theme !== undefined) applyThemeToViews(next.theme)
       }
@@ -193,6 +205,15 @@ export function registerStoresIpc(): void {
       return next
     }
   )
+  // Захват сочетаний на время редактирования таблицы горячих клавиш
+  // (konstruktor://settings): пока поле в фокусе, браузерные сочетания
+  // молчат — иначе Ctrl+W закрыл бы вкладку прямо во время ввода.
+  // Обработчик синхронный: порядок focus/blur-сообщений обязан совпасть
+  // с порядком их отправки (переход по Tab между полями).
+  ipcMain.handle('hotkeys:capture', (e, on: boolean) => {
+    setHotkeyCapture(e.sender, on === true)
+    return true
+  })
   // Плитки табло стартовой страницы.
   ipcMain.handle('shortcuts:list', () => getShortcuts())
   ipcMain.handle('shortcuts:add', (_e, input: { name?: string; url: string }) =>

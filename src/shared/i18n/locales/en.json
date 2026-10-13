@@ -15,6 +15,24 @@
     "incognitoToPrivate": "Switch to incognito mode",
     "incognitoToNormal": "Switch to normal mode"
   },
+  "hotkeys": {
+    "title": "Keyboard shortcuts",
+    "hint": "Click a field and press a combination; Backspace clears it. While a field is focused browser shortcuts stay off. Reset restores the defaults.",
+    "reset": "Reset to defaults",
+    "needModifier": "A letter or digit needs Ctrl, Alt or Shift.",
+    "duplicateTitle": "Combination already in use",
+    "duplicateText": "{{key}} is already used by “{{action}}”.",
+    "duplicate": "While the combination is shared, the other action stays unreachable.",
+    "unbound": "Not assigned",
+    "actions": {
+      "reload": "Reload tab",
+      "closeTab": "Close tab",
+      "newTab": "New tab",
+      "find": "Find on page",
+      "devtools": "Developer tools",
+      "fullscreen": "Fullscreen"
+    }
+  },
   "pageMenu": {
     "back": "Back",
     "forward": "Forward",
@@ -162,6 +180,13 @@
     "roundedCorners": "Rounded window corners (windowed mode)",
     "rememberBounds": "Remember window size and position",
     "rememberTabs": "Remember open tabs",
+    "menuParts": "Menu item contents",
+    "menuPartsHint": "Choose which parts of a menu item to show. Applies to every menu.",
+    "menuIcons": "Show item icons",
+    "menuText": "Show item text",
+    "menuHotkeys": "Show keyboard shortcuts",
+    "menuHotkeysHover": "Show shortcuts only on hover or keyboard selection",
+    "menuPartsRequired": "Keep icon or text — a shortcut alone doesn't identify an item.",
     "pageZoom": "Page zoom",
     "zoomOrigin": "Per site — shared by URL (like Chrome)",
     "zoomTab": "Per tab — independent of URL, resets on tab close",

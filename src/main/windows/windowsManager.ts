@@ -18,6 +18,7 @@ import { getSettings, getSettingsSync, saveSettings, saveSettingsSync } from '..
 import { openFindOverlay } from '../find/findManager'
 import { toggleDevTools } from '../tabs/devtools'
 import { applyZoomToWs, stepActiveZoom, zoomShortcut } from '../zoomManager'
+import { isHotkeyCapture, matchHotkey } from '../hotkeys'
 import { fireExtensionCommand } from '../extensions/bridge'
 import { matchCommands } from '../extensions/commands'
 import { ensureOverlayWindow } from '../overlay'
@@ -105,6 +106,11 @@ export interface WindowDeps {
   createTab: (ws: WindowState, url?: string) => number
   setActiveTab: (ws: WindowState, id: number) => void
   pushTabsState: (ws: WindowState) => void
+  // Закрытие вкладки: обработчику окна нужно для хоткея Ctrl+W, когда фокус
+  // в shell (адресная строка, панели), а не на странице. Тот же приём, что
+  // у createTab: сама реализация живёт в tabsManager, сюда приходит через
+  // deps, чтобы не тянуть tabs/* в windows/* импортом.
+  closeTab: (ws: WindowState, id: number) => void
 }
 
 // Восстановление сессии при старте: создает вкладки из sessionTabs,
@@ -443,43 +449,46 @@ export function createWindow(
     // секунды после запуска ещё уходит мимо.
     setTimeout(activateAtStartup, 600)
   })
-  // Глобальный Ctrl+F окна: срабатывает даже если before-input-event view
-  // не выстрелил (фокус в shell, пустая вкладка, перехват сайтом).
-  // F11 из фокуса shell: тоггл сценария из настроек вручную.
-  // F12 из фокуса shell: та же точка входа, что и на view. Дублировать
-  // обязательно — без неё F12 работал бы только когда фокус в странице,
-  // а из адресной строки или панели вкладок не срабатывал бы вовсе.
+  // Глобальные клавиши окна: горячие сочетания из настроек (F11/F12,
+  // Ctrl+F, Ctrl+R/W/T и любые переназначенные) — из фокуса shell
+  // (адресная строка, панели, пустая вкладка). Дублирующая точка к
+  // обработчику view вкладки: before-input-event стреляет только в
+  // focused webContents, поэтому без неё ни одно сочетание не сработало бы
+  // из адресной строки. preventDefault гасит и акселераторы дефолтного
+  // меню Electron (Ctrl+R — «Reload», F11 — fullscreen).
   win.webContents.on('before-input-event', (e, input) => {
-    if (
-      input.key === 'F11' &&
-      input.type === 'keyDown' &&
-      !input.control &&
-      !input.meta &&
-      !input.shift &&
-      !input.alt
-    ) {
+    // Захват сочетаний (см. main/hotkeys.ts): у shell его не бывает — поле
+    // сочетания живёт на странице настроек, то есть в view вкладки, — но
+    // проверка стоит в обеих точках входа: молчаливое расхождение здесь
+    // означало бы, что сочетание сработало вместо ввода.
+    if (isHotkeyCapture(win.webContents)) return
+    const action = matchHotkey(input)
+    if (action !== null && !win.isDestroyed()) {
       e.preventDefault()
-      if (!win.isDestroyed()) toggleFullscreenMode(ws, layoutActiveView)
-      return
-    }
-    if (
-      input.key === 'F12' &&
-      input.type === 'keyDown' &&
-      !input.control &&
-      !input.meta &&
-      !input.shift &&
-      !input.alt
-    ) {
-      e.preventDefault()
-      if (win.isDestroyed() || ws.activeTabId === null) return
-      toggleDevTools(ws, ws.activeTabId)
-      deps.pushTabsState(ws)
+      const rec =
+        ws.activeTabId !== null ? ws.tabs.get(ws.activeTabId) : undefined
+      if (action === 'reload') {
+        if (rec && !rec.view.webContents.isDestroyed()) rec.view.webContents.reload()
+      } else if (action === 'close-tab') {
+        if (ws.activeTabId !== null) deps.closeTab(ws, ws.activeTabId)
+      } else if (action === 'new-tab') {
+        deps.createTab(ws)
+      } else if (action === 'find') {
+        openFindOverlay(ws)
+      } else if (action === 'devtools') {
+        if (ws.activeTabId !== null) {
+          toggleDevTools(ws, ws.activeTabId)
+          deps.pushTabsState(ws)
+        }
+      } else if (action === 'fullscreen') {
+        toggleFullscreenMode(ws, layoutActiveView)
+      }
       return
     }
     // Масштаб страницы из фокуса shell (адресная строка, панели) — та же
-    // дублирующая точка, что F12/Ctrl+F: before-input-event стреляет только
-    // в focused webContents, и без обработчика окна зум из адресной строки
-    // не срабатывал бы вовсе.
+    // дублирующая точка, что остальные клавиши: before-input-event стреляет
+    // только в focused webContents, и без обработчика окна зум из адресной
+    // строки не срабатывал бы вовсе.
     //
     // В App.vue НЕ дублируется: здесь стоит preventDefault, а он не даёт
     // событию дойти до keydown страницы — дубль дал бы два шага лестницы
@@ -490,19 +499,6 @@ export function createWindow(
       // Helpers пушат само окно (и все окна при едином зуме).
       if (zoomAct === 0) applyZoomToWs(ws, 100, deps.pushTabsState)
       else stepActiveZoom(ws, zoomAct, deps.pushTabsState)
-      return
-    }
-    const key = (input.key ?? '').toLowerCase()
-    const isF = key === 'f' || input.code === 'KeyF'
-    if (
-      (input.control || input.meta) &&
-      !input.shift &&
-      !input.alt &&
-      isF &&
-      input.type === 'keyDown'
-    ) {
-      e.preventDefault()
-      openFindOverlay(ws)
       return
     }
     // Команды расширений — последними: свои горячие клавиши браузера

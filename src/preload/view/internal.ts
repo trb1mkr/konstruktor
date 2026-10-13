@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('konstruktor', {
   historyDeleteVisit: (url: string, at: number) =>
     ipcRenderer.invoke('history:delete-visit', url, at),
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  // Захват сочетаний на время редактирования горячих клавиш: пока поле в
+  // фокусе, браузерные сочетания молчат (см. src/main/hotkeys.ts).
+  setHotkeyCapture: (on: boolean) => ipcRenderer.invoke('hotkeys:capture', on),
   saveSettings: (patch: {
     searchEngine?: string
     homepage?: string
@@ -37,6 +40,11 @@ contextBridge.exposeInMainWorld('konstruktor', {
     rememberTabs?: boolean
     zoomMode?: string
     zoomSync?: boolean
+    menuShowIcons?: boolean
+    menuShowText?: boolean
+    menuShowHotkeys?: boolean
+    menuHotkeysOnHover?: boolean
+    hotkeys?: Record<string, string>
   }) => ipcRenderer.invoke('settings:save', patch),
   getShortcuts: () => ipcRenderer.invoke('shortcuts:list'),
   addShortcut: (input: { name?: string; url: string }) =>

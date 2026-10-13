@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MenuItem } from '../../shared/overlay-types'
+import type { MenuDisplay, MenuItem } from '../../shared/overlay-types'
 import MenuList from './components/MenuList.vue'
 
 // Меню окна: ПКМ по кнопкам навигации (свернуть/развернуть/закрыть).
@@ -15,6 +15,11 @@ import MenuList from './components/MenuList.vue'
 defineProps<{
   items: MenuItem[]
   align?: 'start' | 'end'
+  /**
+   * Видимость частей пункта (иконка/текст/хоткей) из настроек. Проброс
+   * «насквозь»: правило живёт в MenuList — единственной вёрстке пункта.
+   */
+  display?: MenuDisplay
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +32,7 @@ const emit = defineEmits<{
     class="window-menu"
     :class="{ 'align-start': align === 'start' }"
     :items="items"
+    :display="display"
     @select="emit('select', $event)"
   />
 </template>

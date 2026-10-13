@@ -11,6 +11,7 @@ import type {
   DialogModel,
   FindModel,
   IconModel,
+  MenuDisplay,
   MenuItem,
   StackEntry,
   ToastModel,
@@ -53,6 +54,9 @@ export interface OverlayPayload {
   // стека, чтобы FindBar и диалог иконки не мелькнули чужим языком.
   language: string
   animations: boolean
+  // Видимость частей пункта меню (настройка). Одна на все меню стека:
+  // меню под диалогом обязано выглядеть так же, как сам диалог.
+  menuDisplay: MenuDisplay
 }
 
 // Типы берём из контракта, а не дублируем локально. Прежний комментарий
@@ -64,7 +68,10 @@ export interface OverlayPayload {
 export type OverlayUpdate = UpdateMessage
 
 /** Пропсы уровня — форма та же, что была для единственной модели. */
-export function propsFor(level: Level): Record<string, unknown> | null {
+export function propsFor(
+  level: Level,
+  display: MenuDisplay
+): Record<string, unknown> | null {
   const model = level.model
   const base = {
     sessionId: level.sessionId,
@@ -75,7 +82,8 @@ export function propsFor(level: Level): Record<string, unknown> | null {
       return {
         ...base,
         items: model.items ?? [],
-        align: level.anchorLeft ? 'start' : 'end'
+        align: level.anchorLeft ? 'start' : 'end',
+        display
       }
     // Меню окна: та же карточка, но без бейджа инкогнито — вкладка и окно
     // не могут быть одновременно инкогнито-вкладкой и обычным окном.
@@ -83,7 +91,8 @@ export function propsFor(level: Level): Record<string, unknown> | null {
       return {
         ...base,
         items: model.items ?? [],
-        align: level.anchorLeft ? 'start' : 'end'
+        align: level.anchorLeft ? 'start' : 'end',
+        display
       }
     case 'toast':
       // Модель может прийти без toast — тогда компонент не рендерим
@@ -121,14 +130,14 @@ export function propsFor(level: Level): Record<string, unknown> | null {
 }
 
 /** Отрисованные уровни: компонент из registry + пропсы, без пустых. */
-export function buildRenderedLevels(stack: Level[]) {
+export function buildRenderedLevels(stack: Level[], display: MenuDisplay) {
   return stack
     .map((level, index) => ({
       key: level.sessionId,
       index,
       level,
       component: componentFor(level.model.view),
-      props: propsFor(level)
+      props: propsFor(level, display)
     }))
     .filter((entry) => entry.props !== null)
 }

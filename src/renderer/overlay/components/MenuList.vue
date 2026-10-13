@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
-import type { MenuItem } from '../../../shared/overlay-types'
+import type { MenuDisplay, MenuItem } from '../../../shared/overlay-types'
 
 // Список пунктов меню: единственная реализация для всех меню приложения
 // (вкладки, группы, панель, меню браузера).
@@ -20,8 +20,21 @@ const props = withDefaults(
     items: MenuItem[]
     /** Активный индекс; -1 = ни один. */
     modelValue?: number
+    /**
+     * Видимость частей пункта: иконка, текст, подпись хоткея. Приходит из
+     * push (настройка пользователя) и ОДНА на все меню приложения —
+     * поэтому правило живёт здесь, в единственной вёрстке пункта, а не в
+     * каждом меню отдельно.
+     *
+     * Дефолт — всё видно: так выглядит меню до первого push и так же
+     * выглядят дефолты настроек.
+     */
+    display?: MenuDisplay
   }>(),
-  { modelValue: -1 }
+  {
+    modelValue: -1,
+    display: () => ({ icons: true, labels: true, hotkeys: true, hotkeysOnHover: false })
+  }
 )
 
 const emit = defineEmits<{
@@ -41,6 +54,29 @@ const selectable = computed(() =>
     .map((item, index) => (item.disabled || item.separator ? -1 : index))
     .filter((i) => i >= 0)
 )
+
+// Ширина карточки по схеме отображения.
+//
+// Считается здесь, а не в main: единственный источник правды по размеру —
+// измерение содержимого, CSS задаёт реальную ширину карточки, а main
+// (geometry.ts) только клампит измеренное в свой потолок. Поэтому потолок
+// в main поднят под самый широкий режим, а пол и разброс задаёт CSS.
+//
+// Три схемы:
+//   - icons: нет текста и нет подписей — карточка по размеру эмодзи (~50 px);
+//   - hotkeys: нет текста, подписи есть — компактная по содержимому, иконка
+//     и подпись стоят рядом (распорка-текст скрыта, см. --no-label);
+//   - wide: текст и подписи — шире обычного, подписи встают столбцом справа;
+//   - default: иначе — обычная.
+//
+// «Подписи есть» = подпись есть ХОТЬ У ОДНОГО пункта ЭТОГО меню: у меню без
+// хоткеев расширяться незачем.
+const widthMode = computed(() => {
+  const hasHotkeys =
+    props.display.hotkeys && props.items.some((item) => !item.separator && item.hotkey)
+  if (props.display.labels) return hasHotkeys ? 'wide' : 'default'
+  return hasHotkeys ? 'hotkeys' : 'icons'
+})
 
 function step(delta: number): void {
   if (selectable.value.length === 0) return
@@ -153,6 +189,12 @@ defineExpose({ focusFirst: toStart })
   <div
     ref="root"
     class="menu-list"
+    :class="{
+      'menu-list--icons': widthMode === 'icons',
+      'menu-list--hotkeys': widthMode === 'hotkeys',
+      'menu-list--wide': widthMode === 'wide',
+      'menu-list--no-label': !display.labels
+    }"
     role="menu"
     tabindex="0"
     @keydown="onKeydown"
@@ -170,11 +212,19 @@ defineExpose({ focusFirst: toStart })
         @click="activate(index)"
         @mouseenter="index === active || (active = index)"
       >
-        <span class="menu-icon">
+        <span v-if="display.icons" class="menu-icon">
           <span v-if="item.color" class="menu-dot" :style="{ background: item.color }" />
           <template v-if="item.icon">{{ item.icon }}</template>
         </span>
-        <span class="menu-label">{{ item.label }}</span>
+        <!-- Текст всегда в растущем span, даже когда скрыт: он раздвигает
+             пункт и прижимает хоткей к правому краю. Без него подпись
+             хоткея встала бы вплотную к иконке. -->
+        <span class="menu-label">{{ display.labels ? item.label : '' }}</span>
+        <span
+          v-if="display.hotkeys && item.hotkey"
+          class="menu-hotkey"
+          :class="{ 'menu-hotkey--hover': display.hotkeysOnHover }"
+        >{{ item.hotkey }}</span>
       </button>
     </template>
   </div>
@@ -198,6 +248,43 @@ defineExpose({ focusFirst: toStart })
 }
 .menu-list:focus-visible {
   outline: 1px solid var(--ov-border);
+}
+/* Текст выключен: распорка .menu-label убирается совсем. Это главное для
+   соседних режимов (см. ниже) — пустая распорка с flex:1 раздвигала пункт,
+   и между иконкой и хоткеем оставалась дыра во всю ширину карточки. */
+.menu-list--no-label .menu-label {
+  display: none;
+}
+/* Только иконки: карточка по размеру эмодзи и отступов, без нижнего пола.
+   Пункт центрируется, боковые отступы ужаты — иначе двадцать пикселей под
+   иконку получили бы 220. */
+.menu-list--icons {
+  min-width: 0;
+  max-width: 60px;
+}
+.menu-list--icons .menu-item {
+  justify-content: center;
+  gap: 0;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+/* Иконки + хоткеи без текста: карточка по содержимому, иконка и подпись
+   стоят рядом (распорки нет). Ширину задаёт самый длинный пункт, поэтому
+   все подписи начинаются на одной вертикали — столбец. */
+.menu-list--hotkeys {
+  min-width: 0;
+  max-width: 320px;
+}
+/* Без текста отступ хоткея не нужен: он был добавлен к растущему тексту,
+   а здесь подпись идёт сразу за иконкой — оставляем только gap пункта. */
+.menu-list--no-label .menu-hotkey {
+  margin-left: 0;
+}
+/* Иконка + текст + хоткей: шире обычного, чтобы подписи встали столбцом
+   у правого края, а длинное название не переносилось. */
+.menu-list--wide {
+  min-width: 260px;
+  max-width: 480px;
 }
 .menu-item {
   display: flex;
@@ -237,6 +324,32 @@ defineExpose({ focusFirst: toStart })
   /* Длинное название группы переносится, а не растягивает меню. */
   overflow-wrap: anywhere;
   min-width: 0;
+  /* Растягивается и прижимает хоткей к правому краю пункта. Даже когда
+     текст скрыт настройкой, span остаётся распоркой. */
+  flex: 1 1 auto;
+}
+/* Подпись горячей клавиши справа, как в меню Яндекс Браузера. */
+.menu-hotkey {
+  flex-shrink: 0;
+  margin-left: 12px;
+  color: var(--ov-faint);
+  font-size: 12px;
+  /* Табличные цифры и запрет переноса: «Ctrl+Shift+T» — одна подпись,
+     а не две строки. */
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.menu-item:disabled .menu-hotkey { color: #666; }
+/* Режим «только при наведении/выборе»: подпись проявляется на активном
+   пункте. Условие совпадает с подсветкой — курсор мыши ИЛИ выбор
+   стрелками (класс active). */
+.menu-hotkey--hover {
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+.menu-item:hover:not(:disabled) .menu-hotkey--hover,
+.menu-item--active:not(:disabled) .menu-hotkey--hover {
+  opacity: 1;
 }
 .menu-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 </style>

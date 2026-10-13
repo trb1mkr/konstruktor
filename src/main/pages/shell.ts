@@ -62,6 +62,33 @@ export function shell(title: string, body: string, lang: string): string {
   .empty { color: var(--pg-faint); text-align: center; padding: 40px 0; }
   label.set { display: flex; flex-direction: column; gap: 6px; font-size: 14px; margin-top: 16px; }
   div.set { display: flex; flex-direction: column; gap: 8px; font-size: 14px; margin-top: 16px; }
+  /* Таблица горячих клавиш: действие слева, поле сочетания справа. */
+  table.hk-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.hk-table td { padding: 6px 8px; border-bottom: 1px solid var(--pg-border); font-size: 13px; }
+  table.hk-table td:last-child { width: 1%; white-space: nowrap; text-align: right; }
+  table.hk-table input[type="text"] { width: 220px; text-align: center; cursor: pointer; font-family: inherit; }
+  table.hk-table input.hk-input::placeholder { color: var(--pg-faint); font-style: italic; }
+  /* Подсветка строк: дубль сочетания — красный, снятое сочетание —
+     оранжевый. Фон полупрозрачный, чтобы читалось в любой теме; левый
+     кант — тем же цветом, плотнее. */
+  table.hk-table tr.hk-row-dup td { background: rgba(192, 57, 43, 0.18); }
+  table.hk-table tr.hk-row-dup td:first-child { box-shadow: inset 3px 0 0 #c0392b; }
+  table.hk-table tr.hk-row-empty td { background: rgba(209, 131, 42, 0.18); }
+  table.hk-table tr.hk-row-empty td:first-child { box-shadow: inset 3px 0 0 #d1832a; }
+  /* Модальное предупреждение таблицы сочетаний (нативный <dialog>). */
+  dialog.hk-dialog {
+    background: var(--pg-panel); color: var(--pg-text); border: 1px solid var(--pg-input-border);
+    border-radius: 14px; padding: 20px; width: min(420px, 90vw);
+  }
+  dialog.hk-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+  dialog.hk-dialog h3 { margin: 0 0 10px; font-size: 16px; }
+  dialog.hk-dialog p { margin: 0 0 8px; font-size: 13px; }
+  /* Ряд кнопок диалога. Класс свой, а не .row: .row — это строка списка
+     (фон, рамка, отступы), и внутри диалога она рисовала бы чужеродную
+     растянутую рамку вокруг кнопки. Размер кнопки — как у диалога иконки
+     вкладки (DialogForm.vue: 6px 12px, 13px). */
+  dialog.hk-dialog .hk-dialog-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+  dialog.hk-dialog .hk-dialog-actions button { padding: 6px 12px; font-size: 13px; }
   label.check { display: flex; flex-direction: row; align-items: center; gap: 10px; font-size: 14px; margin-top: 16px; cursor: pointer; }
   label.check input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--pg-text); cursor: pointer; }
   .hint { font-size: 12px; color: var(--pg-faint); }

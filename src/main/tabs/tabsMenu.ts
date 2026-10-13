@@ -6,6 +6,7 @@ import { findTab, getState } from '../windows/browserState'
 import { ensureStripToken, removeStripToken } from './stripOrder'
 import { getGroups, createSavedGroup } from '../groups/groupsStore'
 import { showOverlay, type OverlayMenuItem } from '../overlay'
+import { hotkeyLabel } from '../hotkeys'
 import { t } from '../i18n'
 import { createTab, closeTab, pushTabsState, pruneEmptyGroup } from '../windows/deps'
 import { START_URL } from '../pages/internalPages'
@@ -34,8 +35,8 @@ export function registerTabsMenuIpc(): void {
       { id: 'rename', label: t('tabs.rename'), icon: '✏️' },
       { id: 'set-icon', label: t('tabs.changeIcon'), icon: '🖼️' },
       { id: 'copy-url', label: t('tabs.copyUrl'), icon: '🔗' },
-      { id: 'reload', label: t('tabs.reload'), icon: '🔄' },
-      { id: 'close', label: t('tabs.close'), icon: '✕' }
+      { id: 'reload', label: t('tabs.reload'), icon: '🔄', hotkey: hotkeyLabel('reload') },
+      { id: 'close', label: t('tabs.close'), icon: '✕', hotkey: hotkeyLabel('close-tab') }
     ]
     showOverlay(win, {
       kind: 'menu',
@@ -189,7 +190,7 @@ export function registerTabsMenuIpc(): void {
     const ws = win ? getState(win) : undefined
     if (!win || !ws) return
     const items: OverlayMenuItem[] = [
-      { id: 'new-tab', label: t('tabs.newTab'), icon: '＋' },
+      { id: 'new-tab', label: t('tabs.newTab'), icon: '＋', hotkey: hotkeyLabel('new-tab') },
       { id: 'new-group', label: t('groups.menu.new'), icon: '📁' },
       // Подпись про вкладки, а не про группу: это меню панели, а не
       // заголовка группы, и пункт закрывает все вкладки окна.

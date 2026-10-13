@@ -37,6 +37,7 @@ import { getActiveOverlay, closeOverlay, updateActiveOverlay } from '../overlay'
 import { fireExtensionCommand } from '../extensions/bridge'
 import { matchCommands } from '../extensions/commands'
 import { showPageContextMenu, type PageMenuDeps } from './pageMenu'
+import { isHotkeyCapture, matchHotkey } from '../hotkeys'
 import { getSettingsSync } from '../store/settingsStore'
 import { t } from '../i18n'
 import { recordVisit, updateMetadata } from '../store/historyStore'
@@ -243,50 +244,47 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     }
     return { action: 'deny' }
   })
-  // Ctrl+F внутри страницы: перехватываем до сайта и открываем свою панель.
-  // before-input-event не стреляет, если фокус в omnibox/devtools или
-  // страница перехватила keydown — дублируем через menu-роль и Ctrl+F shell.
-  // F11 внутри страницы: Chromium в WebContentsView перехватывает клавишу
-  // сам и не отдает ее сайту — тогглим сценарий из настроек вручную.
-  // F11 без модификаторов в любом фокусе view = toggle fullscreen.
+  // Клавиши вкладки: горячие сочетания из настроек (F12, F11, Ctrl+F,
+  // Ctrl+R/W/T и любые переназначенные) — одним матчером по реестру
+  // действий (shared/hotkey-actions). F12 приходит в webContents, который
+  // сейчас в фокусе: когда фокус в самом DevTools, Chromium обрабатывает
+  // клавишу сам и event сюда не доходит.
+  //
+  // preventDefault обязателен и для гашения акселераторов дефолтного меню
+  // Electron (Ctrl+R там — «Reload»), см. TABS.md «Дефолтное меню
+  // Electron перехватывает Ctrl+R».
   view.webContents.on('before-input-event', (e, input) => {
-    if (
-      input.key === 'F11' &&
-      input.type === 'keyDown' &&
-      !input.control &&
-      !input.meta &&
-      !input.shift &&
-      !input.alt &&
-      ws.window &&
-      !ws.window.isDestroyed()
-    ) {
+    // Захват сочетаний: поле таблицы горячих клавиш в настройках держит
+    // фокус, и ввод сочетания не должен срабатывать как действие. Событие
+    // уходит странице как есть — preventDefault здесь НЕЛЬЗЯ, он погасил
+    // бы и keydown поля (а дефолтное меню Electron гасит уже
+    // setIgnoreMenuShortcuts, см. main/hotkeys.ts).
+    if (isHotkeyCapture(view.webContents)) return
+    const action = matchHotkey(input)
+    if (action !== null) {
       e.preventDefault()
-      deps.toggleFullscreenMode(ws)
-      return
-    }
-    // F12 — DevTools страницы (док справа/снизу, как в Chrome).
-    //
-    // Именно эта точка, а не обработчик окна: F12 приходит в webContents,
-    // который сейчас в фокусе. Когда фокус в самом DevTools, Chromium
-    // обрабатывает клавишу сам и event сюда не доходит — там F12 закрывает
-    // панель штатно, дублировать нечего.
-    if (
-      input.key === 'F12' &&
-      input.type === 'keyDown' &&
-      !input.control &&
-      !input.meta &&
-      !input.shift &&
-      !input.alt &&
-      ws.window &&
-      !ws.window.isDestroyed()
-    ) {
-      e.preventDefault()
-      toggleDevTools(ws, id)
-      pushTabsState(ws)
+      if (action === 'reload') {
+        view.webContents.reload()
+      } else if (action === 'close-tab') {
+        closeTab(ws, deps, id)
+      } else if (action === 'new-tab') {
+        createTab(ws, deps)
+      } else if (action === 'find') {
+        openFindOverlay(ws)
+      } else if (action === 'devtools') {
+        if (ws.window && !ws.window.isDestroyed()) {
+          toggleDevTools(ws, id)
+          pushTabsState(ws)
+        }
+      } else if (action === 'fullscreen') {
+        if (ws.window && !ws.window.isDestroyed()) deps.toggleFullscreenMode(ws)
+      }
       return
     }
     // Масштаб страницы: Ctrl/Cmd + = / - / 0. Физический code, не key —
-    // раскладка (см. FIND.md «Ctrl+F и раскладка»).
+    // раскладка (см. FIND.md «Ctrl+F и раскладка»). Не переназначается:
+    // семейство из трёх сочетаний с допуском shift (на части раскладок `+`
+    // — это Shift+Equal), отдельно от одиночных действий.
     const zoomAct = zoomShortcut(input)
     if (zoomAct !== null) {
       e.preventDefault()
@@ -298,20 +296,13 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     }
     // Команды расширений: сочетание из секции commands манифеста.
     // Проверяются ПОСЛЕ своих горячих клавиш, чтобы расширение не могло
-    // отобрать у браузера F11/F12/Ctrl+F и зум. Событие уходит в фон
-    // расширения через мост, как в Chrome.
+    // отобрать у браузера F11/F12/Ctrl+F, зум и переназначенные сочетания.
+    // Событие уходит в фон расширения через мост, как в Chrome.
     const commandHits = matchCommands(input)
     if (commandHits.length > 0) {
       e.preventDefault()
       for (const hit of commandHits) fireExtensionCommand(hit)
       return
-    }
-    const key = (input.key ?? '').toLowerCase()
-    // code KeyF — физическая клавиша, не зависит от раскладки (русская 'а' = KeyF).
-    const isF = key === 'f' || input.code === 'KeyF'
-    if ((input.control || input.meta) && !input.shift && !input.alt && isF && input.type === 'keyDown') {
-      e.preventDefault()
-      openFindOverlay(ws)
     }
     // Escape при открытой панели поиска: закрываем панель, чистим подсветку.
     if (input.key === 'Escape' && input.type === 'keyDown' && ws.window) {

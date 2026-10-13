@@ -90,7 +90,7 @@ export function buildStartPage(lang: string): string {
     padding: 8px 10px; border-radius: 8px; border: 1px solid var(--pg-input-border);
     background: var(--pg-bg); color: var(--pg-text); outline: none;
   }
-  dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  dialog .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
   dialog button {
     background: var(--pg-btn); color: var(--pg-text); border: none; border-radius: 8px;
     padding: 8px 16px; cursor: pointer;
@@ -125,7 +125,7 @@ ${pageI18nScript(lang)}
     <h3>${t('start.newShortcut')}</h3>
     <label>${t('start.fieldName')}<input id="f-name" placeholder="GitHub" /></label>
     <label>${t('start.fieldUrl')}<input id="f-url" placeholder="https://github.com" spellcheck="false" /></label>
-    <div class="row">
+    <div class="dlg-actions">
       <button id="f-cancel">${t('common.cancel')}</button>
       <button id="f-save" class="primary">${t('common.save')}</button>
     </div>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { MenuItem } from './OverlayRoot.vue'
+import type { MenuDisplay } from '../../shared/overlay-types'
 import MenuList from './components/MenuList.vue'
 
 // Обёртка над MenuList. Существует ради выравнивания по краю меню:
@@ -15,6 +16,11 @@ import MenuList from './components/MenuList.vue'
 defineProps<{
   items: MenuItem[]
   align?: 'start' | 'end'
+  /**
+   * Видимость частей пункта (иконка/текст/хоткей) из настроек. Проброс
+   * «насквозь»: правило живёт в MenuList — единственной вёрстке пункта.
+   */
+  display?: MenuDisplay
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +33,7 @@ const emit = defineEmits<{
     class="browser-menu"
     :class="{ 'align-start': align === 'start' }"
     :items="items"
+    :display="display"
     @select="emit('select', $event)"
   />
 </template>

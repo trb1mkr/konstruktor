@@ -35,8 +35,6 @@ flowchart LR
 
 ## 🛠️ Проблемы и решения
 
-Накопленные грабли этого модуля: причина → следствие.
-
 ### ⌨️ Ctrl+F и раскладка
 
 `input.key` зависит от раскладки (русская `а` = `KeyF`): проверять `input.code === 'KeyF'`. `before-input-event` не стреляет при фокусе в omnibox/devtools — дублировать через `win.webContents.on('before-input-event')`.
