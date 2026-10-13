@@ -48,6 +48,7 @@
     "copyUrl": "Копировать URL",
     "reload": "Обновить",
     "close": "Закрыть вкладку",
+    "closeAll": "Закрыть все вкладки",
     "closedGroup": "{{name}} (закрыта)"
   },
   "groups": {

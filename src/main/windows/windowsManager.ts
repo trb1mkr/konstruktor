@@ -11,10 +11,10 @@
 //   здесь, в store/ оно задержало бы создание первого окна;
 // - сессии/партиции -> browserState (константы) или отдельный модуль,
 //   если появятся правила миграции сессий.
-import { app, BrowserWindow, WebContentsView } from 'electron'
+import { app, BrowserWindow, WebContentsView, screen } from 'electron'
 import { join } from 'path'
 import { windows, type WindowState, INCOGNITO_PARTITION } from './browserState'
-import { getSettings, getSettingsSync, saveSettings } from '../store/settingsStore'
+import { getSettings, getSettingsSync, saveSettings, saveSettingsSync } from '../store/settingsStore'
 import { openFindOverlay } from '../find/findManager'
 import { toggleDevTools } from '../tabs/devtools'
 import { applyZoomToWs, stepActiveZoom, zoomShortcut } from '../zoomManager'
@@ -148,9 +148,67 @@ interface WindowDrag {
   // курсор, если тот взяли не за угол.
   offsetX: number
   offsetY: number
+  // Размер, который надо передавать в setBounds, чтобы окно его НЕ меняло.
+  width: number
+  height: number
+  // Масштаб дисплея, на котором размер калибровался: при переезде на
+  // дисплей с другим масштабом дрейф другой, и калибровка повторяется.
+  scale: number
+  // Последняя применённая позиция. Дедуп без опроса окна: getBounds на
+  // каждый mousemove — лишний round-trip к WM.
+  lastX: number
+  lastY: number
 }
 
-const windowDrag: WindowDrag = { win: null, offsetX: 0, offsetY: 0 }
+const windowDrag: WindowDrag = {
+  win: null,
+  offsetX: 0,
+  offsetY: 0,
+  width: 0,
+  height: 0,
+  scale: 1,
+  lastX: 0,
+  lastY: 0
+}
+
+/**
+ * Подбирает размер, при подстановке которого в setBounds окно сохраняет
+ * текущий размер.
+ *
+ * Окно без рамки получает от WM невидимые границы (зоны ресайза), а
+ * bounds измеряются в DIP. При дробном масштабе дисплея (не 100%)
+ * round-trip "getBounds -> setBounds" каждый раз добавляет эти границы к
+ * размеру заново: окно растёт на пиксели за кадр перетаскивания. Замер
+ * на этом окружении (scaleFactor 0.90625): 808 -> 810 -> 812 -> 814 -> 817
+ * за четыре перетаскивания, и то же при setPosition — он внутри делает
+ * тот же round-trip с текущим размером.
+ *
+ * Подбор идёт от текущих bounds: два-три прохода сходятся к размеру, при
+ * котором окно остаётся прежним. На масштабе 100% дрейфа нет, подбор
+ * выходит из цикла на первом проходе и возвращает исходный размер.
+ */
+function calibrateDragSize(win: BrowserWindow): void {
+  const base = win.getBounds()
+  let w = base.width
+  let h = base.height
+  for (let i = 0; i < 3; i++) {
+    win.setBounds({ x: base.x, y: base.y, width: w, height: h })
+    const r = win.getBounds()
+    const dw = r.width - base.width
+    const dh = r.height - base.height
+    if (dw === 0 && dh === 0) break
+    w -= dw
+    h -= dh
+  }
+  windowDrag.width = w
+  windowDrag.height = h
+  windowDrag.scale = screen.getDisplayMatching(base).scaleFactor
+  // Подбор сам двигает окно: читаем позицию заново, иначе первый mousemove
+  // с прежней координатой счелся бы повтором и был бы пропущен.
+  const cur = win.getBounds()
+  windowDrag.lastX = cur.x
+  windowDrag.lastY = cur.y
+}
 
 /**
  * Захват окна мышью. Дальше renderer шлёт координаты до отпускания.
@@ -165,6 +223,10 @@ export function startWindowDrag(win: BrowserWindow, cursorX: number, cursorY: nu
   const [x, y] = win.getPosition()
   windowDrag.offsetX = Math.round(cursorX - x)
   windowDrag.offsetY = Math.round(cursorY - y)
+  // Размер калибруется один раз на захват, а не на каждый кадр: подбор
+  // двигает само окно, в цикле движения ему не место. Калибровка же
+  // выставляет lastX/lastY по факту.
+  calibrateDragSize(win)
   return true
 }
 
@@ -176,9 +238,21 @@ export function moveWindowDrag(cursorX: number, cursorY: number): void {
   if (win.isMaximized() || win.isFullScreen()) return
   const x = Math.round(cursorX - windowDrag.offsetX)
   const y = Math.round(cursorY - windowDrag.offsetY)
-  // setBounds без animate: анимация окна на Windows видна как задержка
-  // начала перетаскивания, а системное окно едет мгновенно.
-  win.setBounds({ x, y, width: win.getBounds().width, height: win.getBounds().height })
+  if (x === windowDrag.lastX && y === windowDrag.lastY) return
+  // Переезд на дисплей с другим масштабом: дрейф размера там другой,
+  // калибруем заново. Иначе окно продолжало бы расти на другом мониторе.
+  const disp = screen.getDisplayMatching({
+    x,
+    y,
+    width: windowDrag.width,
+    height: windowDrag.height
+  })
+  if (disp.scaleFactor !== windowDrag.scale) calibrateDragSize(win)
+  windowDrag.lastX = x
+  windowDrag.lastY = y
+  // Именно setBounds с калиброванным размером. setPosition не годится:
+  // он внутри берёт текущий размер окна и упирается в тот же round-trip.
+  win.setBounds({ x, y, width: windowDrag.width, height: windowDrag.height })
 }
 
 /** Отпускание кнопки — конец перетаскивания. */
@@ -451,8 +525,12 @@ export function createWindow(
     win.maximize()
   }
 
-  // Геометрия пишется при каждом resize/move обычного окна.
-  // Debounce 500ms: resize шлет десятки событий в секунду.
+  // Геометрия пишется при каждом изменении размера/позиции обычного окна.
+  // Debounce 500ms: события идут десятками в секунду.
+  //
+  // Слушатели парные: 'resized' и 'moved' точны, но по типам Electron
+  // только darwin/win32 — на Linux они не приходят ни разу. 'resize' и
+  // 'move' приходят везде, и debounce делает их такой же редкой записью.
   let boundsTimer: NodeJS.Timeout | null = null
   const persistBounds = () => {
     if (boundsTimer) clearTimeout(boundsTimer)
@@ -463,6 +541,8 @@ export function createWindow(
   }
   win.on('resized', persistBounds)
   win.on('moved', persistBounds)
+  win.on('resize', persistBounds)
+  win.on('move', persistBounds)
   win.on('maximize', () => {
     void saveSettings({ windowMaximized: true }).catch(() => undefined)
   })
@@ -475,17 +555,20 @@ export function createWindow(
     // maximized/fullscreen — только флаг (bounds от таких окон кривые).
     // Сессия вкладок — всегда (кроме инкогнито): закрытие может быть
     // резким, debounce persistSessionTabs мог не успеть.
+    //
+    // Запись СИНХРОННАЯ: за 'close' идут 'window-all-closed' → app.quit()
+    // и выход процесса, а незавершённый writeFile умирает вместе с ним.
+    // На Linux это вообще единственный работающий путь — 'resized'/'moved'
+    // туда не приходят, и асинхронная запись терялась всегда.
     if (getSettingsSync().rememberBounds !== false) {
       if (win.isMaximized() || win.isFullScreen()) {
-        void saveSettings({ windowMaximized: true }).catch(() => undefined)
+        saveSettingsSync({ windowMaximized: true })
       } else {
-        void saveSettings({ windowBounds: win.getBounds(), windowMaximized: false }).catch(
-          () => undefined
-        )
+        saveSettingsSync({ windowBounds: win.getBounds(), windowMaximized: false })
       }
     }
     if (!ws.incognito && getSettingsSync().rememberTabs !== false) {
-      void saveSettings({ sessionTabs: snapshotSessionTabs(ws) }).catch(() => undefined)
+      saveSettingsSync({ sessionTabs: snapshotSessionTabs(ws) })
     }
   })
 

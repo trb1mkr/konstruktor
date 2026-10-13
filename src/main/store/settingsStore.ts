@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { readFile, writeFile, mkdir } from 'fs/promises'
+import { writeFileSync, mkdirSync } from 'fs'
 
 // Настройки браузера: JSON в userData, читаются внутренними страницами
 // и адресной строкой (поисковик). Один источник истины в main.
@@ -102,4 +103,23 @@ export async function saveSettings(patch: Partial<BrowserSettings>): Promise<Bro
   await mkdir(app.getPath('userData'), { recursive: true })
   await writeFile(filePath, JSON.stringify(next, null, 2), 'utf-8')
   return { ...next }
+}
+
+// Синхронная запись для хука 'close' окна: асинхронный saveSettings до
+// выхода процесса не доживает. Цепочка закрытия — 'close' окна →
+// 'window-all-closed' → app.quit() → выход процесса, и незавершённый
+// writeFile теряется вместе с ним. Замер: на Linux это единственный путь
+// сохранения геометрии (события 'resized'/'moved' туда не приходят),
+// поэтому терялась она всегда. Кэш обновляется до записи: значения
+// доступны синхронно даже если запись не удалась.
+export function saveSettingsSync(patch: Partial<BrowserSettings>): void {
+  const next: BrowserSettings = { ...(cache ?? DEFAULTS), ...patch }
+  cache = next
+  filePath = filePath || join(app.getPath('userData'), 'settings.json')
+  try {
+    mkdirSync(app.getPath('userData'), { recursive: true })
+    writeFileSync(filePath, JSON.stringify(next, null, 2), 'utf-8')
+  } catch {
+    // Диск или права — выход из-за этого срывать нельзя.
+  }
 }

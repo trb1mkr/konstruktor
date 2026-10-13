@@ -191,7 +191,9 @@ export function registerTabsMenuIpc(): void {
     const items: OverlayMenuItem[] = [
       { id: 'new-tab', label: t('tabs.newTab'), icon: '＋' },
       { id: 'new-group', label: t('groups.menu.new'), icon: '📁' },
-      { id: 'close-all', label: t('groups.menu.close'), icon: '✕' }
+      // Подпись про вкладки, а не про группу: это меню панели, а не
+      // заголовка группы, и пункт закрывает все вкладки окна.
+      { id: 'close-all', label: t('tabs.closeAll'), icon: '✕' }
     ]
     showOverlay(win, {
       kind: 'menu',

@@ -48,6 +48,7 @@
     "copyUrl": "Copy URL",
     "reload": "Reload",
     "close": "Close tab",
+    "closeAll": "Close all tabs",
     "closedGroup": "{{name}} (closed)"
   },
   "groups": {
