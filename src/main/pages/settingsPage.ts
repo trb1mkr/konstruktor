@@ -110,6 +110,14 @@ export function buildSettingsPage(lang: string): string {
        </button>
      </div>
      <div class="hint">${t('settings.themeHint')}</div></div>
+   <label class="set"><span>${t('settings.webContentTheme')}</span>
+     <select id="wctheme">
+       <option value="follow">${t('settings.webContentFollow')}</option>
+       <option value="light">${t('settings.themeLight')}</option>
+       <option value="dark">${t('settings.themeDark')}</option>
+       <option value="system">${t('settings.themeSystem')}</option>
+     </select>
+     <div class="hint">${t('settings.webContentHint')}</div></label>
    <label class="set"><span>${t('settings.f11')}</span>
      <select id="fsmode">
        <option value="window">${t('settings.f11Window')}</option>
@@ -349,6 +357,7 @@ export function buildSettingsPage(lang: string): string {
      const zoomSyncCb = document.getElementById('zoom-sync-cb');
      const fsmode = document.getElementById('fsmode');
      const themePick = document.getElementById('theme-pick');
+     const wcThemeSel = document.getElementById('wctheme');
      let theme = 'dark';
      function paintTheme() {
        themePick.querySelectorAll('[data-theme-pick]').forEach((b) =>
@@ -395,6 +404,11 @@ export function buildSettingsPage(lang: string): string {
        fsmode.value = s.fullscreenMode === 'content' ? 'content' : 'window';
        theme = s.theme === 'light' || s.theme === 'system' || s.theme === 'slate' ? s.theme : 'dark';
        paintTheme();
+       // Неизвестное значение (битый файл) трактуем как 'follow': так
+       // поведение совпадает с дефолтом, а не с произвольной схемой.
+       wcThemeSel.value = ['light', 'dark', 'system'].includes(s.webContentTheme)
+         ? s.webContentTheme
+         : 'follow';
        dnsWrap.style.display = dns.value === 'custom' ? '' : 'none';
      })();
      document.getElementById('save').addEventListener('click', async () => {
@@ -425,7 +439,8 @@ export function buildSettingsPage(lang: string): string {
          zoomMode: zoomModeSel.value,
          zoomSync: zoomSyncCb.checked,
          fullscreenMode: fsmode.value,
-         theme
+         theme,
+         webContentTheme: wcThemeSel.value
        });
        ok.textContent = savedMsg(dns.value);
        setTimeout(() => (ok.textContent = ''), 3000);

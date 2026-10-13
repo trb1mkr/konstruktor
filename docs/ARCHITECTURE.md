@@ -18,7 +18,7 @@
 - **View** показывает сайт или внутреннюю страницу; остальным слоям его содержимое недоступно.
 - **Оверлей** показывает меню, диалоги, тосты и поиск поверх страницы; данные для них приходят от main.
 
-Каждая поверхность общается с main через свой мост: shell — через `window.browserAPI`, страница — через `window.konstruktor`, окно оверлея — через `window.overlayAPI`. Main отвечает обновлениями: shell присылает состояние интерфейса (`tabs:state`, `settings:changed`, `window:*`), странице — приёмы оформления (`insertCSS`, `executeJavaScript`), оверлею — данные для отрисовки (`payload` в hash).
+Каждая поверхность общается с main через свой мост: shell — через `window.browserAPI`, страница — через `window.konstruktor`, окно оверлея — через `window.overlayAPI`. Main отвечает обновлениями: shell присылает состояние интерфейса (`tabs:state`, `settings:changed`, `window:*`), странице — тему (схема в `nativeTheme`, `dataset.theme` через `executeJavaScript`), оверлею — данные для отрисовки (`payload` в hash).
 
 Схема ниже показывает направления общения: стрелки от поверхностей к main — команды и действия пользователя, стрелки от main к поверхностям — обновления состояния и данные для отрисовки.
 
@@ -28,7 +28,7 @@ flowchart LR
   View[WebContentsView] -->|window.konstruktor| Main
   Overlay[overlay window] -->|window.overlayAPI| Main
   Main -->|tabs:state, settings:changed, window:*| Shell
-  Main -->|insertCSS, executeJavaScript| View
+  Main -->|themeSource, executeJavaScript| View
   Main -->|payload в hash| Overlay
 ```
 

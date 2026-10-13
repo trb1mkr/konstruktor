@@ -7,7 +7,7 @@
 // ЧТО ВЫНОСИТЬ ПРИ РОСТЕ:
 // - IPC-каналы tabs:* -> tabsIpc.ts, меню вкладки -> tabsMenu.ts;
 // - инварианты ряда -> stripOrder.ts, группы -> groups/;
-// - тема/зум/поисковые вызовы остаются точечными (applyThemeToTab,
+// - тема/зум/поисковые вызовы остаются точечными (viewBackgroundFor,
 //   setZoom, openFindOverlay) — свои модули их не импортируют сюда.
 // Сигнал к разделению: новая ветка в createTab, раздувающая партиционный
 // выбор, — вынести в отдельный модуль партиций.
@@ -19,7 +19,7 @@ import {
   type WindowState,
   type TabRecord
 } from '../windows/browserState'
-import { applyThemeToTab, viewBackgroundFor, type ThemeKeySetter } from '../browserTheme'
+import { applyThemeToTab, viewBackgroundFor } from '../browserTheme'
 import { ensureStripToken, removeStripToken, reorderStrip } from './stripOrder'
 import { openFindOverlay } from '../find/findManager'
 import { closeDevToolsFor, toggleDevTools } from './devtools'
@@ -118,9 +118,10 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     }
   })
   // Нативный фон view под тему: дефолт #FFF вспыхивает белым
-  // до первой отрисовки страницы. Красим сразу при создании.
+  // до первой отрисовки страницы. Красим сразу при создании: сайт —
+  // по базовой теме веб-контента, внутренняя страница — по своей.
   try {
-    view.setBackgroundColor(viewBackgroundFor(getSettingsSync().theme ?? 'dark'))
+    view.setBackgroundColor(viewBackgroundFor(url, getSettingsSync().theme ?? 'dark'))
   } catch {
     // Старый Electron без setBackgroundColor у View — игнорим.
   }
@@ -137,8 +138,13 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   // setZoomFactor до did-finish-load отдаёт 1), поэтому подписка на
   // did-finish-load, а не вызов сразу. В isolated-режиме повтор того же
   // значения — no-op, в default перебивает origin-значение нового сайта.
+  // Тема переприменяется там же: инъекция color-scheme живёт на webContents
+  // и на новой навигации перекрывается свежей — так первая же перезагрузка
+  // после смены темы даёт верную used-схему.
   view.webContents.on('did-finish-load', () => {
     if (getSettingsSync().zoomSync) setZoom(view.webContents, seedZoomPercent())
+    const rec = ws.tabs.get(id)
+    if (rec) applyThemeToTab(rec, getSettingsSync().theme ?? 'dark')
   })
   // Вкладка может закрыться сама: страница зовёт window.close() (так делают
   // служебные страницы расширений, например ask.html у Tampermonkey), и
@@ -159,11 +165,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   // Начальная геометрия сразу, иначе view с нулевыми bounds до первого layout:update.
   deps.layoutView(ws, view)
   // Тема новой вкладки — сразу текущая, без ожидания смены настроек.
-  const setKey: ThemeKeySetter = (k) => {
-    const live = ws.tabs.get(id)
-    if (live) live.themeKey = k
-  }
-  applyThemeToTab(ws.tabs.get(id)!, getSettingsSync().theme ?? 'dark', setKey)
+  applyThemeToTab(ws.tabs.get(id)!, getSettingsSync().theme ?? 'dark')
 
   view.webContents.on('did-navigate', (_e, navUrl) => {
     const rec = ws.tabs.get(id)

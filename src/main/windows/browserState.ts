@@ -35,7 +35,8 @@ export interface TabData {
   // их не затирали. В UI уходит custom ?? page.
   customTitle?: string
   customFavicon?: string
-  // Ключ последнего insertCSS темы (color-scheme) — для снятия при смене.
+  // Ключ последнего insertCSS с used-схемой (color-scheme) — для снятия
+  // при смене темы (см. applyColorSchemeToTab в browserTheme).
   themeKey?: string
   // Открытый экземпляр группы: ссылка на шаблон в groups.json.
   groupId?: string

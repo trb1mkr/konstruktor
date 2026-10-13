@@ -21,6 +21,11 @@ export interface BrowserSettings {
   animations: boolean
   // Тема shell: dark | light | system | slate. Оверлей читает для своих панелей.
   theme: string
+  // Базовая тема веб-контента (сайты + окна расширений):
+  // follow | dark | light | system. 'follow' — база темы браузера
+  // (см. browserTheme.THEME_SCHEME), остальное — прямой override.
+  // Внутренних страниц konstruktor:// не касается.
+  webContentTheme: string
   // Скругление углов окна в оконном режиме. По дефолту выключено:
   // низ скругляется только через прозрачную полосу под WebContentsView.
   roundedCorners: boolean
@@ -74,6 +79,7 @@ const DEFAULTS: BrowserSettings = {
   locale: 'auto',
   animations: true,
   theme: 'dark',
+  webContentTheme: 'follow',
   roundedCorners: false,
   fullscreenMode: 'window',
   rememberBounds: true,

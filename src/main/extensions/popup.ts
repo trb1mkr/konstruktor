@@ -13,6 +13,7 @@ import { BrowserWindow, ipcMain, screen } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { NORMAL_PARTITION, getState } from '../windows/browserState'
+import { webContentBackground, effectiveColorScheme } from '../browserTheme'
 import { logError } from '../overlay/logger'
 import { dispatchExtensionRpc } from './bridge'
 import { findExtensionRecord } from './extensionStore'
@@ -216,6 +217,11 @@ export async function openActionPopup(params: {
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
+    // Фон окна — по базовой теме веб-контента: попап расширения это
+    // веб-контент. Без явного цвета окно стартует белым и мигает
+    // при тёмной схеме (и наоборот). Схему prefers-color-scheme внутри
+    // попапа ведет nativeTheme.themeSource — см. browserTheme.ts.
+    backgroundColor: webContentBackground(),
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
     webPreferences: {
@@ -230,6 +236,13 @@ export async function openActionPopup(params: {
   const wcId = popupWin.webContents.id
   if (popupTab) popupTabInfo.set(wcId, popupTab)
   popupWin.on('closed', () => popupTabInfo.delete(wcId))
+  // Used-схема попапа: цвет ползунка, формы, канвас. prefers-color-scheme
+  // внутри него ведет nativeTheme.themeSource (см. browserTheme.ts).
+  void popupWin.webContents
+    .insertCSS(`:root { color-scheme: ${effectiveColorScheme()} !important; }`, {
+      cssOrigin: 'author'
+    })
+    .catch(() => undefined)
 
   let opened = false
   // Окно получает фокус после show(), и первое же событие blur может

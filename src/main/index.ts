@@ -21,7 +21,8 @@ import { registerExtensionsIpc } from './extensions/ipc'
 import { initExtensions, shutdownExtensions } from './extensions/manager'
 import { watchPaintedOnce } from './overlay/service'
 import { initI18n } from './i18n'
-import { watchSystemTheme } from './browserTheme'
+import { watchSystemTheme, applyWebContentScheme } from './browserTheme'
+import { getSettings } from './store/settingsStore'
 import { applySecureDns, dnsServersFor } from './store/dnsConfig'
 import { setupDiagnostics } from './diagnostics'
 
@@ -67,6 +68,11 @@ void app.whenReady().then(async () => {
   // Язык интерфейса: init до регистрации страниц и первого окна —
   // иначе сборки страниц и меню ушли бы на неготовом i18next.
   await initI18n()
+  // Базовая тема веб-контента в Chromium ДО первого окна: иначе первая
+  // вкладка отрисуется по теме ОС, а не по настройке. Заодно наполняет
+  // кэш настроек: getSettingsSync() на холодном старте отдавал дефолты,
+  // и фон первой вкладки всегда был тёмным независимо от темы.
+  applyWebContentScheme(await getSettings())
   // Внутренние страницы: один хендл на схему + preload в каждом фрейме.
   // Обе регистрации идут на всех трех партициях: protocol.handle и
   // registerPreloadScript привязаны к сессии, иначе view с

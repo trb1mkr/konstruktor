@@ -19,6 +19,7 @@
 | `KONSTRUKTOR_EXT_MENU_MS=N` | Открыть меню расширений через `N` мс после старта |
 | `KONSTRUKTOR_EXT_POPUP_MS=N` | Открыть попап первого расширения с `default_popup` через `N` мс |
 | `KONSTRUKTOR_APP_QUIT_MS=N` | Корректно завершить приложение через `N` мс |
+| `THEME_DEBUG=1` | Лог резолва темы: схема веб-контента и обновления темы ОС |
 
 `OVERLAY_DEBUG` разбирается в `overlay/logger.ts`, остальные флаги — в `diagnostics.ts` и `overlay/pool.ts`. Логи оверлея описаны ниже, задержка загрузки — в [OVERLAY.md](../overlay/OVERLAY.md) (проверка буфера push).
 

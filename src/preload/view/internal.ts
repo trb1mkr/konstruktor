@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('konstruktor', {
   // Захват сочетаний на время редактирования горячих клавиш: пока поле в
   // фокусе, браузерные сочетания молчат (см. src/main/hotkeys.ts).
   setHotkeyCapture: (on: boolean) => ipcRenderer.invoke('hotkeys:capture', on),
+  // Тема внутренней страницы, разрешенная в main (см. THEMES.md).
+  // Не matchMedia: базовая тема веб-контента может перекрывать
+  // nativeTheme.themeSource, и медиазапрос вернул бы схему сайтов.
+  pageTheme: (): Promise<string> => ipcRenderer.invoke('theme:page'),
   saveSettings: (patch: {
     searchEngine?: string
     homepage?: string
@@ -34,6 +38,7 @@ contextBridge.exposeInMainWorld('konstruktor', {
     locale?: string
     animations?: boolean
     theme?: string
+    webContentTheme?: string
     roundedCorners?: boolean
     fullscreenMode?: string
     rememberBounds?: boolean

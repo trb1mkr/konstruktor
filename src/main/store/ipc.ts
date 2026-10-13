@@ -24,11 +24,11 @@ import {
   newDownloadId,
   type DownloadEntry
 } from './downloadsStore'
-import { getSettings, saveSettings } from './settingsStore'
+import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { setHotkeyCapture } from '../hotkeys'
 import { getShortcuts, addShortcut, removeShortcut } from './shortcutsStore'
 import { setLocalePreference, t } from '../i18n'
-import { applyThemeToViews } from '../browserTheme'
+import { applyThemeToViews, applyWebContentScheme, effectivePageTheme } from '../browserTheme'
 import { applyZoomToWs, percentOf, zoomModeFor } from '../zoomManager'
 import { applyExtensionsEnabled } from '../extensions/manager'
 import { showOverlay } from '../overlay'
@@ -112,6 +112,15 @@ export function registerStoresIpc(): void {
   })
   // Настройки браузера.
   ipcMain.handle('settings:get', () => getSettings())
+  // Резолв темы внутренней страницы конструктором (см. THEMES.md).
+  //
+  // Странице нужен именно разрешенный вариант: matchMedia внутри нее
+  // не годится: nativeTheme.themeSource может быть перекрыт базовой
+  // темой веб-контента, и медиазапрос вернул бы схему сайтов, а не
+  // страницы. Канал async: sync-IPC видят и обычные сайты (прелоад
+  // регистрируется на всю сессию), а блокировать main из чужого
+  // документа нельзя.
+  ipcMain.handle('theme:page', () => effectivePageTheme(getSettingsSync().theme ?? 'dark'))
   ipcMain.handle(
     'settings:save',
     async (
@@ -125,6 +134,7 @@ export function registerStoresIpc(): void {
         locale?: string
         animations?: boolean
         theme?: string
+        webContentTheme?: string
         roundedCorners?: boolean
         fullscreenMode?: string
         rememberBounds?: boolean
@@ -150,6 +160,7 @@ export function registerStoresIpc(): void {
       // Смена темы обновляет color-scheme открытых сайтов (см. applyThemeToViews).
       if (
         patch.theme !== undefined ||
+        patch.webContentTheme !== undefined ||
         patch.roundedCorners !== undefined ||
         patch.fullscreenMode !== undefined ||
         patch.locale !== undefined ||
@@ -171,7 +182,12 @@ export function registerStoresIpc(): void {
             hotkeys: next.hotkeys
           })
         }
-        if (patch.theme !== undefined) applyThemeToViews(next.theme)
+        if (patch.theme !== undefined || patch.webContentTheme !== undefined) {
+          // Сначала схема в Chromium (prefers-color-scheme сайтов и окон
+          // расширений), потом перекраска view и внутренних страниц.
+          applyWebContentScheme(next)
+          applyThemeToViews(next.theme)
+        }
       }
       // Режим зума применяется к уже открытым view сразу: политика —
       // свойство webContents, а не partition, и без sweep новая настройка

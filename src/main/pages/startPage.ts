@@ -101,14 +101,11 @@ export function buildStartPage(lang: string): string {
 </style>
 ${pageI18nScript(lang)}
 <script>
-  // Тема shell применяется к стартовой странице до отрисовки.
+  // Тема стартовой страницы приходит из main разрешенной (см. theme:page):
+  // она НЕ следует за базовой темой веб-контента.
   try {
-    window.konstruktor?.getSettings?.().then((s) => {
-      const t = s.theme ?? 'dark';
-      const eff = t === 'system'
-        ? (window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-        : (t === 'slate' || t === 'light' ? t : 'dark');
-      document.documentElement.dataset.theme = eff;
+    window.konstruktor?.pageTheme?.().then((eff) => {
+      document.documentElement.dataset.theme = eff || 'dark';
     });
   } catch { /* дефолт dark */ }
 </script>

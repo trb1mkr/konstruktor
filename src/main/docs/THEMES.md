@@ -1,30 +1,48 @@
 # 🎨 Темы
 
-Документ описывает темы браузера: набор, резолв, применение к сайтам и внутренним страницам.
+Документ описывает темы браузера: набор, резолв, применение к сайтам, окнам расширений и внутренним страницам.
 
 ## 🧩 Набор тем
 
-Поддерживаются `dark`, `light`, `system`, `slate`. Хранение идет в `settingsStore.ts`, shell читает через `useTheme.ts`, оверлей через payload, внутренние страницы через `getSettings`.
+Тема интерфейса: `dark`, `light`, `system`, `slate`. Хранение идет в `settingsStore.ts`, shell читает через `useTheme.ts`, оверлей через payload, внутренние страницы через канал `theme:page`.
+
+Базовая тема веб-контента: `follow`, `dark`, `light`, `system` (поле `webContentTheme` там же). Она задает схему сайтов и окон расширений и не меняет интерфейс браузера.
 
 ## 🔄 Резолв
 
-`system` резолвится в `dark` или `light`: main через `nativeTheme`, renderer и страницы через `matchMedia`. `slate` остается собой везде, кроме сайтов, где маппится в `dark` color-scheme.
+Тема интерфейса `system` резолвится в `dark` или `light`: main через `nativeTheme`, renderer через `matchMedia`. `slate` остается собой везде, кроме веб-контента, где получает базу `dark`.
+
+У каждой темы объявлена база в `THEME_SCHEME` (`browserTheme.ts`): `dark -> dark`, `light -> light`, `slate -> dark`, `system -> system`. Цветная тема обязана объявить базу явно: `prefers-color-scheme` знает только `dark` и `light`, и без записи в таблице новая тема молча получит `dark`.
+
+Тема ОС для резолва `system` читается отдельно (переменная `osDark`): `nativeTheme.shouldUseDarkColors` отражает `themeSource`, а не ОС, поэтому при выставленном override по нему системную тему не узнать.
 
 ```mermaid
 flowchart LR
-  Set[settings.theme] --> Res{тема}
-  Res -->|light| L[light]
-  Res -->|slate| S[slate]
-  Res -->|system| OS{ОС темная?}
-  OS -->|да| D[dark]
-  OS -->|нет| L
-  Res -->|иначе| D
+  WCT[webContentTheme] -->|follow| TS[THEME_SCHEME темы браузера]
+  WCT -->|dark / light / system| OV[override]
+  TS --> NS[nativeTheme.themeSource]
+  OV --> NS
+  NS -->|dark| D[сайты dark]
+  NS -->|light| L[сайты light]
+  NS -->|system| OS{тема ОС}
+  OS -->|тёмная| D
+  OS -->|светлая| L
 ```
 
-## 🌐 Сайты
+## 🌐 Сайты и окна расширений
 
-`browserTheme.ts` прокидывает `color-scheme` через `insertCSS` во все view. Работает только для сайтов, уважающих `prefers-color-scheme`. Смена темы ОС при `system` пересчитывается через `nativeTheme.updated`. Нативный фон view красится через `viewBackgroundFor` + `setBackgroundColor` при создании вкладки и при смене темы: иначе пустая view вспыхивает белым до первой отрисовки.
+Схема веб-контента ставится двумя механизмами, и одного мало.
+
+`nativeTheme.themeSource` переключает `prefers-color-scheme` во всех webContents сразу, включая уже загруженные: по нему выбирает палитру большинство сайтов (GitHub, Wikipedia, MDN). Смена доезжает до renderer асинхронно.
+
+CSS-свойство `color-scheme` задает used-схему документа: цвет ползунка, форм, канваса и ветку `light-dark()` / системных цветов. Применяется инъекцией `insertCSS` — синхронно, поэтому действует с первой же перезагрузки. Медиазапрос оно не переключает: без `themeSource` сайты на media-запросах остались бы от темы ОС.
+
+`browserTheme.ts` держит обе точки: `applyWebContentScheme` (themeSource) вызывается при старте — до первого окна, иначе первая вкладка отрисуется по теме ОС — и на каждом изменении темы; `applyThemeToTab` (инъекция) — при создании вкладки и на каждом `did-finish-load`, поэтому первая же перезагрузка после смены темы даёт верную used-схему. Смена темы ОС при `system` пересчитывается через `nativeTheme.updated`.
+
+Нативный фон view красится через `viewBackgroundFor` + `setBackgroundColor` при создании вкладки и при смене темы: иначе пустая view вспыхивает белым до первой отрисовки. Окно попапа расширения получает тот же цвет как `backgroundColor` и ту же used-схему через `insertCSS`.
+
+Работает только для сайтов, которые уважают `prefers-color-scheme` или объявляют `color-scheme`. Сайты с захардкоженными цветами и `color-scheme: only light` не изменятся.
 
 ## 📄 Внутренние страницы
 
-`konstruktor://` читают тему при загрузке и ставят `dataset.theme`. При смене настроек main проставляет тему вживую через `executeJavaScript` без перезагрузки. Новая вкладка получает текущую тему сразу через `applyThemeToTab`.
+`konstruktor://` читают тему при загрузке через канал `theme:page` (main разрешает ее по теме интерфейса) и ставят `dataset.theme`. Базовая тема веб-контента на них не действует — настройка задана только для сайтов и окон расширений. `matchMedia` внутри страницы не годится: `themeSource` может быть перекрыт базовой темой, и медиазапрос вернул бы схему сайтов. При смене настроек main проставляет тему вживую через `executeJavaScript` без перезагрузки.
