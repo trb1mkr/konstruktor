@@ -33,8 +33,8 @@ const props = withDefaults(
   }>(),
   {
     modelValue: -1,
-    display: () => ({ icons: true, labels: true, hotkeys: true, hotkeysOnHover: false })
-  }
+    display: () => ({ icons: true, labels: true, hotkeys: true, hotkeysOnHover: false }),
+  },
 )
 
 const emit = defineEmits<{
@@ -52,7 +52,7 @@ const active = ref(props.modelValue >= 0 ? props.modelValue : 0)
 const selectable = computed(() =>
   props.items
     .map((item, index) => (item.disabled || item.separator ? -1 : index))
-    .filter((i) => i >= 0)
+    .filter((i) => i >= 0),
 )
 
 // Ширина карточки по схеме отображения.
@@ -74,8 +74,12 @@ const selectable = computed(() =>
 const widthMode = computed(() => {
   const hasHotkeys =
     props.display.hotkeys && props.items.some((item) => !item.separator && item.hotkey)
-  if (props.display.labels) return hasHotkeys ? 'wide' : 'default'
-  return hasHotkeys ? 'hotkeys' : 'icons'
+  // Кнопка-действие расширяет карточку так же, как подпись хоткея: она
+  // стоит справа от текста и своей шириной сдвигала бы подпись длинного
+  // пункта, если бы карточка считалась только по хоткеям.
+  const hasAction = props.items.some((item) => !item.separator && item.actionIcon)
+  if (props.display.labels) return hasHotkeys || hasAction ? 'wide' : 'default'
+  return hasHotkeys || hasAction ? 'hotkeys' : 'icons'
 })
 
 function step(delta: number): void {
@@ -123,6 +127,23 @@ function activate(index: number): void {
   emit('select', item.id)
 }
 
+// Наведение мышью переводит выбор на пункт: подсветка показывает, что
+// пункт нажимается. У строки-справки (plain) нажимается только кнопка
+// справа, поэтому наведение НЕ делает её активной — иначе имя разрешения
+// подсвечивалось бы как кнопка, а это текст.
+function onEnter(index: number, item: MenuItem): void {
+  if (item.plain) return
+  if (active.value !== index) active.value = index
+}
+
+// Клик по строке. Строку-справку не нажимаем: единственное её действие
+// живёт в кнопке-корзине, а выбор строки в логе выглядел бы как выбор
+// пункта меню — то есть как другой действие.
+function onClick(index: number, item: MenuItem): void {
+  if (item.plain) return
+  activate(index)
+}
+
 // Первая буква переходит к следующему пункту, начинающемуся с неё —
 // как в обычных меню. Приёмка не требовала, но без неё список из
 // двадцати пунктов просматривается только стрелками.
@@ -156,8 +177,8 @@ function onKey(e: KeyboardEvent): void {
       activate(active.value)
       return
     default:
-      // Ничего не делаем: Escape ловится на родителе окна, он должен
-      // работать и когда фокус в списке.
+    // Ничего не делаем: Escape ловится на родителе окна, он должен
+    // работать и когда фокус в списке.
   }
 }
 
@@ -193,7 +214,7 @@ defineExpose({ focusFirst: toStart })
       'menu-list--icons': widthMode === 'icons',
       'menu-list--hotkeys': widthMode === 'hotkeys',
       'menu-list--wide': widthMode === 'wide',
-      'menu-list--no-label': !display.labels
+      'menu-list--no-label': !display.labels,
     }"
     role="menu"
     tabindex="0"
@@ -202,15 +223,25 @@ defineExpose({ focusFirst: toStart })
   >
     <template v-for="(item, index) in items" :key="item.id">
       <div v-if="item.separator" class="menu-separator" role="separator" />
-      <button
+      <!-- Строка-справка (item.plain) — div, а не button: её действие
+           живёт в отдельной кнопке справа, а кнопка в кнопке невалидна.
+           Стрелками строка по-прежнему выбирается, и Enter выполняет то
+           же, что корзина: иначе снять решение с клавиатуры было бы
+           нечем — мышь целится в кнопку, клавиатура в строку. -->
+      <component
+        :is="item.plain ? 'div' : 'button'"
         v-else
         class="menu-item"
-        :class="{ 'menu-item--active': index === active }"
+        :class="{
+          'menu-item--active': index === active,
+          'menu-item--heading': item.heading,
+          'menu-item--plain': item.plain,
+        }"
         role="menuitem"
-        :disabled="item.disabled"
+        :disabled="item.plain ? undefined : item.disabled"
         :tabindex="index === active ? 0 : -1"
-        @click="activate(index)"
-        @mouseenter="index === active || (active = index)"
+        @click="onClick(index, item)"
+        @mouseenter="onEnter(index, item)"
       >
         <span v-if="display.icons" class="menu-icon">
           <span v-if="item.color" class="menu-dot" :style="{ background: item.color }" />
@@ -220,12 +251,28 @@ defineExpose({ focusFirst: toStart })
              пункт и прижимает хоткей к правому краю. Без него подпись
              хоткея встала бы вплотную к иконке. -->
         <span class="menu-label">{{ display.labels ? item.label : '' }}</span>
+        <!-- Кнопка-действие справа (🗑️ у разрешений). У строки-справки это
+             настоящая кнопка (родитель — div), у обычного пункта — span
+             с role=button: вложенная в кнопку кнопка была бы невалидной
+             разметкой. Клик гасим (stop), чтобы он не считался выбором
+             пункта. -->
+        <component
+          :is="item.plain ? 'button' : 'span'"
+          v-if="item.actionIcon"
+          class="menu-action"
+          :type="item.plain ? 'button' : undefined"
+          :role="item.plain ? undefined : 'button'"
+          :title="item.actionTitle ?? ''"
+          @click.stop="emit('select', item.id)"
+          >{{ item.actionIcon }}</component
+        >
         <span
           v-if="display.hotkeys && item.hotkey"
           class="menu-hotkey"
           :class="{ 'menu-hotkey--hover': display.hotkeysOnHover }"
-        >{{ item.hotkey }}</span>
-      </button>
+          >{{ item.hotkey }}</span
+        >
+      </component>
     </template>
   </div>
 </template>
@@ -299,11 +346,36 @@ defineExpose({ focusFirst: toStart })
   border-radius: 8px;
   cursor: pointer;
 }
-.menu-item:hover:not(:disabled) { background: var(--ov-hover); }
+.menu-item:hover:not(:disabled):not(.menu-item--plain) {
+  background: var(--ov-hover);
+}
 /* Активный пункт держит подсветку и без наведения мыши: при навигации
    стрелками курсор стоит в стороне, иначе активный пункт не виден. */
-.menu-item--active:not(:disabled) { background: var(--ov-hover); }
-.menu-item:disabled { color: #666; cursor: default; }
+.menu-item--active:not(:disabled) {
+  background: var(--ov-hover);
+}
+.menu-item:disabled {
+  color: #666;
+  cursor: default;
+}
+/* Подзаголовок группы: цвет и размер как у обычного пункта. Затемнение
+   disabled к заголовку не применяется — на тёмной теме (#666) он читался
+   хуже списка, который делит. Правило идёт ПОСЛЕ .menu-item:disabled:
+   специфичность у них равная, решает порядок. */
+.menu-item--heading:disabled {
+  color: var(--ov-text);
+}
+.menu-item--heading {
+  cursor: default;
+}
+/* Строка-справка: имя разрешения — обычный текст, а не кнопка. Подсветка
+   при наведении снята (она обещает клик), курсор обычный. Подсветку
+   ВЫБОРА строка сохраняет: стрелки на неё встают, и без неё с клавиатуры
+   не видно, где стоишь, а Enter на строке снимает решение.
+   Правило идёт ПОСЛЕ :hover — иначе не перебило бы его по специфичности. */
+.menu-item--plain {
+  cursor: default;
+}
 /* Разделитель: та же ширина карточки минус внутренние поля, что у пункта,
    иначе линия была бы короче текста и выглядела бы опечаткой. */
 .menu-separator {
@@ -339,7 +411,9 @@ defineExpose({ focusFirst: toStart })
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.menu-item:disabled .menu-hotkey { color: #666; }
+.menu-item:disabled .menu-hotkey {
+  color: #666;
+}
 /* Режим «только при наведении/выборе»: подпись проявляется на активном
    пункте. Условие совпадает с подсветкой — курсор мыши ИЛИ выбор
    стрелками (класс active). */
@@ -351,5 +425,36 @@ defineExpose({ focusFirst: toStart })
 .menu-item--active:not(:disabled) .menu-hotkey--hover {
   opacity: 1;
 }
-.menu-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.menu-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+/* Кнопка-действие справа: ОТДЕЛЬНАЯ квадратная кнопка рядом с текстом, а
+   не часть строки. Квадрат фиксированной величины, а не паддинг по
+   тексту: эмодзи в строчном span резался по высоте, и кнопка читалась
+   как узкая полоска. Рамка видна всегда — иначе действие читается как
+   украшение строки, а не как то, что можно нажать. */
+.menu-action {
+  flex-shrink: 0;
+  margin-left: 8px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--ov-border);
+  border-radius: 6px;
+  color: var(--ov-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1;
+}
+.menu-action:hover {
+  background: var(--ov-btn-hover);
+}
 </style>

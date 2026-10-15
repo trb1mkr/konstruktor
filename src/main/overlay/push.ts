@@ -52,7 +52,9 @@ export function provisionalSize(request: OverlayRequest): { width: number; heigh
       ? 2
       : request.kind === 'extensions'
         ? (request.extensions?.items.length ?? 0) + 1
-        : 1
+        : request.kind === 'permission'
+          ? (request.permission?.lines.length ?? 0) + 2
+          : 1
   const estimated = Math.max(rows, 6)
   return { width: spec.width, height: Math.min(estimated * MENU_ROW_FALLBACK_H, MAX_PROVISIONAL_H) }
 }
@@ -347,6 +349,19 @@ export function overlayModel(request: OverlayRequest): OverlayModel {
     return {
       view: 'extensions',
       extensions: request.extensions ?? { items: [], enabled: true }
+    }
+  }
+  if (request.kind === 'permission') {
+    return {
+      view: 'permission',
+      permission: request.permission ?? {
+        host: '',
+        origin: '',
+        lines: [],
+        buttons: [],
+        rememberLabel: '',
+        ephemeral: false
+      }
     }
   }
   return { view: 'toast', toast: request.toast ?? { title: '' } }

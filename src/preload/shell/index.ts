@@ -14,6 +14,13 @@ export interface TabInfo {
   // Масштаб страницы в процентах (100 = обычный). undefined = старое
   // состояние без зума, трактуется как 100.
   zoom?: number
+  // Активный захват медиа вкладкой: камера, микрофон, экран. Приходит
+  // из main (permissions/captureIndicator.ts) и управляет индикатором
+  // в адресной строке.
+  capturing?: { audio: boolean; video: boolean; screen: boolean }
+  // Решения по разрешениям сайта вкладки: область, значение и иконка.
+  // Иконку считает main — таблица областей живёт там же.
+  permissions?: { scope: string; value: string; icon: string }[]
 }
 
 export interface OpenGroupInfo {
@@ -159,6 +166,16 @@ const browserAPI = {
   // content-области окна (контракт menu:popup кнопки ☰).
   zoomPopup: (anchor: { x: number; y: number }): void =>
     ipcRenderer.send('zoom:popup', anchor),
+  // Меню разрешений сайта под бейджем в адресной строке: что этот сайт уже
+  // получил и сброс решений. Тот же контракт якоря, что у попапа зума.
+  permissionsMenu: (anchor: { x: number; y: number }): void =>
+    ipcRenderer.send('permissions:menu', anchor),
+  // Левый нижний угол адресной строки в координатах содержимого окна.
+  // Нужен промпту разрешения: он встаёт под адресной строкой, а main
+  // положение панели внутри окна не знает — пресеты кладут её и сверху,
+  // и снизу (см. permissions/permissionManager.ts, anchorFor).
+  reportAddressAnchor: (anchor: { x: number; y: number }): void =>
+    ipcRenderer.send('permissions:anchor', anchor),
   // Ручное перетаскивание окна (вместо -webkit-app-region: drag).
   //
   // Координаты курсора — экранные (screenX/screenY), потому что окно

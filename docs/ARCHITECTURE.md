@@ -44,6 +44,7 @@ src/
     find/             поиск по странице: findInPage и собственный DOM-поиск
     store/            JSON-хранилища в userData и Secure DNS
     pages/            внутренние страницы konstruktor://: роутинг, HTML, preload на сессиях
+    permissions/      разрешения страниц: таблица, промпт, хранилище, индикатор захвата
     docs/             документация систем main, у которых нет своей папки
   preload/            прелоады: мосты между main и тремя поверхностями renderer
     shell/            мост интерфейса: window.browserAPI

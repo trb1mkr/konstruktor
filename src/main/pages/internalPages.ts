@@ -1,13 +1,14 @@
 // Внутренние страницы конструктора. Отдаются через konstruktor://start,
-// history, settings и downloads без внешних ресурсов — работают офлайн.
-// Рендерятся внутри WebContentsView как обычные вкладки.
+// history, settings, downloads, permissions без внешних ресурсов —
+// работают офлайн. Рендерятся внутри WebContentsView как обычные вкладки.
 //
 // Каждая страница собирается функцией от языка: HTML запекается на
 // запрос (а не при импорте модуля), статические строки переводятся t(),
 // динамические внутри <script> — встроенным tr() из shared/i18n/pageRuntime.
 //
 // Состав: общий каркас — shell.ts, по одному файлу на страницу
-// (startPage/historyPage/settingsPage/downloadsPage), хост — protocol.ts.
+// (startPage/historyPage/settingsPage/downloadsPage/permissionsPage),
+// хост — protocol.ts.
 //
 // ГРАНИЦА ФАЙЛА: только URL-константы и реэкспорт builder'ов —
 // единственный вход для protocol.ts, tabsIpc, browserMenu и всех,
@@ -19,9 +20,11 @@ export const HISTORY_URL = 'konstruktor://history'
 export const SETTINGS_URL = 'konstruktor://settings'
 export const DOWNLOADS_URL = 'konstruktor://downloads'
 export const EXTENSIONS_URL = 'konstruktor://extensions'
+export const PERMISSIONS_URL = 'konstruktor://permissions'
 
 export { START_URL, buildStartPage } from './startPage'
 export { buildHistoryPage } from './historyPage'
 export { buildSettingsPage } from './settingsPage'
 export { buildDownloadsPage } from './downloadsPage'
 export { buildExtensionsPage } from './extensionsPage'
+export { buildPermissionsPage } from './permissionsPage'

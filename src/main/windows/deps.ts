@@ -22,6 +22,7 @@ import {
 import { toggleFullscreenMode as toggleFullscreen } from './fullscreen'
 import { closeOverlayOnTabChange, showOverlay } from '../overlay'
 import { inspectElementAt } from '../tabs/devtools'
+import { handleTabChange, pumpPrompts } from '../permissions/permissionManager'
 import type { PageMenuDeps } from '../tabs/pageMenu'
 import { START_URL } from '../pages/internalPages'
 import { registerExtensionHost } from '../extensions/bridge'
@@ -88,8 +89,15 @@ export function setActiveTab(ws: WindowState, id: number): void {
   // после этого отдаёт фокус VIEW новой вкладки — то есть последним
   // решением остаётся правильный. Наоборот, view не смог бы забрать
   // фокус: после closeOverlay он был бы перебит window.focus().
+  // Промпт разрешения, показанный на прежней вкладке, скрывается, а не
+  // отменяется: возврат на вкладку вернёт и промпт. Метка ставится ДО
+  // переключения, пока ws.activeTabId ещё указывает на прежнюю вкладку.
+  handleTabChange(ws)
   if (ws.window) closeOverlayOnTabChange(ws.window, id)
   setActiveTabRaw(ws, tabsDeps, id)
+  // На новой активной вкладке может ждать свой промпт (он был скрыт
+  // переключением ранее).
+  pumpPrompts(ws)
 }
 
 export function closeTab(ws: WindowState, id: number): void {

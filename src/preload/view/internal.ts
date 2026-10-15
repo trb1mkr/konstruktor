@@ -81,7 +81,34 @@ contextBridge.exposeInMainWorld('konstruktor', {
     const listener = (_e: unknown, state: ExtensionsState): void => cb(state)
     ipcRenderer.on('extensions:state', listener as never)
     return () => ipcRenderer.removeListener('extensions:state', listener as never)
-  }
+  },
+  // Разрешения сайтов: страница konstruktor://settings читает решения и
+  // сбрасывает их. Промпт разрешения открывает main — страницы его не
+  // касаются.
+  permissionsList: () => ipcRenderer.invoke('permissions:list'),
+  permissionsClearOrigin: (origin: string) =>
+    ipcRenderer.invoke('permissions:clear-origin', origin),
+  // Снятие ОДНОЙ области: остальные решения сайта остаются, и промпт
+  // вернётся только для снятой области.
+  permissionsClearScope: (origin: string, scope: string) =>
+    ipcRenderer.invoke('permissions:clear-scope', origin, scope),
+  permissionsClearAll: () => ipcRenderer.invoke('permissions:clear-all')
+})
+
+// Отчёт страницы о захвате медиа.
+//
+// Обёртка на mediaDevices (её кладёт main в ГЛАВНЫЙ мир страницы, см.
+// permissions/captureIndicator.ts) шлёт window.postMessage — из главного
+// мира другого канала нет. DOM-событие видят все миры документа, поэтому
+// изолированный мир прелоада его получает и пересылает в main.
+//
+// Проверяем метку и вид: без этого любое сообщение страницы становилось
+// бы отчётом о захвате.
+window.addEventListener('message', (e: MessageEvent) => {
+  const data = e.data as { __konstruktorCapture?: boolean; kind?: string; active?: boolean } | null
+  if (!data || data.__konstruktorCapture !== true) return
+  if (data.kind !== 'audio' && data.kind !== 'video' && data.kind !== 'screen') return
+  ipcRenderer.send('permissions:capture', data.kind, data.active === true)
 })
 
 // Клик по странице мимо открытого меню закрывает это меню: меню живёт

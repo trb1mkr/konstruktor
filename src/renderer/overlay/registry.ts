@@ -8,6 +8,7 @@ import FindBar from './FindBar.vue'
 import ToastStack from './ToastStack.vue'
 import ZoomPopup from './ZoomPopup.vue'
 import ExtensionsMenu from './ExtensionsMenu.vue'
+import PermissionPrompt from './PermissionPrompt.vue'
 
 // Соответствие вида оверлея и компонента.
 //
@@ -40,7 +41,10 @@ const REGISTRY: Record<ViewKind, Component> = {
   // Меню расширений: строки со значком, закреплением и переходом
   // на страницу расширений. Замена панели chrome://extensions в том виде,
   // в каком она нужна в браузере — быстрый доступ, а не управление.
-  extensions: ExtensionsMenu
+  extensions: ExtensionsMenu,
+  // Промпт разрешения веб-страницы: условия запроса, Allow и Block,
+  // чекбокс «запомнить».
+  permission: PermissionPrompt
 }
 
 /**

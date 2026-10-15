@@ -13,11 +13,230 @@ import {
   extensionsMenuModel,
   extensionsState,
   installFromPath,
-  setExtensionPinned
+  setExtensionPinned,
 } from './extensions/manager'
 import { bridgePort } from './extensions/bridge'
+import { createTab, setActiveTab } from './windows/deps'
+import { clearOrigin } from './permissions/permissionsStore'
+import { originOfUrl } from './permissions/policy'
+import { PERMISSIONS_URL } from './pages/internalPages'
+import { showPermissionsMenu } from './permissions/ipc'
+import { join } from 'path'
+import { existsSync, readFileSync } from 'fs'
+
+// Запрос микрофона из страницы для автопрогона разрешений: результат
+// приходит строкой, чтобы его можно было напечатать одной строкой лога.
+const ASK_MEDIA_JS =
+  'navigator.mediaDevices ? navigator.mediaDevices.getUserMedia({audio:true})' +
+  '.then(function(){return "GRANTED"})' +
+  '.catch(function(e){return "DENIED:" + e.name})' +
+  ' : "NO-MEDIADEVICES"'
 
 export function setupDiagnostics(bootState: WindowState): void {
+  // Автопрогон разрешений: KONSTRUKTOR_PERM_SMOKE=<url> открывает страницу
+  // в новой вкладке, просит у неё микрофон, нажимает «Разрешить» в промпте
+  // и просит ещё раз. Проверяет всю цепочку: обработчик ЗАПРОСА вызывается
+  // при отказе обработчика ПРОВЕРКИ (иначе промпта не было бы вовсе), ответ
+  // доходит до страницы, решение ложится в permissions.json и повторный
+  // запрос идёт без промпта. Решение сайта в конце снимается — профиль
+  // разработчика прогон не засоряет.
+  //
+  // Страница обязана быть в защищённом контексте (http://localhost или
+  // https), иначе `navigator.mediaDevices` не существует вовсе.
+  const permUrl = process.env['KONSTRUKTOR_PERM_SMOKE']
+  if (permUrl) {
+    const waitMs = Number(process.env['KONSTRUKTOR_PERM_SMOKE_MS'] ?? '3000') || 3000
+    void (async () => {
+      const idle = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+      await idle(waitMs)
+      const id = createTab(bootState, permUrl)
+      setActiveTab(bootState, id)
+      const view = (): Electron.WebContents | undefined => {
+        const rec =
+          bootState.activeTabId !== null ? bootState.tabs.get(bootState.activeTabId) : undefined
+        return rec?.view.webContents
+      }
+      const ask = (): Promise<unknown> => {
+        const wc = view()
+        if (!wc || wc.isDestroyed()) return Promise.resolve('no-view')
+        return wc.executeJavaScript(ASK_MEDIA_JS, true).catch((e: unknown) => 'ERROR:' + String(e))
+      }
+      console.log('[perm-smoke] opened:', permUrl)
+      await idle(1200)
+      console.log('[perm-smoke] url:', view()?.getURL())
+      // clickAllow: нажимает основную кнопку промпта, как это сделал бы
+      // пользователь. Ждём появления поверхности в цикле, а не одним
+      // замером: промпт показывает оверлей асинхронно, а при потере
+      // фокуса окна (например, фокус забрал терминал автопрогона) он
+      // закрывается отказом — это штатное поведение, и прогон должен
+      // просто сказать об этом, а не падать.
+      const clickAllow = async (): Promise<string> => {
+        const win = bootState.window
+        for (let i = 0; i < 12; i++) {
+          const overlay = win ? getActiveOverlay(win) : undefined
+          if (overlay) {
+            const clicked = await overlay.webContents
+              .executeJavaScript(
+                "(() => { const b = document.querySelector('.perm-btn--primary');" +
+                  ' if (!b) return false; b.click(); return true })()',
+              )
+              .catch(() => false)
+            if (clicked) return `clicked (after ${i * 250}ms)`
+          }
+          await idle(250)
+        }
+        return 'no prompt to click (overlay closed or never shown)'
+      }
+      // Первый запрос: промпт должен появиться, ответа пользователя ещё нет.
+      const first = ask()
+      console.log('[perm-smoke] allow:', await clickAllow())
+      console.log('[perm-smoke] first request:', await first)
+      await idle(1200)
+      // Второй запрос: решение запомнено, промпта быть не должно.
+      console.log('[perm-smoke] second request:', await ask())
+      const file = join(app.getPath('userData'), 'permissions.json')
+      console.log(
+        '[perm-smoke] permissions.json:',
+        existsSync(file) ? readFileSync(file, 'utf-8').replace(/\s+/g, ' ') : '(нет файла)',
+      )
+      // Страница разрешений: решения печатаются с неё — список живёт
+      // здесь, и по тексту видно, что решение записалось, что канал
+      // permissions:list отвечает, что подписи областей собираются и что
+      // решения разложены по подзаголовкам статусов.
+      const setId = createTab(bootState, PERMISSIONS_URL)
+      setActiveTab(bootState, setId)
+      await idle(1500)
+      const pageText = (): Promise<unknown> =>
+        view()
+          ?.executeJavaScript(
+            "(() => { const el = document.getElementById('list');" +
+              ' return el ? JSON.stringify(el.textContent) : "NO-ELEMENT" })()',
+          )
+          .catch((e: unknown) => 'ERROR:' + String(e)) ?? Promise.resolve('no-view')
+      console.log('[perm-smoke] permissions page:', await pageText())
+      // Оформление страницы: подзаголовки статуса обязаны быть обычного
+      // цвета и размера (не тусклые), раздел проверки — стоять ВЫШЕ
+      // кнопки общего сброса, а корзина в строке области — быть отдельной
+      // квадратной КНОПКОЙ (тег и размер). Всё измерением, а не на глаз.
+      console.log(
+        '[perm-smoke] page layout:',
+        await view()
+          ?.executeJavaScript(
+            [
+              '(() => {',
+              "  const title = document.querySelector('.group-title');",
+              "  const test = document.getElementById('test-site');",
+              "  const reset = document.getElementById('clear-all');",
+              "  const bin = document.querySelector('.entry .reset-btn');",
+              "  const binBox = bin ? bin.getBoundingClientRect() : null;",
+              '  if (!title) return \'NO-TITLE\';',
+              '  const cs = getComputedStyle(title);',
+              '  return JSON.stringify({',
+              "    title: title.textContent.trim(),",
+              '    fontSize: cs.fontSize,',
+              '    color: cs.color,',
+              '    testAboveReset:',
+              '      !!test && !!reset &&',
+              '      test.getBoundingClientRect().top < reset.getBoundingClientRect().top,',
+              "    binTag: bin ? bin.tagName.toLowerCase() : null,",
+              '    binBox: binBox ? [binBox.width, binBox.height] : null,',
+              '  });',
+              '})()',
+            ].join('\n'),
+          )
+          .catch((e: unknown) => 'ERROR:' + String(e)),
+      )
+      // Снятие ОДНОЙ области: жмём кнопку в строке первой разрешённой
+      // области и печатаем страницу снова. Остальные решения сайта должны
+      // остаться — иначе точечный сброс был бы тем же сбросом сайта.
+      const cleared = await view()
+        ?.executeJavaScript(
+          '(() => { const b = document.querySelector(\'[data-act="reset-scope"]\');' +
+            ' if (!b) return "NO-BUTTON"; const scope = b.dataset.scope; b.click();' +
+            ' return scope })()',
+        )
+        .catch((e: unknown) => 'ERROR:' + String(e))
+      console.log('[perm-smoke] reset one scope:', cleared)
+      await idle(1200)
+      console.log('[perm-smoke] page after reset:', await pageText())
+      // Сброс ПРЯМО ИЗ МЕНЮ: открываем меню бейджа тем же вызовом, что и
+      // кнопка в адресной строке, и жмём первый пункт области. Проверяет
+      // нажимаемость пунктов и то, что снятие из меню работает так же,
+      // как со страницы.
+      const wid = bootState.window?.id ?? -1
+      if (wid >= 0) {
+        // Меню бейджа строится по АКТИВНОЙ вкладке: сейчас активна страница
+        // разрешений, у которой origin нет. Возвращаемся на сайт прогона.
+        setActiveTab(bootState, id)
+        await idle(1000)
+        // Фокус окну: меню гаснет при уходе приложения из фокуса, а прогон
+        // запускается из терминала, который фокус и забирает.
+        bootState.window?.focus()
+        await idle(300)
+        showPermissionsMenu(bootState, { x: 300, y: 300 })
+        // Ждём появления поверхности в цикле: показ асинхронный.
+        let menu = bootState.window ? getActiveOverlay(bootState.window) : undefined
+        for (let i = 0; i < 10 && !menu; i++) {
+          await idle(250)
+          menu = bootState.window ? getActiveOverlay(bootState.window) : undefined
+        }
+        // Структура меню: подзаголовки, строки и корзины. Печатается
+        // целиком — по ней видно, что корзина есть у КАЖДОГО пункта
+        // области, что строка-справка — не button, а сама корзина — button.
+        console.log(
+          '[perm-smoke] menu layout:',
+          await menu?.webContents
+            .executeJavaScript(
+              [
+                '(() => {',
+                "  return Array.from(document.querySelectorAll('.menu-item')).map((el) => {",
+                "    const label = el.querySelector('.menu-label');",
+                "    const action = el.querySelector('.menu-action');",
+                '    const cs = getComputedStyle(el);',
+                '    return {',
+                "      text: (label ? label.textContent : '').trim(),",
+                "      tag: el.tagName.toLowerCase(),",
+                "      plain: el.classList.contains('menu-item--plain'),",
+                '      disabled: el.disabled === true,',
+                "      heading: el.classList.contains('menu-item--heading'),",
+                '      color: cs.color,',
+                '      fontSize: cs.fontSize,',
+                "      action: action ? action.textContent.trim() : null,",
+                "      actionTag: action ? action.tagName.toLowerCase() : null,",
+                "      actionBox: action",
+                '        ? [action.getBoundingClientRect().width, action.getBoundingClientRect().height]',
+                '        : null,',
+                '    };',
+                '  });',
+                '})()',
+              ].join('\n'),
+            )
+            .catch((e: unknown) => 'ERROR:' + String(e)),
+        )
+        // Клик именно по КОРЗИНЕ строки-справки: проверяет, что она —
+        // нажимаемая кнопка, а не часть строки. Строка при этом не
+        // нажимается вовсе, поэтому раньше в логе был тот же id.
+        const menuClicked = await menu?.webContents
+          .executeJavaScript(
+            [
+              '(() => {',
+              "  const action = document.querySelector('.menu-item--plain .menu-action');",
+              "  if (!action) return 'NO-ACTION-BUTTON';",
+              "  const row = action.closest('.menu-item');",
+              "  const label = row && row.querySelector('.menu-label');",
+              '  action.click();',
+              "  return (label ? label.textContent : '').trim();",
+              '})()',
+            ].join('\n'),
+          )
+          .catch((e: unknown) => 'ERROR:' + String(e))
+        console.log('[perm-smoke] menu trash clicked:', menuClicked)
+        await idle(1200)
+      }
+      await clearOrigin(originOfUrl(permUrl), true)
+      app.quit()
+    })()
+  }
   // Корректный выход приложения через N мс — проверка хука before-quit
   // с выгрузкой расширений.
   const quitAt = Number(process.env['KONSTRUKTOR_APP_QUIT_MS'] ?? '0') || 0
@@ -46,7 +265,9 @@ export function setupDiagnostics(bootState: WindowState): void {
           const targetId = installedId ?? extensionsState().list[0]?.id
           if (targetId) {
             await setExtensionPinned(targetId, true)
-            const pinned = extensionsState().list.filter((e) => e.pinned).map((e) => e.name)
+            const pinned = extensionsState()
+              .list.filter((e) => e.pinned)
+              .map((e) => e.name)
             console.log('[ext-smoke] pinned:', JSON.stringify(pinned))
             console.log('[ext-smoke] menu:', JSON.stringify(extensionsMenuModel()))
           }
@@ -82,7 +303,7 @@ export function setupDiagnostics(bootState: WindowState): void {
         anchor: { x: 400, y: 300 },
         extensions: extensionsMenuModel(),
         toggleKey: 'extensions-menu',
-        onSelect: (id: string) => console.log('[diag] ext menu select:', id)
+        onSelect: (id: string) => console.log('[diag] ext menu select:', id),
       })
     }, extMenuAt)
   }
@@ -129,9 +350,9 @@ export function setupDiagnostics(bootState: WindowState): void {
         anchor: { x: 400, y: 300 },
         items: [
           { id: 'auto-1', label: 'Auto item 1', icon: '📥' },
-          { id: 'auto-2', label: 'Auto item 2', icon: '🕘' }
+          { id: 'auto-2', label: 'Auto item 2', icon: '🕘' },
         ],
-        onSelect: () => undefined
+        onSelect: () => undefined,
       })
     }, autoOpenAt)
   }
@@ -165,7 +386,7 @@ export function setupDiagnostics(bootState: WindowState): void {
           code: input.code,
           ctrl: input.control,
           meta: input.meta,
-          wcFocused: wc.isFocused()
+          wcFocused: wc.isFocused(),
         })
       })
     }
@@ -194,7 +415,7 @@ export function setupDiagnostics(bootState: WindowState): void {
         focusedId: focused ? focused.id : null,
         windows: BrowserWindow.getAllWindows()
           .map((w) => (w.isDestroyed() ? 'dead' : String(w.isFocused())))
-          .join(',')
+          .join(','),
       })
     }, 1000)
   }
@@ -223,12 +444,12 @@ export function setupDiagnostics(bootState: WindowState): void {
           log('lifecycle', 'find cycle: opening #2 (no page click)', {})
           const ws = getState(win)
           log('lifecycle', 'find cycle: parent focused before #2', {
-            focused: win.isFocused()
+            focused: win.isFocused(),
           })
           if (ws) openFindOverlay(ws)
           const ov = getActiveOverlay(win)
           log('lifecycle', 'find cycle: #2 result', {
-            opened: !!ov && !ov.isDestroyed()
+            opened: !!ov && !ov.isDestroyed(),
           })
         }, 400)
       }, 700)

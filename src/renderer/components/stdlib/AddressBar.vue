@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { tabs, activeTabId } from '../../core/useTabs'
 
 // Адресная строка. Стили полностью переопределяемые через CSS.
@@ -14,6 +14,24 @@ const zoomPercent = computed(() => {
 })
 
 const zoomBtn = ref<HTMLButtonElement | null>(null)
+const permBtn = ref<HTMLButtonElement | null>(null)
+
+// Корень панели: его левый нижний угол — точка вызова промпта разрешения.
+const root = ref<HTMLElement | null>(null)
+let anchorObserver: ResizeObserver | null = null
+
+// Сообщает main точку под адресной строкой. Пресеты кладут панель и
+// сверху, и снизу (ClassicTop/Minimal), поэтому положение знает только
+// shell — main берёт его отсюда, а не угадывает по инсетам.
+function reportAnchor(): void {
+  const el = root.value
+  if (!el || !window.browserAPI?.reportAddressAnchor) return
+  const rect = el.getBoundingClientRect()
+  window.browserAPI.reportAddressAnchor({
+    x: Math.round(rect.left),
+    y: Math.round(rect.bottom)
+  })
+}
 
 // Синхронизация поля с URL активной вкладки.
 watch(
@@ -29,6 +47,50 @@ async function go() {
   if (activeTabId.value === null || !input.value.trim()) return
   await window.browserAPI.navigate(activeTabId.value, input.value.trim())
 }
+
+// Бейдж разрешений сайта: одна кнопка на всё, что сайт получил и что прямо
+// сейчас использует. Раньше это были две кнопки рядом (значки решений и
+// индикатор захвата) — вместе они занимали полстроки и читались как два
+// разных управления. Иконка ✅ постоянная, а захват добавляется к ней:
+// 📷/🎤/🖥️ показывают, что доступ не просто выдан, а работает сейчас.
+const permissions = computed(
+  () => tabs.value.find((t) => t.id === activeTabId.value)?.permissions ?? []
+)
+const capture = computed(() => tabs.value.find((t) => t.id === activeTabId.value)?.capturing)
+const permissionBadge = computed(() => {
+  const cap = capture.value
+  const live: string[] = []
+  if (cap?.video) live.push('📷')
+  if (cap?.audio) live.push('🎤')
+  if (cap?.screen) live.push('🖥️')
+  return '✅' + live.join('')
+})
+const hasPermissionBadge = computed(() => permissions.value.length > 0 || !!capture.value)
+
+async function openPermissionsMenu() {
+  const rect = permBtn.value?.getBoundingClientRect()
+  window.browserAPI.permissionsMenu(
+    rect ? { x: Math.round(rect.right), y: Math.round(rect.bottom) } : { x: 0, y: 0 }
+  )
+}
+
+onMounted(() => {
+  reportAnchor()
+  // Панель меняет положение при смене пресета и контентном fullscreen:
+  // наблюдаем и за самой панелью, и за телом документа (высота меняется,
+  // когда панели скрываются или появляются).
+  anchorObserver = new ResizeObserver(reportAnchor)
+  if (root.value) anchorObserver.observe(root.value)
+  anchorObserver.observe(document.body)
+  window.addEventListener('resize', reportAnchor)
+  requestAnimationFrame(reportAnchor)
+})
+
+onUnmounted(() => {
+  anchorObserver?.disconnect()
+  anchorObserver = null
+  window.removeEventListener('resize', reportAnchor)
+})
 
 async function back() {
   await window.browserAPI.goBack()
@@ -57,7 +119,7 @@ function openZoomPopup() {
 </script>
 
 <template>
-  <div class="addressbar">
+  <div ref="root" class="addressbar">
     <button class="nav-btn" :title="$t('addressBar.back')" @click="back">←</button>
     <button class="nav-btn" :title="$t('addressBar.forward')" @click="forward">→</button>
     <button class="nav-btn" :title="$t('addressBar.reload')" @click="reload">⟳</button>
@@ -81,6 +143,16 @@ function openZoomPopup() {
       :title="$t('zoom.badge')"
       @click="openZoomPopup"
     >🔬 {{ zoomPercent }}%</button>
+    <!-- Бейдж разрешений: одна кнопка на решения сайта и на активный
+         захват. Клик — меню со списком решений и сбросом. -->
+    <button
+      v-if="hasPermissionBadge"
+      ref="permBtn"
+      class="perm-badge menu-trigger"
+      :class="{ 'perm-badge--live': !!capture }"
+      :title="capture ? $t('permissions.capturing') : $t('permissions.badge')"
+      @click="openPermissionsMenu"
+    >{{ permissionBadge }}</button>
     <slot />
   </div>
 </template>
@@ -125,4 +197,18 @@ function openZoomPopup() {
   font-variant-numeric: tabular-nums;
 }
 .zoom-badge:hover { background: var(--btn-hover-bg); }
+/* Бейдж разрешений сайта: те же габариты, что у бейджа масштаба. Рамка
+   акцента появляется только при активном захвате — по ней видно, что
+   доступ не просто выдан, а работает прямо сейчас. */
+.perm-badge {
+  background: var(--btn-bg);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.perm-badge:hover { background: var(--btn-hover-bg); }
+.perm-badge--live { border-color: #4a8cf7; }
 </style>

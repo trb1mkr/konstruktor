@@ -123,6 +123,12 @@ export function buildSettingsPage(lang: string): string {
        <option value="window">${t('settings.f11Window')}</option>
        <option value="content">${t('settings.f11Content')}</option>
      </select></label>
+   <!-- Разрешения сайтов живут на своей странице: список растёт с числом
+        посещённых сайтов, и в общем потоке настроек он хоронил бы тему и
+        горячие клавиши. Здесь только переход. -->
+   <div class="set"><span>${t('permissions.settingsTitle')}</span>
+     <div class="hint">${t('permissions.settingsOpenHint')}</div>
+     <div class="toolbar"><button type="button" id="open-permissions">${t('permissions.open')}</button></div></div>
    <div class="toolbar"><button id="save">${t('common.save')}</button>
      <span id="ok" class="hint"></span></div>
    <p class="hint">${t('settings.footer')}</p>
@@ -450,6 +456,12 @@ export function buildSettingsPage(lang: string): string {
          ? tr('settings.savedDns')
          : tr('settings.saved');
      }
+     // Разрешения сайтов живут на отдельной странице (см. permissionsPage):
+     // список растёт с числом сайтов и в общем потоке настроек хоронил бы
+     // тему и горячие клавиши. Навигация обычная — тот же WebContentsView.
+     document.getElementById('open-permissions').addEventListener('click', () => {
+       location.href = 'konstruktor://permissions';
+     });
    </script>`,
     lang
   )

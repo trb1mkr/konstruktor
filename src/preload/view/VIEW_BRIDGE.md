@@ -4,11 +4,13 @@
 
 ## 🧩 Состав
 
-`src/preload/view/internal.ts` отдает `window.konstruktor`: история, настройки, шорткаты, загрузки. У `WebContentsView` нет своего preload через `webPreferences`, поэтому скрипт ставится через `registerPreloadScript` на сессию.
+`src/preload/view/internal.ts` отдает `window.konstruktor`: история, настройки, шорткаты, загрузки, расширения, разрешения сайтов. У `WebContentsView` нет своего preload через `webPreferences`, поэтому скрипт ставится через `registerPreloadScript` на сессию.
+
+Кроме вызовов мост слушает `message` от страницы: так приходит отчёт о захвате медиа. Обёртку на `getUserMedia`/`getDisplayMedia` кладёт в ГЛАВНЫЙ мир страницы main (`permissions/captureIndicator.ts`), а из главного мира другого канала нет — `window.postMessage` видят все миры документа, и изолированный мир прелоада пересылает метку в main каналом `permissions:capture`.
 
 ## 🔀 Выполнение
 
-Скрипт выполняется в каждом фрейме до загрузки документа. `contextBridge` доступен, `require('electron')` не нужен. Внутренние страницы вызывают `historyTimeline`, `getSettings`, `saveSettings`, `downloadsList` и другие методы напрямую.
+Скрипт выполняется в каждом фрейме до загрузки документа. `contextBridge` доступен, `require('electron')` не нужен. Внутренние страницы вызывают `historyTimeline`, `getSettings`, `saveSettings`, `downloadsList`, `permissionsList` (и снятие решений — `permissionsClearScope`/`permissionsClearOrigin`/`permissionsClearAll`) и другие методы напрямую.
 
 ```mermaid
 flowchart LR

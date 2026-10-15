@@ -21,6 +21,13 @@ export interface TabRecord {
   // отдельно: источник истины — Chromium, иначе badge расходится с
   // страницей после навигации (per-origin зум).
   zoom: number
+  // Активный захват медиа вкладкой (камера/микрофон/экран). Признак
+  // приходит из страницы — см. permissions/captureIndicator.ts.
+  capturing?: { audio: boolean; video: boolean; screen: boolean }
+  // Решения по разрешениям сайта вкладки — для бейджа в адресной строке.
+  // Сводка собирается при пуше (см. tabsManager), а не хранится в записи:
+  // решения живут на origin и меняются из настроек и меню бейджа.
+  permissions?: { scope: string; value: string }[]
 }
 
 export interface TabData {
@@ -44,6 +51,9 @@ export interface TabData {
   // Хранится в записи вкладки, а не в карте рядом, потому что состояние
   // принадлежит конкретной вкладке и должно пережить смену активной.
   devTools?: { open: boolean; mode: 'right' | 'bottom' }
+  // Активный захват медиа этой вкладкой. Ставит отчёт страницы
+  // (permissions:capture), снимается на навигации и при остановке треков.
+  capturing?: { audio: boolean; video: boolean; screen: boolean }
 }
 
 // Состояние одного окна браузера. Вкладки живут внутри окна,
@@ -75,6 +85,11 @@ export interface WindowState {
   pinnedStripOrder: string[]
   uiInsets: { top: number; bottom: number; left: number; right: number }
   incognito: boolean
+  // Левый НИЖНИЙ угол адресной строки в координатах содержимого окна.
+  // Присылает shell: промпт разрешения встаёт под адресной строкой (как
+  // в Chrome), а main положение панели внутри окна не знает — пресеты
+  // кладут её и сверху, и снизу. Нет значения — берётся верхний инсет.
+  permissionAnchor?: { x: number; y: number }
   // Контентный fullscreen: view растянута на все окно, панели скрыты.
   contentFullscreen: boolean
   // Исконные bounds окна до контентного fullscreen — для возврата.

@@ -4,7 +4,7 @@
 
 ## 🧩 Файлы
 
-Настройки лежат в `settings.json`, история в `history.json`, загрузки в `downloads.json`, плитки в `shortcuts.json`. Все файлы живут в userData. Каждый store держит кэш в памяти и пишет через debounce или по событию. Каналы `history:*` / `downloads:*` / `settings:*` / `shortcuts:*` сводит `ipc.ts`.
+Настройки лежат в `settings.json`, история в `history.json`, загрузки в `downloads.json`, плитки в `shortcuts.json`, решения по разрешениям сайтов — в `permissions.json`. Все файлы живут в userData. Каждый store держит кэш в памяти и пишет через debounce или по событию. Каналы `history:*` / `downloads:*` / `settings:*` / `shortcuts:*` сводит `ipc.ts`, каналы `permissions:*` — `permissions/ipc.ts`.
 
 ## ⚙️ Настройки
 
@@ -28,7 +28,13 @@ flowchart LR
 
 `historyStore.ts` пишет визиты и метаданные, отдает ленту через `getTimeline`. `downloadsStore.ts` ведет прогресс через `will-download`. Инкогнито историю не пишет и не читает, загрузки читает общие.
 
-## 🔒 Secure DNS
+## � Разрешения сайтов
+
+`permissions/permissionsStore.ts` пишет решения по разрешениям как `origin → область → allow/block` и отдаёт их синхронно из кэша: обработчики разрешений Chromium обязаны ответить до конца тика, и `getDecision` без `await`. Кэш прогревается при старте (`initPermissions`), запись обновляет его ДО файла — иначе повторная проверка того же разрешения не увидела бы только что выданное решение.
+
+Приватные окна решений не помнят: их карта живёт в модуле (`ephemeral`) и никогда не попадает в `permissions.json`. Подробности — в [`permissions/PERMISSIONS.md`](../permissions/PERMISSIONS.md).
+
+## 🔐 Secure DNS
 
 `dnsConfig.ts` маппит режим в DoH-сервер через `dnsServersFor` и ставит switches через `applySecureDns`. Применение идет при старте из сохраненных настроек, смена в UI требует рестарта.
 

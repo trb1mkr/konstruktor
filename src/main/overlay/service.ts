@@ -25,7 +25,7 @@ import {
   markContentShown,
   markContentUnmounted,
   parentOfPooledOverlay,
-  setContentUnmounted
+  setContentUnmounted,
 } from './pool'
 import { pushPayload, waitPageReady, dropPendingPush } from './pool'
 import type { PoolHooks } from './pool'
@@ -37,7 +37,7 @@ import {
   sessionById,
   sessionOf,
   setSession,
-  stackOf
+  stackOf,
 } from './session'
 import {
   closeOverlay,
@@ -48,13 +48,21 @@ import {
   isSystemDialogOpen,
   lastClosed,
   noteFocusHandoff,
+  notifyOverlayEnded,
   restoreFocusToParent,
   TOGGLE_ECHO_MS,
-  BLUR_SETTLE_MS
+  BLUR_SETTLE_MS,
 } from './close'
 import { buildPushMessage, pendingGeometry, provisionalSize } from './push'
 import type { LevelGeometry } from './push'
 import type { ExtensionMenuEntry } from '../../shared/extensions-types'
+// Модель промпта разрешения — из общего контракта: форма одна и та же
+// в main и в renderer, и дублировать её здесь незачем.
+import type { PermissionModel } from '../../shared/overlay-types'
+
+// Промпт разрешения веб-страницы: строки условий и кнопки собирает main,
+// выбор уходит через onSelect строкой 'id::1'.
+export type PermissionPromptRequest = PermissionModel
 
 // Сервис оверлеев: единственная точка входа для показа, закрытия и
 // разрешения команд поверхности.
@@ -71,7 +79,6 @@ import type { ExtensionMenuEntry } from '../../shared/extensions-types'
 // отсюда: внутренние файлы папки не должны становиться контрактом для
 // потребителей.
 
-
 export interface OverlayMenuItem {
   id: string
   label: string
@@ -81,6 +88,17 @@ export interface OverlayMenuItem {
   // Подпись горячей клавиши справа («Ctrl+R»). Готовая строка для показа:
   // сочетание обрабатывает main, renderer её только рисует. Пусто = нет.
   hotkey?: string
+  // Кнопка-действие справа в пункте (🗑️ у разрешений): отдельная цель для
+  // мыши. Выбор у неё тот же, что у пункта, — это наглядное действие, а не
+  // второй смысл строки.
+  actionIcon?: string
+  actionTitle?: string
+  // Подзаголовок группы («Разрешено:» у разрешений): ставится вместе с
+  // disabled, но рисуется обычным цветом и размером — см. MenuItem.heading.
+  heading?: boolean
+  // Строка-справка (см. MenuItem.plain): имя — текст, действие — только
+  // кнопка справа.
+  plain?: boolean
   disabled?: boolean
   // Разделительная линия. Только у меню окна: в системном их три, и без
   // них меню читается как сплошной список. Пустые label/icon игнорируются
@@ -117,6 +135,7 @@ export interface OverlayRequest {
     | 'window-menu'
     | 'zoom'
     | 'extensions'
+    | 'permission'
   anchor: { x: number; y: number }
   items?: OverlayMenuItem[]
   toast?: { title: string; body?: string; timeout?: number }
@@ -136,6 +155,9 @@ export interface OverlayRequest {
   // (закрепить, открыть попап, включить) приходят через onSelect
   // с префиксом, разбор — в extensions/ipc.ts.
   extensions?: { items: ExtensionMenuEntry[]; enabled: boolean }
+  // Промпт разрешения: готовые строки условий и кнопки. Выбор приходит
+  // через onSelect строкой 'id::1' (1 = запомнить решение).
+  permission?: PermissionPromptRequest
   onSelect?: (id: string) => void
   // Не закрывать сессию после select. Нужно попапу зума: `+`/`−`/`Reset`
   // обновляют процент через overlay:update и держат попап открытым,
@@ -289,7 +311,7 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
           parentId: parent.id,
           sessionId: token,
           overlayFocused: overlay.isFocused(),
-          parentFocused: parent.isFocused()
+          parentFocused: parent.isFocused(),
         })
         return
       }
@@ -343,10 +365,7 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
   // Тосты исключены: они пассивны, живут по своему таймеру и гаситься
   // пользователем не должны. find/dialog/icon/menu — наоборот, обязаны
   // закрываться, причём не теряя введённый текст.
-  const onBeforeInput = (
-    event: Electron.Event,
-    input: Electron.Input
-  ): void => {
+  const onBeforeInput = (event: Electron.Event, input: Electron.Input): void => {
     if (input.type !== 'keyDown' || input.key !== 'Escape') return
     const entry = sessionOf<OverlayRequest>(parent.id)
     if (!entry) return
@@ -354,7 +373,7 @@ function attachParentListeners(parent: BrowserWindow, overlay: BrowserWindow): v
     event.preventDefault()
     log('session', 'esc closes overlay', {
       parentId: parent.id,
-      kind: entry.request.kind
+      kind: entry.request.kind,
     })
     closeOverlay(parent)
   }
@@ -405,7 +424,7 @@ function poolHooks(): PoolHooks {
     onParentEvent: (parent: BrowserWindow) => {
       const win = getPooledOverlay(parent.id)
       if (win) attachParentListeners(parent, win)
-    }
+    },
   }
 }
 
@@ -467,7 +486,7 @@ function installAppBlurHook(): void {
     if (!parent || parent.isDestroyed()) return
     log('lifecycle', 'focus landed on hidden overlay -> parent', {
       parentId,
-      overlayId: focused.id
+      overlayId: focused.id,
     })
     parent.focus()
   })
@@ -600,7 +619,7 @@ function overlayPainted(overlay: BrowserWindow, token: number): Promise<boolean>
     const budgetTimer = setTimeout(() => {
       log('lifecycle', 'paint budget exceeded, waiting longer', {
         token,
-        waitedMs: Number((now() - startedAt).toFixed(1))
+        waitedMs: Number((now() - startedAt).toFixed(1)),
       })
       // Страховка по-прежнему нужна: если renderer не ответит никогда,
       // показ обязан отмениться, а не висеть вечно.
@@ -647,7 +666,11 @@ function abortPresent(win: BrowserWindow, parent: BrowserWindow, sessionToken: n
   // было и полное снятие было единственным вариантом.
   const entry = sessionById<OverlayRequest>(parent.id, sessionToken)
   if (entry) clearSession(parent.id, sessionToken)
-  log('lifecycle', 'overlay aborted, nothing shown', { parentId: parent.id, sessionId: sessionToken })
+  notifyOverlayEnded(parent.id)
+  log('lifecycle', 'overlay aborted, nothing shown', {
+    parentId: parent.id,
+    sessionId: sessionToken,
+  })
 }
 
 // Закрытие сессий (closeOverlay, closeStack, closeOverlayIfMenu,
@@ -669,7 +692,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     if (same) {
       log('session', 'toggle: same trigger, closing', {
         parentId: parent.id,
-        toggleKey: request.toggleKey
+        toggleKey: request.toggleKey,
       })
       closeOverlay(parent)
       return
@@ -687,7 +710,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
       log('session', 'toggle: echo after close, staying closed', {
         parentId: parent.id,
         toggleKey: request.toggleKey,
-        ageMs: Date.now() - prev.at
+        ageMs: Date.now() - prev.at,
       })
       lastClosed.delete(parent.id)
       return
@@ -712,7 +735,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     parentId: parent.id,
     displayId: display.id,
     workArea: display.workArea,
-    contentBounds: parentBounds
+    contentBounds: parentBounds,
   })
   // Описание поверхности: размеры и выравнивание одним объектом.
   // Хардкод вида MENU_PAD + N * MENU_ITEM_H удалён на шаге 6: число 40
@@ -732,7 +755,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     parentId: parent.id,
     displayId: display.id,
     workArea,
-    contentBounds: parentBounds
+    contentBounds: parentBounds,
   })
 
   //
@@ -764,6 +787,10 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   //   - сверка устаревших push сравнивает стеки, а не верхние токены.
   const existing = stackOf<OverlayRequest>(parent.id)
   //
+  // Вытесненные промпты разрешения: о них надо сообщить очереди разрешений,
+  // но ТОЛЬКО после установки новой сессии — см. notifyOverlayEnded ниже.
+  const dropped: OverlayRequest[] = []
+  //
   // Рубрильник вложенности. Возвращается к true вместе с описанием
   // уровня в requests: условие восстанавливает стек ровно в том виде, в
   // каком он был до отката.
@@ -778,25 +805,21 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
     // годится — он гасит окно, а нам нужно показать новое содержимое
     // поверх старого, иначе между setContentUnmounted и отрисовкой
     // пользователь увидит пустое окно.
-    for (const old of existing) dropPendingPush(old.overlay, old.sessionId)
+    for (const old of existing) {
+      dropPendingPush(old.overlay, old.sessionId)
+      if (old.request.kind === 'permission') dropped.push(old.request)
+    }
     clearSession(parent.id)
   }
 
-  const resolved = resolveBounds(
-    parentBounds,
-    workArea,
-    request.anchor,
-    spec,
-    provisional,
-    false
-  )
+  const resolved = resolveBounds(parentBounds, workArea, request.anchor, spec, provisional, false)
   //
   // Прямоугольник этого уровня в экранных координатах.
   const level: Electron.Rectangle = {
     x: resolved.x,
     y: resolved.y,
     width: resolved.width,
-    height: resolved.height
+    height: resolved.height,
   }
   //
   // Уровни, уже лежащие в стеке, и новый — окно должно покрывать их все
@@ -809,7 +832,7 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   }
   const { x, y, width, height } = resolveUnionBounds(
     [...carried.map((l) => l.rect), level],
-    workArea
+    workArea,
   )
 
   // Геометрия запоминается для последующей коррекции по измерению.
@@ -829,10 +852,9 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
       // Токен проставляется сразу после nextSessionId() ниже: на этом
       // месте сессия ещё не создана. Пока он 0, уровень не найдётся по
       // токену — но и не должен: возврата до конца показа не бывает.
-      { sessionId: 0, rect: level, spec, anchor: request.anchor, flipped: resolved.flipped }
-    ]
+      { sessionId: 0, rect: level, spec, anchor: request.anchor, flipped: resolved.flipped },
+    ],
   })
-
 
   // Оверлей-окно уже создано заранее через ensureOverlayWindow.
   // Просто обновляем bounds и загружаем новый payload.
@@ -848,9 +870,9 @@ export function showOverlay(parent: BrowserWindow, request: OverlayRequest): voi
   const wasLive = !isContentUnmounted(parent.id)
   log('pool', reused ? 'reusing pooled window' : 'no pooled window, creating', {
     parentId: parent.id,
-    kind: request.kind
+    kind: request.kind,
   })
-if (!overlay || overlay.isDestroyed()) {
+  if (!overlay || overlay.isDestroyed()) {
     // Fallback: окно не было создано заранее (или уничтожено). Создаём
     // через пул — опции, слушатели и загрузка страницы те же, что при
     // прогреве. Дублировать их здесь было ошибкой: копии разошлись.
@@ -878,7 +900,12 @@ if (!overlay || overlay.isDestroyed()) {
       // рабочую область соседнего дисплея, и это видно только здесь.
       logBoundsAfterHide(overlay, parent.id)
     }
-    log('geometry', 'content unmounted while loading', { x: Math.round(x), y: Math.round(y), width, height })
+    log('geometry', 'content unmounted while loading', {
+      x: Math.round(x),
+      y: Math.round(y),
+      width,
+      height,
+    })
   }
 
   log('geometry', 'resolved', { x: Math.round(x), y: Math.round(y), width, height })
@@ -911,6 +938,12 @@ if (!overlay || overlay.isDestroyed()) {
     if (seen < sessionToken) paintedSeen.delete(seen)
   }
   setSession(parent.id, { overlay, request, sessionId: sessionToken, openedAt: Date.now() })
+  // Вытесненные поверхности сняты — но сообщаем об этом ТОЛЬКО сейчас,
+  // когда новая сессия уже стоит. Раньше (сразу после clearSession)
+  // очередь промптов разрешений успела бы показать следующий промпт
+  // внутри чужого показа: в стеке оказались бы два уровня, а renderer
+  // получил бы два push подряд.
+  if (dropped.length > 0) notifyOverlayEnded(parent.id)
   // Показ окна. Страница уже загружена (пул сделал это при создании
   // окна), навигации нет — ждать остаётся только отрисовку.
   async function present(): Promise<void> {
@@ -941,7 +974,10 @@ if (!overlay || overlay.isDestroyed()) {
       request.kind === 'menu' ||
       request.kind === 'window-menu' ||
       request.kind === 'zoom' ||
-      request.kind === 'extensions'
+      request.kind === 'extensions' ||
+      // Промпт разрешения забирает фокус (кнопки и чекбокс — клавиатурой
+      // тоже), поэтому родитель потеряет его сразу после показа.
+      request.kind === 'permission'
     ) {
       noteFocusHandoff(parent.id)
     }
@@ -967,7 +1003,7 @@ if (!overlay || overlay.isDestroyed()) {
       if (waited > 0) {
         log('lifecycle', 'waited for unmount confirm', {
           parentId: parent.id,
-          waitedMs: Number(waited.toFixed(1))
+          waitedMs: Number(waited.toFixed(1)),
         })
       }
     }
@@ -996,11 +1032,12 @@ if (!overlay || overlay.isDestroyed()) {
     // буферизация становилась недостижимой.
     // Шлём весь стек, а не только верхний уровень. При одном
     // уровне его offset равен нулю — поведение не отличается от прежнего.
-    const message = buildPushMessage(
-      parent,
-      pendingGeometry.get(parent.id)?.levels ?? [],
-      { x, y, width, height }
-    )
+    const message = buildPushMessage(parent, pendingGeometry.get(parent.id)?.levels ?? [], {
+      x,
+      y,
+      width,
+      height,
+    })
     pushPayload(win, message)
     mark('ov:nav')
     // Ожидаем, что сообщение применится и renderer подтвердит отрисовку.
@@ -1038,7 +1075,7 @@ if (!overlay || overlay.isDestroyed()) {
       parentId: parent.id,
       want: { x: Math.round(x), y: Math.round(y) },
       got: { x: actualBounds.x, y: actualBounds.y },
-      displayId: screen.getDisplayMatching(actualBounds).id
+      displayId: screen.getDisplayMatching(actualBounds).id,
     })
     // Ввод включаем сразу: пустое окно клика не перехватит, а к моменту
     // показа содержимого кликабельность уже нужна.
@@ -1074,7 +1111,10 @@ if (!overlay || overlay.isDestroyed()) {
       request.kind === 'menu' ||
       request.kind === 'window-menu' ||
       request.kind === 'zoom' ||
-      request.kind === 'extensions'
+      request.kind === 'extensions' ||
+      // Промпт разрешения — как диалог: без focus() стрелки/Enter и
+      // пробел на чекбоксе не доходили бы до renderer.
+      request.kind === 'permission'
     ) {
       try {
         win.focus()
@@ -1098,4 +1138,3 @@ if (!overlay || overlay.isDestroyed()) {
 
 // Команды renderer'а (resolveOverlaySelect/Dismiss/Submit/SubmitIcon)
 // живут в resolve.ts: ими пользуется только overlay/ipc.ts.
-

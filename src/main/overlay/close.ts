@@ -52,6 +52,34 @@ export const lastClosed = new Map<number, { toggleKey?: string; at: number }>()
 // достаточно небольшого окна; 250 мс запас на медленный prod-перезапуск.
 export const TOGGLE_ECHO_MS = 250
 
+//
+// Слушатель завершения оверлейной сессии родителя.
+//
+// Зарегистрирован permissions/permissionManager: пока показан промпт
+// разрешения, страница ждёт getUserMedia, и очередь обязана узнать, что
+// поверхность сняли — иначе обработчик разрешения не вызовет callback(),
+// и запрос зависнет навсегда.
+//
+// Одно событие на все сценарии снятия (закрытие по Esc/подложке, вытеснение
+// меню, переключение вкладки, прерванный показ) — потому что различать их
+// обязан сам владелец очереди, а не оверлей: оверлей не знает, что значат
+// его поверхности для потребителя.
+let overlayEndedListener: ((parentId: number) => void) | null = null
+
+/** Регистрирует единственный слушатель завершения сессий. */
+export function setOverlayEndedListener(fn: (parentId: number) => void): void {
+  overlayEndedListener = fn
+}
+
+/** Сообщает слушателю, что сессии родителя сняты. */
+export function notifyOverlayEnded(parentId: number): void {
+  try {
+    overlayEndedListener?.(parentId)
+  } catch (err) {
+    logError('overlay ended listener failed', err)
+  }
+}
+
 // Флаг: открыт ли системный диалог (файл/сохранение) — чтобы игнорировать blur/move/resize
 export let isSystemDialogOpen = false
 
@@ -410,6 +438,9 @@ export function closeOverlay(parent: BrowserWindow): void {
   } catch {
     // Уже закрыто — игнорим.
   }
+  // Сессия родителя снята целиком (глубина была 1) — сообщаем владельцам
+  // поверхностей, что их запрос больше не показывается.
+  notifyOverlayEnded(parent.id)
 }
 
 // Клик, ОТКРЫВШИЙ меню, прилетает сюда повторно: пока renderer грузит
@@ -499,6 +530,9 @@ export function closeStack(parent: BrowserWindow): void {
     dropPendingPush(entry.overlay, entry.sessionId)
   }
   clearSession(parent.id)
+  // Стек снят целиком — владельцы поверхностей (промпт разрешения)
+  // должны узнать об этом до того, как окно уедет в парк.
+  notifyOverlayEnded(parent.id)
   if (!overlay) return
   try {
     if (!overlay.isDestroyed()) {

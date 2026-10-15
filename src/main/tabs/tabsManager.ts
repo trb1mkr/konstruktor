@@ -42,6 +42,25 @@ import { getSettingsSync } from '../store/settingsStore'
 import { t } from '../i18n'
 import { recordVisit, updateMetadata } from '../store/historyStore'
 import { START_URL } from '../pages/internalPages'
+import { installCaptureHook } from '../permissions/captureIndicator'
+import { decisionsOf } from '../permissions/permissionsStore'
+import { SCOPE_ICON, originOfUrl, type PermissionScope } from '../permissions/policy'
+
+// Решения по разрешениям сайта вкладки — для бейджа в адресной строке.
+// Читается из хранилища при каждом пуше: решения меняются со страницы
+// настроек и из меню бейджа, и копия в записи вкладки протухала бы.
+// Иконка едет вместе со значением — таблица иконок живёт в main
+// (permissions/policy.ts), и дублировать её в shell незачем.
+function permissionsFor(url: string, persist: boolean): { scope: string; value: string; icon: string }[] {
+  const origin = originOfUrl(url)
+  if (!origin) return []
+  const record = decisionsOf(origin, persist)
+  return Object.entries(record).map(([scope, value]) => ({
+    scope,
+    value: String(value),
+    icon: SCOPE_ICON[scope as PermissionScope] ?? '🔒'
+  }))
+}
 
 export interface TabsDeps {
   layoutView: (ws: WindowState, view: WebContentsView) => void
@@ -89,7 +108,15 @@ export function pushTabsState(ws: WindowState): void {
         // Процент зума — опросом webContents, как у DevTools: Chromium
         // меняет его и сам (per-origin при навигации), а запись без
         // опроса протухала бы и badge показал бы чужое значение.
-        zoom: percentOf(wc)
+        zoom: percentOf(wc),
+        // Захват медиа вкладкой (камера/микрофон/экран) — индикатор
+        // в адресной строке. Признак ставит permissions/captureIndicator
+        // по сообщению самой страницы.
+        capturing: t.capturing,
+        // Решения по разрешениям этого сайта — из хранилища, а не из
+        // записи вкладки: они живут на origin, а не на вкладке, и
+        // меняются со страницы настроек и меню бейджа.
+        permissions: permissionsFor(t.url, !ws.incognito)
       }
     })
     .filter((t) => t !== null) as TabRecord[]
@@ -167,11 +194,21 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   // Тема новой вкладки — сразу текущая, без ожидания смены настроек.
   applyThemeToTab(ws.tabs.get(id)!, getSettingsSync().theme ?? 'dark')
 
+  // Индикатор захвата: хуки на mediaDevices ставятся в ГЛАВНЫЙ мир
+  // страницы после готовности документа — раньше самого документа
+  // инжектировать некуда. Отчёт приходит в permissions:capture и меняет
+  // бейдж в адресной строке.
+  view.webContents.on('dom-ready', () => {
+    installCaptureHook(view.webContents)
+  })
   view.webContents.on('did-navigate', (_e, navUrl) => {
     const rec = ws.tabs.get(id)
     if (!rec) return
     rec.url = navUrl
     rec.favicon = ''
+    // Захват принадлежал предыдущей странице: её треки умирают вместе с
+    // документом, а сообщения об остановке от неё уже не придут.
+    rec.capturing = undefined
     if (id === ws.activeTabId) ws.window?.webContents.send('tabs:navigated', { id, url: navUrl })
     pushTabsState(ws)
     deps.persistSessionTabs(ws)

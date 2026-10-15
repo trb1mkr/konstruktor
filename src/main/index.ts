@@ -19,6 +19,9 @@ import { registerInternalPreload } from './pages/internalBridge'
 import { registerOverlayIpc } from './overlay/ipc'
 import { registerExtensionsIpc } from './extensions/ipc'
 import { initExtensions, shutdownExtensions } from './extensions/manager'
+import { registerPermissionsIpc } from './permissions/ipc'
+import { initPermissions } from './permissions/permissionManager'
+import { registerCaptureIpc } from './permissions/captureIndicator'
 import { watchPaintedOnce } from './overlay/service'
 import { initI18n } from './i18n'
 import { watchSystemTheme, applyWebContentScheme } from './browserTheme'
@@ -55,6 +58,10 @@ function registerIpc() {
   registerGroupsIpc()
   // Каналы расширений: список, установка, тумблеры, клик по кнопке.
   registerExtensionsIpc()
+  // Разрешения страниц: якорь адресной строки, меню бейджа, управление
+  // решениями на странице настроек. Плюс отчёты страниц о захвате медиа.
+  registerPermissionsIpc()
+  registerCaptureIpc()
   // Оверлейные каналы (overlay:*, find:*) — в overlay/ipc.ts.
   registerOverlayIpc()
   // Учёт подтверждений отрисовки оверлея. Слушатель должен стоять ДО
@@ -85,6 +92,10 @@ void app.whenReady().then(async () => {
     registerInternalProtocol(ses)
     registerInternalPreload(ses)
   }
+  // Разрешения страниц: обработчики ставим ДО первого окна — иначе
+  // первая же вкладка успела бы запросить доступ до того, как появится
+  // промпт, и Chromium отдал бы его по дефолту (без спроса).
+  await initPermissions()
   setupDownloads(session.defaultSession)
   setupDownloads(session.fromPartition(NORMAL_PARTITION))
   // Приватная партиция вкладок: загрузки идут и сохраняются как обычно

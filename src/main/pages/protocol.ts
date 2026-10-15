@@ -10,7 +10,8 @@ import {
   buildHistoryPage,
   buildSettingsPage,
   buildDownloadsPage,
-  buildExtensionsPage
+  buildExtensionsPage,
+  buildPermissionsPage
 } from './internalPages'
 import { currentLang, t } from '../i18n'
 import { readFile } from 'fs/promises'
@@ -75,6 +76,11 @@ export function registerInternalProtocol(ses: Electron.Session): void {
       }
       if (host === 'extensions') {
         return new Response(buildExtensionsPage(lang), {
+          headers: { 'content-type': 'text/html; charset=utf-8' }
+        })
+      }
+      if (host === 'permissions') {
+        return new Response(buildPermissionsPage(lang), {
           headers: { 'content-type': 'text/html; charset=utf-8' }
         })
       }

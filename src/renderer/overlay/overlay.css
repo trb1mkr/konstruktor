@@ -64,7 +64,7 @@ body {
    успевает стартовать раньше, чем применится no-anim, и fade проиграется
    даже при animations off. Селектор через <html>, а не .overlay-root,
    именно поэтому он такой. !important перебивает scoped-стили Vue. */
-.browser-menu, .dialog, .toast, .find-bar { animation: overlay-fade 60ms ease-out !important; }
+.browser-menu, .dialog, .toast, .find-bar, .permission-prompt { animation: overlay-fade 60ms ease-out !important; }
 @keyframes overlay-fade {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -72,4 +72,5 @@ body {
 html.no-anim .browser-menu,
 html.no-anim .dialog,
 html.no-anim .toast,
-html.no-anim .find-bar { animation: none !important; }
+html.no-anim .find-bar,
+html.no-anim .permission-prompt { animation: none !important; }

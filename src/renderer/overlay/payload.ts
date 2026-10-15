@@ -13,6 +13,7 @@ import type {
   IconModel,
   MenuDisplay,
   MenuItem,
+  PermissionModel,
   StackEntry,
   ToastModel,
   UpdateMessage
@@ -22,7 +23,7 @@ export type { MenuItem }
 
 /** Модель уровня — плоская: шаблон читает поля напрямую. */
 export interface OverlayModel {
-  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom' | 'extensions'
+  view: 'menu' | 'toast' | 'dialog' | 'find' | 'icon' | 'window-menu' | 'zoom' | 'extensions' | 'permission'
   items?: MenuItem[]
   toast?: ToastModel
   dialog?: DialogModel
@@ -30,6 +31,7 @@ export interface OverlayModel {
   find?: FindModel
   zoom?: { percent: number }
   extensions?: ExtensionsMenuModel
+  permission?: PermissionModel
 }
 
 // Один уровень стека, ровно как его прислал main. Форма задана
@@ -124,6 +126,11 @@ export function propsFor(
         items: model.extensions?.items ?? [],
         enabled: model.extensions?.enabled ?? true
       }
+    // Промпт разрешения: строки условий и кнопки приходят из main готовыми.
+    // Без этой ветки propsFor вернул бы null, уровень молча
+    // отфильтровался бы, и окно открылось бы пустым.
+    case 'permission':
+      return model.permission ? { ...base, permission: model.permission } : null
     default:
       return null
   }

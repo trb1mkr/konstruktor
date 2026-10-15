@@ -6,13 +6,23 @@
 
 ## 🧩 Виды панелей
 
-Сервис поддерживает kinds `menu`, `toast`, `dialog`, `find`, `icon`, `window-menu`, `zoom`. Меню показывает пункты и инкогнито-бейдж, тост показывает завершение загрузки, диалог запрашивает ввод, диалог иконки принимает URL, путь к файлу или emoji с верификацией типа (`iconVerify.ts` — `verifyIconSource`/`verifyEmojiButton`), поиск висит над страницей, попап зума управляет масштабом страницы у бейджа в адресной строке.
+Сервис поддерживает kinds `menu`, `toast`, `dialog`, `find`, `icon`, `window-menu`, `zoom`, `extensions`, `permission`. Меню показывает пункты и инкогнито-бейдж, тост показывает завершение загрузки, диалог запрашивает ввод, диалог иконки принимает URL, путь к файлу или emoji с верификацией типа (`iconVerify.ts` — `verifyIconSource`/`verifyEmojiButton`), поиск висит над страницей, попап зума управляет масштабом страницы у бейджа в адресной строке, промпт разрешения — условия запроса сайта и выбор «Разрешить/Заблокировать».
+
+Промпт разрешения стоит под адресной строкой: якорь присылает shell каналом `permissions:anchor` (панель кладут и сверху, и снизу), main хранит его в `WindowState.permissionAnchor`. Выбор уходит общим каналом `overlay:submit` строкой `allow::1` — вид не заводит своего канала. Кнопки промпта идут ПЕРЕД чекбоксом в DOM, а визуальный порядок задан CSS `order`: фокус при открытии ставится на первый focusable уровня, и чекбокс первым же кадром получал бы рамку фокуса.
 
 Компонент для каждого вида выбирается из реестра `renderer/overlay/registry.ts` по `model.view`, поэтому новая поверхность добавляется регистрацией компонента, а не правкой корня.
 
-Виды с общим контрактом гашения собирает `isDismissableMenuLike` (menu, window-menu, zoom, extensions): повторный клик-тогл по триггеру, клик мимо по shell/странице и запоминание `lastClosed` проходят через неё. Меню расширений входит и в списки фокуса в `service.ts` — `noteFocusHandoff` и `focus()`: без первого родительский blur считался уходом из приложения и меню гасло сразу после открытия. Зум-попап в списке обязателен: без него он не закрывался бы кликом по странице либо закрывался при каждом `+`. Команды `select` попапа дополнительно держат сессию открытой через `holdOnSelect` — `+`/`−`/`Reset` обновляют процент патчем `overlay:update` вместо закрытия.
+Виды с общим контрактом гашения собирает `isDismissableMenuLike` (menu, window-menu, zoom, extensions): повторный клик-тогл по триггеру, клик мимо по shell/странице и запоминание `lastClosed` проходят через неё. Промпт разрешения в неё не входит намеренно: у него своя логика (Esc и подложка — отказ, смена вкладки — скрытие и возврат), и клик по shell не должен его гасить. Меню расширений входит и в списки фокуса в `service.ts` — `noteFocusHandoff` и `focus()`: без первого родительский blur считался уходом из приложения и меню гасло сразу после открытия. Зум-попап в списке обязателен: без него он не закрывался бы кликом по странице либо закрывался при каждом `+`. Команды `select` попапа дополнительно держат сессию открытой через `holdOnSelect` — `+`/`−`/`Reset` обновляют процент патчем `overlay:update` вместо закрытия.
 
-## 📐 Позиционирование и размер
+## � Завершение сессий для потребителей
+
+Оверлей сообщает о снятии поверхности наружу: `setOverlayEndedListener` (единственный слушатель) зовут все точки закрытия — `closeOverlay` при глубине 1, `closeStack`, `abortPresent` и ветка вытеснения в `showOverlay`. Нужно тем поверхностям, у которых есть незакрытый запрос к внешнему миру: промпт разрешения держит `getUserMedia` страницы, и не ответить ему — повесить страницу навсегда.
+
+В ветке вытеснения уведомление идёт ПОСЛЕ `setSession` новой сессии: иначе потребитель успел бы показать следующую поверхность и вложился бы в чужой показ.
+
+Одно событие на все сценарии: различать «закрыли намеренно» и «вкладку переключили» обязан владелец очереди, а не оверлей — оверлей не знает, что значат его поверхности для потребителя. Подробности — в [`permissions/PERMISSIONS.md`](../permissions/PERMISSIONS.md).
+
+## �📐 Позиционирование и размер
 
 Позиция и размер поверхности описываются декларативно в `geometry.ts` (`SurfaceSpec` на вид: ширина и чем она задаётся, высота, выравнивание, отступ) и считаются функцией `resolveBounds()` с разворотом меню у края экрана.
 
@@ -51,10 +61,10 @@ flowchart LR
 
 Окно живёт постоянно, а видимость меняется прозрачностью:
 
-| Действие | Реализация |
-|----------|-----------|
-| Показать | `setOpacity(1)` |
-| Скрыть | `setOpacity(0)` + `setIgnoreMouseEvents(true)` + размонтирование содержимого |
+| Действие | Реализация                                                                   |
+| -------- | ---------------------------------------------------------------------------- |
+| Показать | `setOpacity(1)`                                                              |
+| Скрыть   | `setOpacity(0)` + `setIgnoreMouseEvents(true)` + размонтирование содержимого |
 
 Окно показывается один раз за жизнь — на прогреве при старте, сразу с `setOpacity(0)`.
 
@@ -69,20 +79,23 @@ flowchart LR
 Показ выполняется только после подтверждения отрисовки от renderer: до сигнала `overlay:painted` окно прозрачно, иначе видны пункты предыдущего меню.
 
 ```ts
-win.setOpacity(0)                    // погасить
-win.setBounds({ x, y, w, h })        // потом переставить
-pushPayload(win, message)            // данные через overlay:push
-setContentUnmounted(win, false)      // renderer снимает v-if
+win.setOpacity(0) // погасить
+win.setBounds({ x, y, w, h }) // потом переставить
+pushPayload(win, message) // данные через overlay:push
+setContentUnmounted(win, false) // renderer снимает v-if
 const painted = await overlayPainted(win, token)
-if (!painted) { abortPresent(win, parent, token); return }
-win.setOpacity(1)                    // и только теперь видно
+if (!painted) {
+  abortPresent(win, parent, token)
+  return
+}
+win.setOpacity(1) // и только теперь видно
 ```
 
 Если подтверждения не пришло, показ отменяется и оверлей возвращается в пул: показ вслепую дал бы пустое окно без ошибок в логах.
 
 Push несёт тему, флаг анимаций и язык интерфейса (`PushMessage.language`, код из реестра LANGUAGES). Renderer применяет язык до отрисовки стека — FindBar и диалог иконки монтируются уже на нём. Каталоги вшиты в бандл, поэтому `changeLanguage` отрабатывает синхронно (см. [I18N.md](../../shared/i18n/I18N.md)).
 
-Тем же push едет `PushMessage.menuDisplay` — видимость частей пункта меню (иконка, текст, подпись хоткея) из настроек, одним полем на всё сообщение: это свойство интерфейса, а не сессии, и все меню стека обязаны выглядеть одинаково. Renderer отдаёт его в `MenuList` через `propsFor`; разбор — в [OVERLAY_UI.md](../../renderer/overlay/OVERLAY_UI.md) «Оформление меню».
+Тем же push едет `PushMessage.menuDisplay` — видимость частей пункта меню (иконка, текст, подпись хоткея) из настроек, одним полем на всё сообщение: это свойство интерфейса, а не сессии, и все меню стека обязаны выглядеть одинаково. Renderer отдаёт его в `MenuList` через `propsFor`; разбор — в [OVERLAY_UI.md](../../renderer/overlay/OVERLAY_UI.md) «Оформление меню». Настроек не слушаются только две вещи: кнопка-действие пункта (`OverlayMenuItem.actionIcon`, 🗑️ у разрешений) — это действие, а не оформление, — и подзаголовок группы (`heading`, «Разрешено:» у разрешений), который рисуется обычным цветом и размером, хотя несёт `disabled`. Строка-справка (`plain`, тоже разрешения) — тоже оформление, а не настройка: в ней название не нажимается, действие живёт в отдельной кнопке справа (см. там же).
 
 Таймаут ожидания разделён надвое: `PAINT_BUDGET_MS` (60 мс) — только лог, показ не трогаем; `PAINT_TIMEOUT_MS` (1000 мс) — настоящая страховка для случая «renderer не ответит никогда». Разделение принципиально: пока ждём, окно прозрачно и пусто, поэтому ожидание не ощущается — оно целиком уходит на паузу **до** появления меню. Короткий таймаут ловит не поломку, а медленный кадр, и отменяет показ, который вот-вот был бы показан.
 
@@ -129,6 +142,7 @@ OVERLAY_DEBUG=2 npm run dev
 Категории: `pool`, `session`, `command`, `geometry`, `perf`, `lifecycle`, `error`. Полный список флагов окружения и средств отладки — в [DIAGNOSTICS.md](../docs/DIAGNOSTICS.md).
 
 Пример вывода:
+
 ```
 [overlay:pool     ] prewarming window { parentId: 1 }
 [overlay:perf     ] prewarm: 358.0ms { parentId: 1 }
@@ -159,11 +173,11 @@ Windows анимирует появление и скрытие frameless-окн
 
 ### 🔔 Событие готовности окна: dev ≠ prod
 
-| Сценарий | Навигация | Событие |
-|---|---|---|
-| dev (`loadURL` на Vite, смена hash) | same-document | `did-navigate-in-page` |
-| prod (`loadFile` с hash) | полный reload | `did-finish-load` |
-| новое окно | первая загрузка | `ready-to-show` |
+| Сценарий                            | Навигация       | Событие                |
+| ----------------------------------- | --------------- | ---------------------- |
+| dev (`loadURL` на Vite, смена hash) | same-document   | `did-navigate-in-page` |
+| prod (`loadFile` с hash)            | полный reload   | `did-finish-load`      |
+| новое окно                          | первая загрузка | `ready-to-show`        |
 
 Слушатели вешать **до** `load` — иначе на быстром кэше событие приходит раньше подписки. Оба слушателя обязательно снимать в обработчике: не сработавший `once` висит до следующей навигации, и Electron ругается на `MaxListenersExceededWarning` (лимит 10 на WebContents).
 
@@ -192,8 +206,8 @@ Windows анимирует появление и скрытие frameless-окн
 win.setBounds({ x, y, width, height })
 win.setIgnoreMouseEvents(false)
 setContentUnmounted(win, false)
-await overlayPainted(win, token)   // ждём overlay:painted
-win.setOpacity(1)                 // и только теперь видимо
+await overlayPainted(win, token) // ждём overlay:painted
+win.setOpacity(1) // и только теперь видимо
 ```
 
 Renderer подтверждает после **двух** `requestAnimationFrame` от момента применения `parked = false`: первый кадр — DOM обновлён, второй — кадр реально отдан. Один `rAF` недостаточен, он срабатывает до применения `v-if`.
@@ -202,10 +216,10 @@ Renderer подтверждает после **двух** `requestAnimationFrame
 
 **Общий принцип порядка операций:**
 
-| Действие | Порядок |
-|---|---|
-| Парковка | содержимое → прозрачность → ввод → перемещение |
-| Показ | координаты → ввод → содержимое → **ждём кадр** → прозрачность |
+| Действие | Порядок                                                       |
+| -------- | ------------------------------------------------------------- |
+| Парковка | содержимое → прозрачность → ввод → перемещение                |
+| Показ    | координаты → ввод → содержимое → **ждём кадр** → прозрачность |
 
 ### 🎯️ Мигание старого меню на Linux
 
@@ -247,8 +261,8 @@ Renderer подтверждает после **двух** `requestAnimationFrame
 Парковка выполняется в порядке «сначала опустошить, потом перемещать»:
 
 ```ts
-setContentUnmounted(overlay, true)                    // 1. убрать содержимое
-overlay.setOpacity(0)                                 // 2. погасить прозрачность
+setContentUnmounted(overlay, true) // 1. убрать содержимое
+overlay.setOpacity(0) // 2. погасить прозрачность
 overlay.setIgnoreMouseEvents(true, { forward: false }) // 3. выключить ввод
 // перемещение — устарело, отключено
 ```
@@ -257,11 +271,11 @@ overlay.setIgnoreMouseEvents(true, { forward: false }) // 3. выключить 
 
 **Скрытие держится на трёх независимых слоях:**
 
-| Слой | Что делает |
-|---|---|
-| `setIgnoreMouseEvents(true)` | Окно не перехватывает клики — **главный слой** |
-| `overlay:park` + `v-if` | Содержимое убрано из рендера, пустой DOM не виден нигде |
-| `pointer-events: none` | Полноэкранный `.overlay-root` перестаёт быть мишенью мыши |
+| Слой                         | Что делает                                                |
+| ---------------------------- | --------------------------------------------------------- |
+| `setIgnoreMouseEvents(true)` | Окно не перехватывает клики — **главный слой**            |
+| `overlay:park` + `v-if`      | Содержимое убрано из рендера, пустой DOM не виден нигде   |
+| `pointer-events: none`       | Полноэкранный `.overlay-root` перестаёт быть мишенью мыши |
 
 `setOpacity(0)` — дополнительно, на Linux не гарантия.
 
@@ -272,9 +286,9 @@ overlay.setIgnoreMouseEvents(true, { forward: false }) // 3. выключить 
 Полный набор — три независимых слоя, любой достаточен:
 
 ```ts
-overlay.setIgnoreMouseEvents(true, { forward: false })  // ввод
-overlay.setOpacity(0)                                   // прозрачность
-setContentUnmounted(overlay, true)                      // содержимое
+overlay.setIgnoreMouseEvents(true, { forward: false }) // ввод
+overlay.setOpacity(0) // прозрачность
+setContentUnmounted(overlay, true) // содержимое
 ```
 
 Обе ветки парковки обязаны делать одно и то же. Забыть `setIgnoreMouseEvents` в одной из них — и цикл `dismiss` вернётся только в этом сценарии.
@@ -304,11 +318,11 @@ resolved:    displayId 1203119769   <- дисплей родителя
 
 Диагностика: сравнить `paint` на первом и последующих открытиях. Равные значения — переезда нет.
 
-| Конфигурация парковки | `paint` первого открытия |
-|---|---|
-| за объединённой рабочей областью (другой дисплей) | 16.6 мс |
-| в пределах дисплея родителя | 3.8 мс |
-| перемещение отключено полностью | 3.9 мс |
+| Конфигурация парковки                             | `paint` первого открытия |
+| ------------------------------------------------- | ------------------------ |
+| за объединённой рабочей областью (другой дисплей) | 16.6 мс                  |
+| в пределах дисплея родителя                       | 3.8 мс                   |
+| перемещение отключено полностью                   | 3.9 мс                   |
 
 Убирать нужно не парковку, а **смену дисплея**: две последние конфигурации дают одинаковый результат.
 
@@ -372,8 +386,12 @@ await waitPageReady(win)
 Лечится через `pointer-events` в CSS, а не только через `setIgnoreMouseEvents`:
 
 ```css
-.overlay-root { pointer-events: none; }    /* парк: мишени нет вообще */
-.overlay-root.live { pointer-events: auto; } /* показ: пункты кликабельны */
+.overlay-root {
+  pointer-events: none;
+} /* парк: мишени нет вообще */
+.overlay-root.live {
+  pointer-events: auto;
+} /* показ: пункты кликабельны */
 ```
 
 Класс `live` ставится реактивно от `parked`. Три слоя работают только вместе: `setIgnoreMouseEvents` (ОС), `pointer-events` (DOM), отсутствие содержимого (`v-if`).
@@ -456,8 +474,7 @@ if (process.platform === 'win32' && overlay.isFocused()) return
 **Исправление.** Исключение сужено до своей поверхности:
 
 ```ts
-if (focused && !focused.isDestroyed() &&
-    (focused.id === holder.id || focused.id === parent.id)) {
+if (focused && !focused.isDestroyed() && (focused.id === holder.id || focused.id === parent.id)) {
   return false
 }
 ```
@@ -493,9 +510,9 @@ if (focused && !focused.isDestroyed() &&
 
 ```ts
 app.on('browser-window-focus', (_e, focused) => {
-  const parentId = parentOfPooledOverlay(focused.id)   // карта ОКОН, не сессий
+  const parentId = parentOfPooledOverlay(focused.id) // карта ОКОН, не сессий
   if (parentId === undefined) return
-  if (!isContentUnmounted(parentId)) return             // фокус законный
+  if (!isContentUnmounted(parentId)) return // фокус законный
   BrowserWindow.fromId(parentId)?.focus()
 })
 ```
@@ -510,10 +527,10 @@ app.on('browser-window-focus', (_e, focused) => {
 
 Проверка различается по платформе, и это не формальность:
 
-| Платформа | Признак | Почему |
-|---|---|---|
-| Windows | `win.isFocused()` | `focus()` синхронен, метка времени не годится |
-| Linux | `focusHandoff` по времени | `focus()` асинхронен, `isFocused()` ещё `false` |
+| Платформа | Признак                   | Почему                                          |
+| --------- | ------------------------- | ----------------------------------------------- |
+| Windows   | `win.isFocused()`         | `focus()` синхронен, метка времени не годится   |
+| Linux     | `focusHandoff` по времени | `focus()` асинхронен, `isFocused()` ещё `false` |
 
 **Guard `if (win.isFocused()) return` здесь вреден.** Он выглядит безобидной защитой, но по замеру `isFocused()` уже `true`, и guard отменяет ровно тот вызов, ради которого написан. Условие на `focused()` проверять нельзя: наш интерес — не «в фокусе ли окно», а «доходит ли до нас ввод».
 
@@ -538,7 +555,7 @@ parent.webContents.on('before-input-event', (event, input) => {
   if (input.type !== 'keyDown' || input.key !== 'Escape') return
   const entry = active.get(parent.id)
   if (!entry) return
-  if (entry.request.kind === 'toast') return   // пассивны, не гасим
+  if (entry.request.kind === 'toast') return // пассивны, не гасим
   event.preventDefault()
   closeOverlay(parent)
 })
@@ -645,7 +662,7 @@ setActiveTabRaw(ws, deps, id)      // внутри: view.webContents.focus()
 
 ```ts
 const stillSame = active.get(parentId)?.sessionId === entry.sessionId
-if (parent) closeOverlay(parent)     // stillSame игнорируется
+if (parent) closeOverlay(parent) // stillSame игнорируется
 ```
 
 После `onSelect`, открывшего новую сессию (меню → диалог иконки), `closeOverlay` закрывал **уже новую** сессию, потому что `active` перезаписан. Диалог жил ноль времени: `open(icon)` завершался успешно, `paint` в норме, и сразу шло `closing { kind: 'icon' }`.
