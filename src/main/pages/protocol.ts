@@ -1,22 +1,29 @@
 // Роутинг konstruktor://: один хендл на схему, роутинг по host.
 // Выделено из index.ts. protocol.handle привязан к сессии — хендл
-// регистрируется на всех трёх партициях, иначе view с persist-партицией
-// не резолвит konstruktor://*.
+// регистрируется на каждой партиции пространства (обычной и приватной),
+// иначе view с persist-партицией не резолвит konstruktor://*.
 //
-// HTML собирается на каждый запрос с текущим языком: готовая строка
-// при импорте модуля успела бы устареть к моменту смены настроек.
+// Пространство передаётся замыканием: страница обслуживает данные того
+// пространства, чья это сессия, а по запросу партицию не узнать.
+//
+// HTML собирается на каждый запрос с языком СВОЕГО пространства: язык —
+// настройка пространства, а окна разных пространств живут одновременно.
+// Готовая строка при импорте модуля успела бы устареть к моменту смены
+// настроек.
 import {
   buildStartPage,
   buildHistoryPage,
   buildSettingsPage,
   buildDownloadsPage,
   buildExtensionsPage,
-  buildPermissionsPage
+  buildPermissionsPage,
+  buildWorkspacesPage
 } from './internalPages'
-import { currentLang, t } from '../i18n'
+import { langFor, translatorFor } from '../i18n'
 import { readFile } from 'fs/promises'
 import { extname, join, resolve, sep } from 'path'
 import { findExtensionRecord } from '../extensions/extensionStore'
+import { bootWorkspaceId } from '../workspaces/registry'
 
 // MIME собственной страницы расширения: konstruktor://ext/<id>/<файл>.
 const EXT_MIME: Record<string, string> = {
@@ -34,8 +41,9 @@ const EXT_MIME: Record<string, string> = {
 
 // Файл расширения отдаётся только из его каталога: попытка выйти за
 // пределы через '..' возвращает 404, а не содержимое чужого файла.
-async function serveExtensionFile(extId: string, rel: string): Promise<Response> {
-  const rec = findExtensionRecord(extId)
+async function serveExtensionFile(extId: string, rel: string, wsId: string): Promise<Response> {
+  const t = translatorFor(langFor(wsId))
+  const rec = findExtensionRecord(extId, wsId)
   if (!rec) return new Response(t('internal.notFound'), { status: 404 })
   const root = resolve(rec.dir) + sep
   const target = resolve(join(rec.dir, rel || 'page.html'))
@@ -49,11 +57,12 @@ async function serveExtensionFile(extId: string, rel: string): Promise<Response>
   }
 }
 
-export function registerInternalProtocol(ses: Electron.Session): void {
+export function registerInternalProtocol(ses: Electron.Session, wsId = bootWorkspaceId()): void {
   try {
     ses.protocol.handle('konstruktor', async (req) => {
       const host = new URL(req.url).host
-      const lang = currentLang()
+      const lang = langFor(wsId)
+      const t = translatorFor(lang)
       if (host === 'start') {
         return new Response(buildStartPage(lang), {
           headers: { 'content-type': 'text/html; charset=utf-8' }
@@ -84,11 +93,16 @@ export function registerInternalProtocol(ses: Electron.Session): void {
           headers: { 'content-type': 'text/html; charset=utf-8' }
         })
       }
+      if (host === 'workspaces') {
+        return new Response(buildWorkspacesPage(lang), {
+          headers: { 'content-type': 'text/html; charset=utf-8' }
+        })
+      }
       // Страницы собственных расширений: konstruktor://ext/<id>/<файл>.
       if (host === 'ext') {
         const parts = new URL(req.url).pathname.split('/').filter(Boolean)
         const extId = parts.shift() ?? ''
-        return serveExtensionFile(extId, parts.join('/'))
+        return serveExtensionFile(extId, parts.join('/'), wsId)
       }
       return new Response(t('internal.notFound'), { status: 404 })
     })

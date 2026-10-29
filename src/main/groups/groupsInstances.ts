@@ -20,7 +20,7 @@ export function syncSavedUrls(ws: WindowState, instanceId: string): void {
     .filter((u) => u && u !== 'about:blank')
   const inst = ws.openGroups.find((g) => g.instanceId === instanceId)
   if (!inst || urls.length === 0) return
-  void updateSavedGroup(inst.savedId, { urls }).catch(() => undefined)
+  void updateSavedGroup(inst.savedId, { urls }, ws.workspaceId).catch(() => undefined)
 }
 
 export interface GroupTabDeps {
@@ -40,7 +40,7 @@ export function openInstance(
   parentInstanceId?: string
 ): string | null {
   void (async () => {
-    const list = await getGroups()
+    const list = await getGroups(ws.workspaceId)
     const byId = new Map(list.map((g) => [g.id, g]))
     const openRec = (id: string, parent?: string, seen: string[] = []): void => {
       if (seen.includes(id)) return
@@ -69,13 +69,16 @@ export async function createAndOpen(
   deps: GroupTabDeps,
   input: { name?: string; icon?: string; color?: string; pinned?: boolean }
 ): Promise<{ savedId: string; instanceId: string }> {
-  const saved = await createSavedGroup({
-    name: input.name ?? 'Group',
-    icon: input.icon ?? '',
-    color: input.color ?? '#888888',
-    urls: [START_URL],
-    pinned: input.pinned
-  })
+  const saved = await createSavedGroup(
+    {
+      name: input.name ?? 'Group',
+      icon: input.icon ?? '',
+      color: input.color ?? '#888888',
+      urls: [START_URL],
+      pinned: input.pinned
+    },
+    ws.workspaceId
+  )
   const instanceId = allocInstance()
   ws.openGroups.push({ instanceId, savedId: saved.id, collapsed: false, pinned: false })
   ensureStripToken(ws, `g:${instanceId}`, false)

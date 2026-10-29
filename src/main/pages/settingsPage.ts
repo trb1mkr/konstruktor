@@ -5,7 +5,7 @@
 // в реестре + файл каталога, страница при этом не правится.
 import { LANGUAGES } from '../../shared/i18n'
 import { HOTKEY_ACTIONS, type HotkeyActionId } from '../../shared/hotkey-actions'
-import { t } from '../i18n'
+import { translatorFor, type Translator } from '../i18n'
 import { shell } from './shell'
 
 // Названия действий для таблицы: литеральные ключи i18n (динамический
@@ -14,11 +14,14 @@ import { shell } from './shell'
 // Резолв — функция, а не константа модуля: t() синхронен только после
 // initI18n(), а импорт модуля случается раньше. Подписи, посчитанные на
 // уровне модуля, приходили пустыми: i18next до init отдаёт undefined.
-function hotkeyLabels(): Record<HotkeyActionId, string> {
+// Переводчица приходит аргументом: язык — свойство ПРОСТРАНСТВА, а
+// глобальная t() отдала бы язык процесса.
+function hotkeyLabels(t: Translator): Record<HotkeyActionId, string> {
   return {
     reload: t('hotkeys.actions.reload'),
     'close-tab': t('hotkeys.actions.closeTab'),
     'new-tab': t('hotkeys.actions.newTab'),
+    'reopen-closed': t('hotkeys.actions.reopenClosed'),
     find: t('hotkeys.actions.find'),
     devtools: t('hotkeys.actions.devtools'),
     fullscreen: t('hotkeys.actions.fullscreen')
@@ -26,12 +29,14 @@ function hotkeyLabels(): Record<HotkeyActionId, string> {
 }
 
 export function buildSettingsPage(lang: string): string {
+  // Язык — параметр сборки: страница отдаётся в языке СВОЕГО пространства.
+  const t = translatorFor(lang)
   const langOptions = LANGUAGES.map(
     (l) => `\n       <option value="${l.code}">${l.label}</option>`
   ).join('')
   // Строки таблицы горячих клавиш: действие, его подпись и акселератор по
   // умолчанию. Текущие значения подставляет скрипт страницы из настроек.
-  const labels = hotkeyLabels()
+  const labels = hotkeyLabels(t)
   const hotkeyRows = HOTKEY_ACTIONS.map((a) => ({
     id: a.id,
     label: labels[a.id],

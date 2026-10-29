@@ -12,7 +12,7 @@
 //
 // Собирается как остальные внутренние страницы: HTML на каждый запрос
 // (статические строки — через t(), динамические в скрипте — через tr()).
-import { t } from '../i18n'
+import { translatorFor } from '../i18n'
 import { ALL_SCOPES, SCOPE_ICON, SCOPE_LABEL } from '../permissions/policy'
 import { shell } from './shell'
 
@@ -22,6 +22,8 @@ import { shell } from './shell'
 const TEST_SITE = 'https://permission.site'
 
 export function buildPermissionsPage(lang: string): string {
+  // Язык — параметр сборки: страница отдаётся в языке СВОЕГО пространства.
+  const t = translatorFor(lang)
   // Метаданные областей считаются здесь, а не в скрипте: таблица областей
   // живёт в main (permissions/policy.ts), и подписи переводятся t().
   const scopeMeta = ALL_SCOPES.map((scope) => ({

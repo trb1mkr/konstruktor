@@ -11,10 +11,30 @@
 //   здесь, в store/ оно задержало бы создание первого окна;
 // - сессии/партиции -> browserState (константы) или отдельный модуль,
 //   если появятся правила миграции сессий.
-import { app, BrowserWindow, WebContentsView, screen } from 'electron'
+import { app, BrowserWindow, WebContentsView, screen, session } from 'electron'
 import { join } from 'path'
-import { windows, type WindowState, INCOGNITO_PARTITION } from './browserState'
-import { getSettings, getSettingsSync, saveSettings, saveSettingsSync } from '../store/settingsStore'
+import { windows, type WindowState } from './browserState'
+import { getSettings, getSettingsSync } from '../store/settingsStore'
+import { tFor } from '../i18n'
+import { syncProcessScheme } from '../browserTheme'
+import { readSettingsFileSync as readWorkspaceSettingsSync } from '../store/settingsStore'
+import {
+  allocWindowKey,
+  bootWorkspaceId,
+  setLastOpenWorkspaceId,
+  touchWorkspaceOpened
+} from '../workspaces/registry'
+import { ensureWorkspaceSession, incognitoPartitionFor } from '../workspaces/electronSession'
+import {
+  captureWindow,
+  isAppQuitting,
+  persistWorkspaceWindowsSync,
+  scheduleWorkspaceWindowsPersist,
+  type SnapshotTab,
+  type SnapshotWindow
+} from '../workspaces/windowSnapshot'
+import { recordClosed } from '../store/closedStore'
+import { endWorkspaceSession } from '../workspaces/sessions'
 import { openFindOverlay } from '../find/findManager'
 import { toggleDevTools } from '../tabs/devtools'
 import { applyZoomToWs, stepActiveZoom, zoomShortcut } from '../zoomManager'
@@ -22,34 +42,27 @@ import { isHotkeyCapture, matchHotkey } from '../hotkeys'
 import { fireExtensionCommand } from '../extensions/bridge'
 import { matchCommands } from '../extensions/commands'
 import { ensureOverlayWindow } from '../overlay'
-import { readFileSync, existsSync } from 'fs'
 
 // NOTE: dev = не упакованное приложение.
 export const isDev = !app.isPackaged
 
-// Синхронное чтение settings.json напрямую с диска.
+// Синхронное чтение настроек пространства.
 // Нужно в createWindow: кэш settingsStore еще пуст на момент первого окна,
 // а асинхронный load() задержал бы создание окна. Возвращает частичные
 // настройки поверх дефолтов — отсутствующие поля добирает store при load().
-export function readSettingsFileSync(): {
+export function readSettingsFileSync(wsId = bootWorkspaceId()): {
   rememberBounds?: boolean
   rememberTabs?: boolean
   windowBounds?: { x: number; y: number; width: number; height: number }
   windowMaximized?: boolean
   sessionTabs?: { url: string; active: boolean }[]
 } {
-  try {
-    const p = join(app.getPath('userData'), 'settings.json')
-    if (!existsSync(p)) return {}
-    return JSON.parse(readFileSync(p, 'utf-8')) as {
-      rememberBounds?: boolean
-      rememberTabs?: boolean
-      windowBounds?: { x: number; y: number; width: number; height: number }
-      windowMaximized?: boolean
-      sessionTabs?: { url: string; active: boolean }[]
-    }
-  } catch {
-    return {}
+  return readWorkspaceSettingsSync(wsId) as {
+    rememberBounds?: boolean
+    rememberTabs?: boolean
+    windowBounds?: { x: number; y: number; width: number; height: number }
+    windowMaximized?: boolean
+    sessionTabs?: { url: string; active: boolean }[]
   }
 }
 
@@ -65,12 +78,30 @@ export function layoutView(ws: WindowState, view: WebContentsView): void {
     return
   }
   const ins = ws.uiInsets
-  view.setBounds({
+  const next = {
     x: ins.left,
     y: ins.top,
     width: Math.max(0, b.width - ins.left - ins.right),
     height: Math.max(0, b.height - ins.top - ins.bottom)
-  })
+  }
+  view.setBounds(next)
+  // KONSTRUKTOR_LAYOUT_DEBUG=1 печатает геометрию области страницы.
+  // "Страница сжата и сдвинута вверх после восстановления" невозможно
+  // отличить на глаз от расхождения contentBounds и insets: нужны числа.
+  if (process.env['KONSTRUKTOR_LAYOUT_DEBUG'] === '1') {
+    console.log(
+      '[layout]',
+      ws.key,
+      'content',
+      `${b.width}x${b.height}`,
+      'insets',
+      JSON.stringify(ins),
+      '-> view',
+      `${next.width}x${next.height} @${next.x},${next.y}`,
+      'tab',
+      ws.activeTabId
+    )
+  }
 }
 
 export function layoutActiveView(ws: WindowState): void {
@@ -94,8 +125,95 @@ export function snapshotSessionTabs(ws: WindowState): { url: string; active: boo
 
 export function persistSessionTabs(ws: WindowState): void {
   if (ws.incognito) return
-  if (getSettingsSync().rememberTabs === false) return
-  void saveSettings({ sessionTabs: snapshotSessionTabs(ws) }).catch(() => undefined)
+  if (getSettingsSync(ws.workspaceId).rememberTabs === false) return
+  // Слепок окон вместо плоского sessionTabs: у каждого окна свои вкладки,
+  // группы и порядок панели. Пишется отложенно — вызов идёт на каждую
+  // навигацию и каждое перетаскивание.
+  scheduleWorkspaceWindowsPersist(ws.workspaceId)
+}
+
+/**
+ * Восстанавливает окно из слепка пространства.
+ *
+ * Порядок обязателен и тот же, что в cloneWindow: группы → вкладки → ряд.
+ * Вкладка ссылается на instanceId группы, а токен вкладки в ряду
+ * вычисляется только после её создания — обратный порядок оставил бы
+ * ссылку в пустоте или потерял вкладку из панели.
+ *
+ * Токены в слепке адресуют вкладки КЛЮЧАМИ (`t:<key>`), а в живом окне
+ * ряд хранит runtime id: подмена делается по карте ключей.
+ */
+/**
+ * Переносит поля слепка в живую запись вкладки.
+ *
+ * Пользовательские переопределения (заголовок и иконка) важнее полей
+ * страницы: страница перезаписывает title/favicon при загрузке, а вернуть
+ * вкладку с прежним именем пользователь ожидает сразу, а не после
+ * навигации.
+ */
+export function applySnapshotTab(ws: WindowState, id: number, tab: SnapshotTab): void {
+  const rec = ws.tabs.get(id)
+  if (!rec) return
+  rec.key = tab.key
+  rec.title = tab.title || tab.url
+  rec.favicon = tab.favicon
+  rec.customTitle = tab.customTitle
+  rec.customFavicon = tab.customFavicon
+  rec.pinned = tab.pinned
+  rec.groupId = tab.groupId
+}
+
+export function restoreWindowSnapshot(
+  ws: WindowState,
+  deps: WindowDeps,
+  snap: SnapshotWindow
+): boolean {
+  ws.openGroups = snap.openGroups.map((g) => ({ ...g }))
+  const keyToId = new Map<string, number>()
+  for (const tab of snap.tabs) {
+    let id: number
+    try {
+      id = deps.createTab(ws, tab.url)
+    } catch {
+      // Битый URL — вкладку пропускаем, остальные восстанавливаем.
+      continue
+    }
+    if (!ws.tabs.has(id)) continue
+    applySnapshotTab(ws, id, tab)
+    keyToId.set(tab.key, id)
+  }
+  const remap = (tokens: string[]): string[] =>
+    tokens
+      .map((token) => {
+        if (!token.startsWith('t:')) return token
+        const id = keyToId.get(token.slice(2))
+        return id === undefined ? null : `t:${id}`
+      })
+      .filter((token): token is string => token !== null)
+  ws.stripOrder = remap(snap.stripOrder)
+  ws.pinnedStripOrder = remap(snap.pinnedStripOrder)
+  // Порядок создания совпадает с порядком слепка, но вкладки, упавшие
+  // на битом URL, в tabOrder не попали — приводим явно.
+  ws.tabOrder = snap.tabs
+    .map((tab) => keyToId.get(tab.key))
+    .filter((id): id is number => id !== undefined)
+  const activeId = snap.activeTabKey ? keyToId.get(snap.activeTabKey) : undefined
+  ws.activeTabId = activeId ?? (ws.tabOrder.length > 0 ? ws.tabOrder[ws.tabOrder.length - 1] : null)
+  // Ровно то состояние, в котором окно оказалось бы после переключения
+  // вкладки: неактивные view скрыты, активная показана и получила фокус.
+  //
+  // Без этого шага все восстановленные view оставались ВИДИМЫМИ: каждая
+  // рендерится своим compositor-слоем, слои накладываются, и страница
+  // выводится со сдвигом и в меньшем размере (артефакт «страница сжалась
+  // и уехала вверх», а переключение вкладок его чинило — оно как раз
+  // скрывало лишние view).
+  for (const id of ws.tabOrder) ws.tabs.get(id)?.view.setVisible(false)
+  const activeRec = ws.activeTabId !== null ? ws.tabs.get(ws.activeTabId) : undefined
+  if (activeRec) {
+    activeRec.view.setVisible(true)
+    activeRec.view.webContents.focus()
+  }
+  return ws.tabOrder.length > 0
 }
 
 // F11-сценарий и сброс контентного режима — в fullscreen.ts: они
@@ -111,13 +229,16 @@ export interface WindowDeps {
   // у createTab: сама реализация живёт в tabsManager, сюда приходит через
   // deps, чтобы не тянуть tabs/* в windows/* импортом.
   closeTab: (ws: WindowState, id: number) => void
+  // Возврат закрытой вкладки/окна: обработчик окна дублирует действие
+  // вкладки, когда фокус в shell (см. closeTab выше).
+  reopenClosed: (ws: WindowState, entryId?: string) => boolean
 }
 
 // Восстановление сессии при старте: создает вкладки из sessionTabs,
 // активную ставит последней (setActiveTab в createTab каждый раз двигает).
 // Возвращает false если восстанавливать нечего — caller создаст стартовую.
 export function restoreSessionTabs(ws: WindowState, deps: WindowDeps): boolean {
-  const saved = readSettingsFileSync()
+  const saved = readSettingsFileSync(ws.workspaceId)
   if (saved.rememberTabs === false) return false
   const tabs = (saved.sessionTabs ?? []).filter(
     (t) => typeof t?.url === 'string' && t.url.length > 0 && t.url !== 'about:blank'
@@ -280,35 +401,74 @@ export function createWindow(
      * общий слот на всё приложение, а не слот конкретного окна.
      */
     restoreSession?: boolean
+    /**
+     * Рабочее пространство окна. По умолчанию — пространство запуска:
+     * так ведут себя старт приложения и все окна, открытые из существующих.
+     * Клон и detach наследуют пространство исходного окна.
+     */
+    workspaceId?: string
+    /** Стабильный ключ окна. Не задан — выдаётся новый (allocWindowKey). */
+    key?: string
+    /**
+     * Слепок окна пространства: вкладки, группы, порядок панели, активная
+     * вкладка. Задан — did-finish-load восстановит это содержимое вместо
+     * стартовой страницы.
+     */
+    snapshot?: SnapshotWindow
+    /**
+     * Не создавать вкладки при готовности renderer.
+     *
+     * Нужно диалогу восстановления после аварии: окно уже стоит на месте
+     * и с правильной геометрией, но вкладки ещё не открыты — решение
+     * принимает пользователь. Без флага окно успело бы создать стартовую,
+     * и восстановление шло бы поверх неё.
+     */
+    deferTabs?: boolean
   } = {},
   deps: WindowDeps
 ): WindowState {
+  const workspaceId = opts.workspaceId ?? bootWorkspaceId()
+  // Сессии пространства поднимаются до создания окна: обработчик
+  // konstruktor://, preload внутренних страниц, разрешения и загрузки обязаны
+  // встать до первой навигации в этой партиции.
+  ensureWorkspaceSession(workspaceId)
+  // Пространство окна становится «последним открытым»: на следующем запуске
+  // приложение откроет именно его. Тем же движением отмечаем время открытия —
+  // карточка на странице пространств показывает «последнее открытие».
+  setLastOpenWorkspaceId(workspaceId)
+  touchWorkspaceOpened(workspaceId)
   const ws: WindowState = {
     window: null,
+    workspaceId,
+    key: opts.key ?? allocWindowKey(workspaceId),
     tabs: new Map(),
     tabOrder: [],
     activeTabId: null,
+    nextTabKey: 1,
     stripOrder: [],
     pinnedStripOrder: [],
-    uiInsets: { top: 110, bottom: 50, left: 0, right: 0 },
+    // Отступы панелей: из слепка окна, если он есть. Иначе — дефолт,
+    // который shell перебьёт своим `layout:update`; до этого момента view
+    // стоит по дефолту, и восстановленная страница успевала отрисоваться
+    // не на своём месте (выше на ~13px и на ~37px короче).
+    uiInsets: opts.snapshot?.uiInsets ?? { top: 110, bottom: 50, left: 0, right: 0 },
     // Новое окно всегда обычное: отдельного приватного окна больше нет,
     // режим переключается на уже открытом через switchIncognito.
     incognito: false,
     contentFullscreen: false,
     openGroups: []
   }
-  // Восстановление геометрии: при rememberBounds стартуем с прошлого
-  // размера/позиции, иначе дефолт 1600×900. Maximized — отдельным флагом.
+  // Восстановление геометрии: сначала слепок окна (у каждого окна своя
+  // позиция), затем общий settings.windowBounds — он остаётся для
+  // профилей, где windows.json ещё нет, и для rememberBounds.
   // Кэш settingsStore в main может быть пустым на момент первого окна
-  // (load() еще не вызывался) — читаем файл синхронно напрямую.
-  const saved = readSettingsFileSync()
+  // (load() еще не вызывался) — читаем файл пространства синхронно.
+  const saved = readSettingsFileSync(workspaceId)
   const useBounds = saved.rememberBounds !== false && saved.windowBounds
   const startBounds =
     opts.x !== undefined || opts.y !== undefined
       ? undefined
-      : useBounds
-        ? saved.windowBounds
-        : undefined
+      : (opts.snapshot?.bounds ?? (useBounds ? saved.windowBounds : undefined))
   const win = new BrowserWindow({
     x: opts.x ?? startBounds?.x,
     y: opts.y ?? startBounds?.y,
@@ -344,7 +504,11 @@ export function createWindow(
       // Цена: localStorage обычного окна тоже не переживает перезапуск.
       // Если понадобится сохранять — отдельная партиция на режим и
       // перезагрузка renderer при переключении.
-      partition: INCOGNITO_PARTITION,
+      //
+      // Партиция берётся по ПРОСТРАНСТВУ: шелл разных пространств не должен
+      // делить storage даже в памяти — иначе данные одного стали бы видны
+      // другому через localStorage.
+      partition: incognitoPartitionFor(workspaceId),
       // ESM-прелоад (.mjs при "type": "module") требует sandbox: false,
       // иначе скрипт молча не грузится и window.browserAPI undefined.
       sandbox: false
@@ -353,12 +517,22 @@ export function createWindow(
   ws.window = win
   windows.set(win.id, ws)
 
+  // Развёрнутое окно разворачивается СРАЗУ, до загрузки страницы: иначе
+  // вкладки восстанавливаются в оконном размере (1604×905), а перед
+  // показом окно становится maximized (2119×1192), и страницу приходится
+  // перерисовывать в середине загрузки — это второй источник того же
+  // артефакта «страница не на месте». Повтор в ready-to-show остаётся
+  // страховкой для WM, которые применяют maximize только к показанному окну.
+  if (opts.snapshot?.maximized && saved.rememberBounds !== false) {
+    win.maximize()
+  }
+
   // Создаём оверлей-окно заранее, чтобы первый оверлей открывался мгновенно.
   ensureOverlayWindow(win)
 
   // DevTools по требованию: настройка devtools, env KONSTRUKTOR_DEVTOOLS=1
   // или флаг --devtools. По умолчанию закрыты.
-  void getSettings()
+  void getSettings(workspaceId)
     .then((s) => {
       const want =
         s.devtools || process.env.KONSTRUKTOR_DEVTOOLS === '1' || process.argv.includes('--devtools')
@@ -381,6 +555,17 @@ export function createWindow(
   }
   win.on('maximize', pushWindowState)
   win.on('unmaximize', pushWindowState)
+  // Разворот меняет contentBounds ПОЗЖЕ события: WM применяет геометрию
+  // асинхронно, и пересчёт внутри самого `maximize` успел бы прочитать
+  // ещё старый размер. Холодный старт с maximized-слепком — ровно этот
+  // случай, поэтому раскладка повторяется после события и на показ окна.
+  win.on('maximize', () => layoutActiveView(ws))
+  win.on('unmaximize', () => layoutActiveView(ws))
+  win.on('show', () => layoutActiveView(ws))
+  // Схема веб-контента (nativeTheme.themeSource) одна на процесс, поэтому
+  // её ставит пространство фокусированного окна: иначе сайты в окне
+  // соседнего пространства жили бы со схемой чужой темы.
+  win.on('focus', () => syncProcessScheme())
   win.on('enter-full-screen', pushWindowState)
   win.on('leave-full-screen', () => {
     // Выход из fullscreen не через F11 (Esc, Win-жесты): контентный режим
@@ -393,19 +578,32 @@ export function createWindow(
   // Сессия вкладок восстанавливается здесь же: did-finish-load значит shell
   // готов принимать pushTabsState. Инкогнито сессию не читает никогда.
   win.webContents.on('did-finish-load', () => {
-    if (ws.tabs.size === 0) {
-      // Сессия читается только если её не отключили вызовом, и никогда
-      // для инкогнито: приватное окно не восстанавливает чужие вкладки.
-      const canRestore = opts.restoreSession !== false && !ws.incognito
-      const restored = canRestore && restoreSessionTabs(ws, deps)
-      if (!restored) deps.createTab(ws)
-    } else {
-      // Вкладки уже есть — значит их положил вызывающий (cloneWindow).
-      // Сессию НЕ читаем: она перезаписала бы только что созданные
-      // вкладки, и клон превратился бы в пустое окно со стартовой.
-      layoutActiveView(ws)
-      deps.pushTabsState(ws)
+    if (ws.tabs.size === 0 && !opts.deferTabs) {
+      // Слепок окна приоритетнее плоского sessionTabs: он несёт группы,
+      // порядок панели и активную вкладку. Плоский слот остался для
+      // профилей, которые ещё не писали windows.json.
+      const fromSnapshot =
+        opts.restoreSession !== false && !ws.incognito && opts.snapshot
+          ? restoreWindowSnapshot(ws, deps, opts.snapshot)
+          : false
+      if (!fromSnapshot) {
+        // Сессия читается только если её не отключили вызовом, и никогда
+        // для инкогнито: приватное окно не восстанавливает чужие вкладки.
+        const canRestore = opts.restoreSession !== false && !ws.incognito
+        const restored = canRestore && restoreSessionTabs(ws, deps)
+        if (!restored) deps.createTab(ws)
+      }
     }
+    // Хвост общий для двух случаев: только что восстановленные вкладки и
+    // вкладки, которые положил вызывающий (cloneWindow). Ветка «вкладки
+    // уже есть» не читает слепок — он перезаписал бы только что
+    // созданные вкладки, и клон превратился бы в пустое окно со стартовой.
+    //
+    // layoutActiveView обязателен и после восстановления: у вкладок,
+    // созданных до первого `layout:update`, bounds считались по дефолтным
+    // инсетам, и без пересчёта страница остаётся смещённой.
+    layoutActiveView(ws)
+    deps.pushTabsState(ws)
   })
   // Активация окна при старте. Осознанный размен: приложение перехватывает
   // фокус даже при запуске из терминала. Отключается удалением блока
@@ -437,8 +635,19 @@ export function createWindow(
     if (wc && !wc.isDestroyed()) {
       wc.focus()
     }
+    // Пересчёт области страницы после показа. До показа contentBounds
+    // окна и его реальная геометрия на части платформ расходятся, и view,
+    // поставленная по «предварительному» размеру, выглядит сжатой и
+    // смещённой. Повтор идёт тем же путём, что и `layout:update`, поэтому
+    // результат совпадает с состоянием после переключения вкладки.
+    layoutActiveView(ws)
   }
   win.once('ready-to-show', () => {
+    // Развёрнутое окно восстанавливается до показа: иначе первый кадр
+    // был бы в оконном размере и окно заметно прыгало бы.
+    if (opts.snapshot?.maximized && saved.rememberBounds !== false) {
+      win.maximize()
+    }
     activateAtStartup()
     // Повтор после микротаска: WM может успеть применить отложенную
     // активацию позже ready-to-show и увести фокус обратно.
@@ -462,7 +671,7 @@ export function createWindow(
     // проверка стоит в обеих точках входа: молчаливое расхождение здесь
     // означало бы, что сочетание сработало вместо ввода.
     if (isHotkeyCapture(win.webContents)) return
-    const action = matchHotkey(input)
+    const action = matchHotkey(input, ws.workspaceId)
     if (action !== null && !win.isDestroyed()) {
       e.preventDefault()
       const rec =
@@ -473,6 +682,8 @@ export function createWindow(
         if (ws.activeTabId !== null) deps.closeTab(ws, ws.activeTabId)
       } else if (action === 'new-tab') {
         deps.createTab(ws)
+      } else if (action === 'reopen-closed') {
+        deps.reopenClosed(ws)
       } else if (action === 'find') {
         openFindOverlay(ws)
       } else if (action === 'devtools') {
@@ -517,8 +728,14 @@ export function createWindow(
   }
 
   // Восстановленный maximized применяется после загрузки shell.
-  if (readSettingsFileSync().rememberBounds !== false && readSettingsFileSync().windowMaximized) {
-    win.maximize()
+  // Слепок окна несёт свой флаг у каждого окна — общий settings.windowMaximized
+  // используется только для профилей без windows.json, иначе второе окно
+  // разворачивалось бы по состоянию первого.
+  if (!opts.snapshot) {
+    const bootSaved = readSettingsFileSync(workspaceId)
+    if (bootSaved.rememberBounds !== false && bootSaved.windowMaximized) {
+      win.maximize()
+    }
   }
 
   // Геометрия пишется при каждом изменении размера/позиции обычного окна.
@@ -527,44 +744,74 @@ export function createWindow(
   // Слушатели парные: 'resized' и 'moved' точны, но по типам Electron
   // только darwin/win32 — на Linux они не приходят ни разу. 'resize' и
   // 'move' приходят везде, и debounce делает их такой же редкой записью.
+  //
+  // Геометрия живёт в слепке ОКНА (windows.json): у каждого своя позиция.
+  // Общий settings.windowBounds пишется только когда слепка ещё нет.
   let boundsTimer: NodeJS.Timeout | null = null
   const persistBounds = () => {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = setTimeout(() => {
       if (win.isDestroyed() || win.isMaximized() || win.isFullScreen()) return
-      void saveSettings({ windowBounds: win.getBounds() }).catch(() => undefined)
+      if (getSettingsSync(ws.workspaceId).rememberBounds === false) return
+      scheduleWorkspaceWindowsPersist(ws.workspaceId)
     }, 500)
   }
   win.on('resized', persistBounds)
   win.on('moved', persistBounds)
   win.on('resize', persistBounds)
   win.on('move', persistBounds)
-  win.on('maximize', () => {
-    void saveSettings({ windowMaximized: true }).catch(() => undefined)
-  })
-  win.on('unmaximize', () => {
-    void saveSettings({ windowMaximized: false }).catch(() => undefined)
-  })
+  win.on('maximize', persistBounds)
+  win.on('unmaximize', persistBounds)
 
   win.on('close', () => {
-    // Финальный слепок при закрытии: обычное окно — bounds + не maximized,
-    // maximized/fullscreen — только флаг (bounds от таких окон кривые).
-    // Сессия вкладок — всегда (кроме инкогнито): закрытие может быть
-    // резким, debounce persistSessionTabs мог не успеть.
+    // Финальный слепок при закрытии.
     //
     // Запись СИНХРОННАЯ: за 'close' идут 'window-all-closed' → app.quit()
     // и выход процесса, а незавершённый writeFile умирает вместе с ним.
     // На Linux это вообще единственный работающий путь — 'resized'/'moved'
     // туда не приходят, и асинхронная запись терялась всегда.
-    if (getSettingsSync().rememberBounds !== false) {
-      if (win.isMaximized() || win.isFullScreen()) {
-        saveSettingsSync({ windowMaximized: true })
-      } else {
-        saveSettingsSync({ windowBounds: win.getBounds(), windowMaximized: false })
+    //
+    // Закрываемое пользователем окно исключается из слепка, только если в
+    // пространстве остаётся другое окно: восстанавливать закрытое не нужно.
+    // Закрытие ПОСЛЕДНЕГО окна — это выход из браузера, и тогда окно надо
+    // сохранить: иначе слепок станет пустым и вкладки пропадут (ровно это
+    // и ломало восстановление после крестика).
+    // При выходе из приложения слепок уже снят в `before-quit` — здесь
+    // писать нельзя, иначе последнее закрытое окно осталось бы единственным.
+    if (!ws.incognito && !isAppQuitting()) {
+      const othersLeft = [...windows.values()].some(
+        (other) =>
+          other !== ws &&
+          other.workspaceId === ws.workspaceId &&
+          !other.incognito &&
+          !!other.window &&
+          !other.window.isDestroyed()
+      )
+      // Закрытое окно попадает в два места с разным смыслом: из слепка
+      // оно исключается (восстанавливать при старте не нужно), а в
+      // журнал недавно закрытых — попадает ЦЕЛИКОМ, чтобы его можно было
+      // вернуть пунктом меню. Только когда в пространстве остаются другие
+      // окна: закрытие последнего — это выход из браузера, и следующий
+      // запуск и так откроет окно по слепку.
+      if (othersLeft) {
+        const t = tFor(ws.workspaceId)
+        const snap = captureWindow(ws)
+        if (snap) {
+          recordClosed(
+            ws.workspaceId,
+            {
+              kind: 'window',
+              windowKey: ws.key,
+              title:
+                snap.tabs[0]?.title ||
+                t('closed.windowTitle', { count: snap.tabs.length }),
+              snapshot: snap
+            },
+            true
+          )
+        }
       }
-    }
-    if (!ws.incognito && getSettingsSync().rememberTabs !== false) {
-      saveSettingsSync({ sessionTabs: snapshotSessionTabs(ws) })
+      persistWorkspaceWindowsSync(ws.workspaceId, othersLeft ? ws.key : undefined)
     }
   })
 
@@ -576,12 +823,24 @@ export function createWindow(
         // Окно уже мертво — игнорим.
       }
     }
-    // Инкогнито: чистим in-memory сессию при закрытии окна.
+    // Инкогнито: чистим in-memory сессии при закрытии окна.
+    //
+    // Партиций две и они разные: шелл живёт в своей приватной партиции,
+    // вкладки — в incognitoPartitionFor(пространства). Чистить нужно обе.
+    // Сессию вкладок чистим ТОЛЬКО когда в пространстве не осталось других
+    // приватных окон: она общая, и очистка убила бы cookies соседнего окна.
     if (ws.incognito) {
+      const stillOpen = [...windows.values()].some(
+        (other) => other !== ws && other.incognito && other.workspaceId === ws.workspaceId
+      )
       try {
-        const ses = win.webContents.session
-        void ses.clearStorageData().catch(() => undefined)
-        void ses.clearCache().catch(() => undefined)
+        void win.webContents.session.clearStorageData().catch(() => undefined)
+        void win.webContents.session.clearCache().catch(() => undefined)
+        if (!stillOpen) {
+          const tabsSession = session.fromPartition(incognitoPartitionFor(ws.workspaceId))
+          void tabsSession.clearStorageData().catch(() => undefined)
+          void tabsSession.clearCache().catch(() => undefined)
+        }
       } catch {
         // Сессия уже уничтожена — игнорим.
       }
@@ -589,6 +848,15 @@ export function createWindow(
     windows.delete(win.id)
     ws.window = null
     ws.tabs.clear()
+    // Сессия пространства длится, пока в нём есть хоть одно окно.
+    // Закрытие последнего окна пользователем — штатный конец сессии; при
+    // выходе из приложения сессии закрывает `before-quit`, и здесь маркер
+    // уже снят (иначе запись осталась бы без конца и следующий запуск
+    // считал бы выход аварией).
+    if (!isAppQuitting()) {
+      const stillOpen = [...windows.values()].some((other) => other.workspaceId === ws.workspaceId)
+      if (!stillOpen) endWorkspaceSession(ws.workspaceId)
+    }
   })
 
   return ws

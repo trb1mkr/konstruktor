@@ -92,7 +92,23 @@ contextBridge.exposeInMainWorld('konstruktor', {
   // вернётся только для снятой области.
   permissionsClearScope: (origin: string, scope: string) =>
     ipcRenderer.invoke('permissions:clear-scope', origin, scope),
-  permissionsClearAll: () => ipcRenderer.invoke('permissions:clear-all')
+  permissionsClearAll: () => ipcRenderer.invoke('permissions:clear-all'),
+  // Рабочие пространства: страница konstruktor://workspaces управляет
+  // всеми пространствами сразу, поэтому в вызовах — id, а не сессия.
+  workspacesList: () => ipcRenderer.invoke('workspaces:list'),
+  workspacesCreate: (input: {
+    name?: string
+    icon?: string
+    color?: string
+    copyFrom?: string
+    sections?: string[]
+  }) => ipcRenderer.invoke('workspaces:create', input),
+  workspacesUpdate: (input: { id: string; name?: string; icon?: string; color?: string }) =>
+    ipcRenderer.invoke('workspaces:update', input),
+  workspacesDuplicate: (id: string, name?: string) =>
+    ipcRenderer.invoke('workspaces:duplicate', { id, name }),
+  workspacesDelete: (id: string) => ipcRenderer.invoke('workspaces:delete', id),
+  workspacesOpen: (id: string) => ipcRenderer.invoke('workspaces:open', id)
 })
 
 // Отчёт страницы о захвате медиа.

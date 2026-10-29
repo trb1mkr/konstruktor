@@ -34,6 +34,7 @@ const emit = defineEmits<{
     :class="{ 'align-start': align === 'start' }"
     :items="items"
     :display="display"
+    :align="align ?? 'end'"
     @select="emit('select', $event)"
   />
 </template>

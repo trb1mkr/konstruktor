@@ -10,9 +10,10 @@
 // Приватные окна решений не помнят вовсе: их карта живёт только в памяти
 // процесса и никогда не попадает в файл. Это осознанное отличие от
 // обычных окон — иначе инкогнито оставляло бы след на диске.
-import { app } from 'electron'
-import { join } from 'path'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile } from 'fs/promises'
+import { writeJsonAtomic } from '../workspaces/atomic'
+import { workspaceFile } from '../workspaces/paths'
+import { bootWorkspaceId } from '../workspaces/registry'
 import { log, logError } from '../overlay/logger'
 import type { Decision, PermissionScope } from './policy'
 
@@ -21,29 +22,39 @@ export type ScopeDecisions = Partial<Record<PermissionScope, Decision>>
 /** Все сайты: origin -> решения. */
 export type OriginDecisions = Record<string, ScopeDecisions>
 
-let filePath = ''
-let cache: OriginDecisions | null = null
+// Кэш решений по пространствам: у каждого свой permissions.json.
+const caches = new Map<string, OriginDecisions>()
 
-// Приватные окна: решения живут только в памяти и умирают с процессом.
-const ephemeral: OriginDecisions = {}
+// Приватный режим: решения живут только в памяти и умирают с процессом.
+// Ключ — пространство: у каждого приватная карта своя.
+const ephemerals = new Map<string, OriginDecisions>()
 
-function pathOf(): string {
-  filePath = filePath || join(app.getPath('userData'), 'permissions.json')
-  return filePath
+function ephemeralOf(wsId: string): OriginDecisions {
+  let table = ephemerals.get(wsId)
+  if (!table) {
+    table = {}
+    ephemerals.set(wsId, table)
+  }
+  return table
+}
+
+function fileOf(wsId: string): string {
+  return workspaceFile(wsId, 'permissions.json')
 }
 
 /** Читает файл один раз и держит результат в кэше. */
-export async function loadPermissions(): Promise<OriginDecisions> {
-  if (cache) return cache
+export async function loadPermissions(wsId = bootWorkspaceId()): Promise<OriginDecisions> {
+  const cached = caches.get(wsId)
+  if (cached) return cached
   let next: OriginDecisions = {}
   try {
-    const raw = await readFile(pathOf(), 'utf-8')
+    const raw = await readFile(fileOf(wsId), 'utf-8')
     const parsed = JSON.parse(raw) as { origins?: OriginDecisions }
     if (parsed && typeof parsed.origins === 'object' && parsed.origins) next = parsed.origins
   } catch {
     // Нет файла или битый JSON — решений ещё нет.
   }
-  cache = next
+  caches.set(wsId, next)
   return next
 }
 
@@ -57,20 +68,36 @@ export function getDecision(
   origin: string,
   scope: PermissionScope,
   persist: boolean,
+  wsId = bootWorkspaceId()
 ): Decision | undefined {
-  const table = persist ? (cache ?? {}) : ephemeral
+  const table = persist ? (caches.get(wsId) ?? {}) : ephemeralOf(wsId)
   return table[origin]?.[scope]
 }
 
 /** Все решения сайта — для страницы настроек. */
-export function decisionsOf(origin: string, persist: boolean): ScopeDecisions {
-  const table = persist ? (cache ?? {}) : ephemeral
+export function decisionsOf(
+  origin: string,
+  persist: boolean,
+  wsId = bootWorkspaceId()
+): ScopeDecisions {
+  const table = persist ? (caches.get(wsId) ?? {}) : ephemeralOf(wsId)
   return { ...(table[origin] ?? {}) }
 }
 
 /** Снимок всех решений — для страницы настроек. */
-export function allDecisions(): { origins: OriginDecisions; ephemeral: OriginDecisions } {
-  return { origins: { ...(cache ?? {}) }, ephemeral: { ...ephemeral } }
+export function allDecisions(wsId = bootWorkspaceId()): {
+  origins: OriginDecisions
+  ephemeral: OriginDecisions
+} {
+  return { origins: { ...(caches.get(wsId) ?? {}) }, ephemeral: { ...ephemeralOf(wsId) } }
+}
+
+async function persistTable(wsId: string, table: OriginDecisions): Promise<void> {
+  try {
+    await writeJsonAtomic(fileOf(wsId), { origins: table })
+  } catch (err) {
+    logError('permissions write failed', err)
+  }
 }
 
 /**
@@ -86,49 +113,42 @@ export async function setDecision(
   scope: PermissionScope,
   value: Decision,
   persist: boolean,
+  wsId = bootWorkspaceId()
 ): Promise<void> {
   if (!persist) {
-    ephemeral[origin] = { ...(ephemeral[origin] ?? {}), [scope]: value }
-    log('session', 'permission decision (ephemeral)', { origin, scope, value })
+    const table = ephemeralOf(wsId)
+    table[origin] = { ...(table[origin] ?? {}), [scope]: value }
+    log('session', 'permission decision (ephemeral)', { origin, scope, value, wsId })
     return
   }
-  const table = cache ?? (cache = {})
+  const table = caches.get(wsId) ?? {}
   table[origin] = { ...(table[origin] ?? {}), [scope]: value }
-  try {
-    await mkdir(app.getPath('userData'), { recursive: true })
-    await writeFile(pathOf(), JSON.stringify({ origins: table }, null, 2), 'utf-8')
-  } catch (err) {
-    logError('permissions write failed', err)
-  }
-  log('session', 'permission decision', { origin, scope, value })
+  caches.set(wsId, table)
+  await persistTable(wsId, table)
+  log('session', 'permission decision', { origin, scope, value, wsId })
 }
 
 /** Убирает все решения сайта (кнопка сброса в настройках и в бейдже). */
-export async function clearOrigin(origin: string, persist: boolean): Promise<void> {
+export async function clearOrigin(
+  origin: string,
+  persist: boolean,
+  wsId = bootWorkspaceId()
+): Promise<void> {
   if (!persist) {
-    delete ephemeral[origin]
+    delete ephemeralOf(wsId)[origin]
     return
   }
-  const table = cache ?? (cache = {})
+  const table = caches.get(wsId) ?? {}
   delete table[origin]
-  try {
-    await mkdir(app.getPath('userData'), { recursive: true })
-    await writeFile(pathOf(), JSON.stringify({ origins: table }, null, 2), 'utf-8')
-  } catch (err) {
-    logError('permissions write failed', err)
-  }
+  caches.set(wsId, table)
+  await persistTable(wsId, table)
 }
 
 /** Убирает все решения всех сайтов. */
-export async function clearAllDecisions(): Promise<void> {
-  cache = {}
-  for (const origin of Object.keys(ephemeral)) delete ephemeral[origin]
-  try {
-    await mkdir(app.getPath('userData'), { recursive: true })
-    await writeFile(pathOf(), JSON.stringify({ origins: {} }, null, 2), 'utf-8')
-  } catch (err) {
-    logError('permissions write failed', err)
-  }
+export async function clearAllDecisions(wsId = bootWorkspaceId()): Promise<void> {
+  caches.set(wsId, {})
+  for (const origin of Object.keys(ephemeralOf(wsId))) delete ephemeralOf(wsId)[origin]
+  await persistTable(wsId, {})
 }
 
 /**
@@ -138,21 +158,19 @@ export async function clearScope(
   origin: string,
   scope: PermissionScope,
   persist: boolean,
+  wsId = bootWorkspaceId()
 ): Promise<void> {
   if (!persist) {
-    if (!ephemeral[origin]) return
-    delete ephemeral[origin][scope]
+    const eph = ephemeralOf(wsId)
+    if (!eph[origin]) return
+    delete eph[origin][scope]
     return
   }
-  const table = cache ?? (cache = {})
+  const table = caches.get(wsId) ?? {}
   const record = table[origin]
   if (!record) return
   delete record[scope]
   if (Object.keys(record).length === 0) delete table[origin]
-  try {
-    await mkdir(app.getPath('userData'), { recursive: true })
-    await writeFile(pathOf(), JSON.stringify({ origins: table }, null, 2), 'utf-8')
-  } catch (err) {
-    logError('permissions write failed', err)
-  }
+  caches.set(wsId, table)
+  await persistTable(wsId, table)
 }

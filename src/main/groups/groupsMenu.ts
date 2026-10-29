@@ -12,7 +12,7 @@ import {
 } from './groupsStore'
 import { showOverlay, type OverlayMenuItem } from '../overlay'
 import { START_URL } from '../pages/internalPages'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 import {
   allocInstance,
   syncSavedUrls,
@@ -22,7 +22,7 @@ import {
 } from './groupsInstances'
 
 export interface GroupMenuDeps extends GroupTabDeps {
-  broadcastGroups: () => void
+  broadcastGroups: (wsId: string) => void
 }
 
 // DFS от child: parent не должен быть достижим — иначе цикл.
@@ -48,10 +48,12 @@ export function showGroupContextMenu(
 ): void {
   const inst = ws.openGroups.find((g) => g.instanceId === instanceId)
   if (!inst) return
+  const wsId = ws.workspaceId
+  const t = tFor(wsId)
   const { closeTab, pushTabsState, pruneEmptyGroup, broadcastGroups } = deps
   const others = ws.openGroups.filter((g) => g.instanceId !== instanceId)
   // Закрепление шаблона: подпись зависит от текущего состояния (async).
-  void getGroups().then((list) => {
+  void getGroups(wsId).then((list) => {
     const savedNow = list.find((g) => g.id === inst.savedId)
     const pinLabel = savedNow?.pinned
       ? t('groups.menu.unpinFromBookmarks')
@@ -82,8 +84,10 @@ export function showGroupContextMenu(
       if (!cur) return
       // onSelect у showOverlay синхронный: async-ветки уходят в void-промисы.
       if (action === 'new-group') {
-        void createSavedGroup({ name: t('groups.defaultName'), urls: [START_URL] }).then(
-          (saved) => {
+        void createSavedGroup(
+          { name: t('groups.defaultName'), urls: [START_URL] },
+          wsId
+        ).then((saved) => {
             const nid = allocInstance()
             live.openGroups.push({
               instanceId: nid,
@@ -116,15 +120,19 @@ export function showGroupContextMenu(
             const text = sep >= 0 ? raw.slice(sep + 2) : ''
             if (btn !== 'ok') return
             if (action === 'rename') {
-              void updateSavedGroup(cur.savedId, { name: text }).then(() => broadcastGroups())
+              void updateSavedGroup(cur.savedId, { name: text }, wsId).then(() =>
+                broadcastGroups(wsId)
+              )
             } else {
-              void updateSavedGroup(cur.savedId, { color: text.trim() }).then(() => broadcastGroups())
+              void updateSavedGroup(cur.savedId, { color: text.trim() }, wsId).then(() =>
+                broadcastGroups(wsId)
+              )
             }
           }
         })
       } else if (action === 'icon') {
         // Общий диалог иконки: URL, файл, emoji + отмена, верификация в main.
-        void getGroups().then((groups) => {
+        void getGroups(wsId).then((groups) => {
           const saved = groups.find((g) => g.id === cur.savedId)
           showOverlay(win, {
             kind: 'icon',
@@ -135,7 +143,9 @@ export function showGroupContextMenu(
               initial: saved?.icon ?? ''
             },
             onIconApply: (icon) => {
-              void updateSavedGroup(cur.savedId, { icon }).then(() => broadcastGroups())
+              void updateSavedGroup(cur.savedId, { icon }, wsId).then(() =>
+                broadcastGroups(wsId)
+              )
             }
           })
         })
@@ -144,17 +154,18 @@ export function showGroupContextMenu(
         // Вкладки открытых экземпляров разгруппировываются и живут дальше.
         // onSelect синхронный — уходим в void-промис.
         const savedId = cur.savedId
-        void deleteSavedGroup(savedId).then(() => {
+        void deleteSavedGroup(savedId, wsId).then(() => {
           const l5 = win && !win.isDestroyed() ? getState(win) : undefined
           if (!l5) {
-            broadcastGroups()
+            broadcastGroups(wsId)
             return
           }
           for (const other of windows.values()) {
+            if (other.workspaceId !== wsId) continue
             removeSavedInstances(other, savedId)
             pushTabsState(other)
           }
-          broadcastGroups()
+          broadcastGroups(wsId)
         })
       } else if (action === 'close-tabs') {
         for (const id of [...live.tabOrder]) {
@@ -173,7 +184,7 @@ export function showGroupContextMenu(
         // Второй уровень: выбор целевой группы тем же оверлеем.
         // Имена/иконки/цвета — как задано в шаблонах, без нумерации.
         // Одинаковые имена не нумеруем: пункты различаются иконкой/цветом.
-        void getGroups().then((saved) => {
+        void getGroups(wsId).then((saved) => {
           const byId = new Map(saved.map((g) => [g.id, g]))
           const targets: OverlayMenuItem[] = live.openGroups
             .filter((g) => g.instanceId !== instanceId)
@@ -208,14 +219,16 @@ export function showGroupContextMenu(
         })
       } else if (action === 'nest-into' || action === 'toggle-bookmark-pin') {
         // Вложенность и закрепление работают с шаблоном, не с экземпляром.
-        void getGroups().then((groups) => {
+        void getGroups(wsId).then((groups) => {
           const l2 = win && !win.isDestroyed() ? getState(win) : undefined
           const cur2 = l2?.openGroups.find((g) => g.instanceId === instanceId)
           if (!l2 || !cur2) return
           if (action === 'toggle-bookmark-pin') {
             const saved = groups.find((g) => g.id === cur2.savedId)
             if (!saved) return
-            void updateSavedGroup(saved.id, { pinned: !saved.pinned }).then(() => broadcastGroups())
+            void updateSavedGroup(saved.id, { pinned: !saved.pinned }, wsId).then(() =>
+              broadcastGroups(wsId)
+            )
             return
           }
           // Кандидаты: все шаблоны кроме себя и своих потомков (без циклов).
@@ -238,13 +251,13 @@ export function showGroupContextMenu(
               const l3 = win && !win.isDestroyed() ? getState(win) : undefined
               const cur3 = l3?.openGroups.find((g) => g.instanceId === instanceId)
               if (!l3 || !cur3) return
-              void getGroups().then((fresh) => {
+              void getGroups(wsId).then((fresh) => {
                 const parent = fresh.find((g) => g.id === targetSavedId)
                 if (!parent || parent.children.includes(cur3.savedId)) return
                 void updateSavedGroup(parent.id, {
                   children: [...parent.children, cur3.savedId]
-                }).then(() => {
-                  broadcastGroups()
+                }, wsId).then(() => {
+                  broadcastGroups(wsId)
                   const l4 = win && !win.isDestroyed() ? getState(win) : undefined
                   const cur4 = l4?.openGroups.find((g) => g.instanceId === instanceId)
                   if (!l4 || !cur4) return

@@ -12,13 +12,9 @@
 // Сигнал к разделению: новая ветка в createTab, раздувающая партиционный
 // выбор, — вынести в отдельный модуль партиций.
 import { WebContentsView, shell } from 'electron'
-import {
-  allocTabId,
-  NORMAL_PARTITION,
-  INCOGNITO_PARTITION,
-  type WindowState,
-  type TabRecord
-} from '../windows/browserState'
+import { allocTabId, allocTabKey, type WindowState, type TabData, type TabRecord } from '../windows/browserState'
+import { partitionFor } from '../workspaces/registry'
+import { incognitoPartitionFor } from '../workspaces/electronSession'
 import { applyThemeToTab, viewBackgroundFor } from '../browserTheme'
 import { ensureStripToken, removeStripToken, reorderStrip } from './stripOrder'
 import { openFindOverlay } from '../find/findManager'
@@ -39,9 +35,11 @@ import { matchCommands } from '../extensions/commands'
 import { showPageContextMenu, type PageMenuDeps } from './pageMenu'
 import { isHotkeyCapture, matchHotkey } from '../hotkeys'
 import { getSettingsSync } from '../store/settingsStore'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 import { recordVisit, updateMetadata } from '../store/historyStore'
+import { recordClosed } from '../store/closedStore'
 import { START_URL } from '../pages/internalPages'
+import { scheduleWorkspaceWindowsPersist, snapshotTabOf } from '../workspaces/windowSnapshot'
 import { installCaptureHook } from '../permissions/captureIndicator'
 import { decisionsOf } from '../permissions/permissionsStore'
 import { SCOPE_ICON, originOfUrl, type PermissionScope } from '../permissions/policy'
@@ -51,10 +49,14 @@ import { SCOPE_ICON, originOfUrl, type PermissionScope } from '../permissions/po
 // настроек и из меню бейджа, и копия в записи вкладки протухала бы.
 // Иконка едет вместе со значением — таблица иконок живёт в main
 // (permissions/policy.ts), и дублировать её в shell незачем.
-function permissionsFor(url: string, persist: boolean): { scope: string; value: string; icon: string }[] {
+function permissionsFor(
+  url: string,
+  persist: boolean,
+  wsId: string
+): { scope: string; value: string; icon: string }[] {
   const origin = originOfUrl(url)
   if (!origin) return []
-  const record = decisionsOf(origin, persist)
+  const record = decisionsOf(origin, persist, wsId)
   return Object.entries(record).map(([scope, value]) => ({
     scope,
     value: String(value),
@@ -72,8 +74,18 @@ export interface TabsDeps {
   // приложение) — иначе «новое» окно оказывалось бы копией чужого.
   // Опции incognito больше нет: приватное окно не создаётся, режим
   // переключается на живом через switchIncognito.
-  createWindow: (opts: { x?: number; y?: number; restoreSession?: boolean }) => WindowState
+  createWindow: (opts: {
+    x?: number
+    y?: number
+    restoreSession?: boolean
+    workspaceId?: string
+    key?: string
+  }) => WindowState
   pruneEmptyGroup: (ws: WindowState, instanceId: string) => void
+  // Возврат последней закрытой вкладки или окна (журнал closed.json).
+  // Живёт в windows/deps вЂ” там же, где wiring окон и вкладок: само
+  // восстановление создаёт и вкладки, и окна.
+  reopenClosed: (ws: WindowState, entryId?: string) => boolean
   // Действия контекстного меню страницы (pageMenu.ts): открыть вкладку,
   // открыть окно, инспектор. Собираются в windows/deps.ts — там же, где
   // остальной wiring окон и вкладок, чтобы модуль меню не тянул их сам.
@@ -116,7 +128,7 @@ export function pushTabsState(ws: WindowState): void {
         // Решения по разрешениям этого сайта — из хранилища, а не из
         // записи вкладки: они живут на origin, а не на вкладке, и
         // меняются со страницы настроек и меню бейджа.
-        permissions: permissionsFor(t.url, !ws.incognito)
+        permissions: permissionsFor(t.url, !ws.incognito, ws.workspaceId)
       }
     })
     .filter((t) => t !== null) as TabRecord[]
@@ -132,6 +144,10 @@ export function pushTabsState(ws: WindowState): void {
   // (клавиши, Ctrl+колесо, IPC, кнопки попапа) проходит через этот пуш,
   // и поле попапа показывает фактический процент страницы, а не stale.
   syncZoomPopup(ws)
+  // Слепок окон пространства пишется отсюда же: это единственная точка,
+  // через которую проходят все изменения вкладок, групп и порядка
+  // панели. Запись отложенная (см. windowSnapshot).
+  if (!ws.incognito) scheduleWorkspaceWindowsPersist(ws.workspaceId)
 }
 
 export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): number {
@@ -141,14 +157,18 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
       // Сайты изолированы: nodeIntegration выключен по умолчанию.
       contextIsolation: true,
       // Инкогнито-окно: in-memory партиция, ничего не пишется на диск.
-      partition: ws.incognito ? INCOGNITO_PARTITION : NORMAL_PARTITION
+      // Партиция выбирается по пространству окна: у каждого свои cookies
+      // и storage, иначе «изоляция» шла бы только по файлам.
+      partition: ws.incognito
+        ? incognitoPartitionFor(ws.workspaceId)
+        : partitionFor(ws.workspaceId)
     }
   })
   // Нативный фон view под тему: дефолт #FFF вспыхивает белым
   // до первой отрисовки страницы. Красим сразу при создании: сайт —
   // по базовой теме веб-контента, внутренняя страница — по своей.
   try {
-    view.setBackgroundColor(viewBackgroundFor(url, getSettingsSync().theme ?? 'dark'))
+    view.setBackgroundColor(viewBackgroundFor(url, ws.workspaceId))
   } catch {
     // Старый Electron без setBackgroundColor у View — игнорим.
   }
@@ -159,7 +179,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   void view.webContents.setVisualZoomLevelLimits(1, 1)
   // Режим зума из настройки: 'tab' -> isolated (зум живёт в вкладке и
   // умирает с ней), 'origin' -> default (per-origin, как Chrome).
-  view.webContents.setZoomMode(zoomModeFor(getSettingsSync()))
+  view.webContents.setZoomMode(zoomModeFor(getSettingsSync(ws.workspaceId)))
   // Единый зум: вкладка открывается с последнего процента и держит его на
   // каждой навигации. Зум до загрузки НЕ применяется (проверено замером:
   // setZoomFactor до did-finish-load отдаёт 1), поэтому подписка на
@@ -169,9 +189,9 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   // и на новой навигации перекрывается свежей — так первая же перезагрузка
   // после смены темы даёт верную used-схему.
   view.webContents.on('did-finish-load', () => {
-    if (getSettingsSync().zoomSync) setZoom(view.webContents, seedZoomPercent())
+    if (getSettingsSync(ws.workspaceId).zoomSync) setZoom(view.webContents, seedZoomPercent())
     const rec = ws.tabs.get(id)
-    if (rec) applyThemeToTab(rec, getSettingsSync().theme ?? 'dark')
+    if (rec) applyThemeToTab(rec, ws.workspaceId)
   })
   // Вкладка может закрыться сама: страница зовёт window.close() (так делают
   // служебные страницы расширений, например ask.html у Tampermonkey), и
@@ -184,7 +204,17 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     ws.window?.contentView.removeChildView(view)
     dropTabRecord(ws, deps, id)
   })
-  ws.tabs.set(id, { view, url, title: t('tabs.newTitle'), pinned: false, favicon: '', retriedWithChromeUA: false, customTitle: undefined, customFavicon: undefined })
+  ws.tabs.set(id, {
+    view,
+    key: allocTabKey(ws),
+    url,
+    title: tFor(ws.workspaceId)('tabs.newTitle'),
+    pinned: false,
+    favicon: '',
+    retriedWithChromeUA: false,
+    customTitle: undefined,
+    customFavicon: undefined
+  })
   ws.tabOrder.push(id)
   // Новая вкладка без группы — в конец обычного ряда панели.
   ensureStripToken(ws, `t:${id}`, false)
@@ -192,7 +222,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   // Начальная геометрия сразу, иначе view с нулевыми bounds до первого layout:update.
   deps.layoutView(ws, view)
   // Тема новой вкладки — сразу текущая, без ожидания смены настроек.
-  applyThemeToTab(ws.tabs.get(id)!, getSettingsSync().theme ?? 'dark')
+  applyThemeToTab(ws.tabs.get(id)!, ws.workspaceId)
 
   // Индикатор захвата: хуки на mediaDevices ставятся в ГЛАВНЫЙ мир
   // страницы после готовности документа — раньше самого документа
@@ -214,9 +244,10 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     deps.persistSessionTabs(ws)
     // История: только обычные окна, внутренние страницы пропускаем в store.
     if (!ws.incognito) {
-      void recordVisit({ url: navUrl, title: rec.title, favicon: rec.favicon }).catch((err: unknown) =>
-        console.error('[history] record failed:', err)
-      )
+      void recordVisit(
+        { url: navUrl, title: rec.title, favicon: rec.favicon },
+        ws.workspaceId
+      ).catch((err: unknown) => console.error('[history] record failed:', err))
     }
   })
   // did-navigate не стреляет для in-page и части редиректов — дублируем через did-navigate-in-page.
@@ -236,7 +267,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     // Только метаданные: заголовок прилетает после навигации,
     // новый визит не засчитываем.
     if (!ws.incognito) {
-      void updateMetadata(rec.url, { title }).catch(() => undefined)
+      void updateMetadata(rec.url, { title }, ws.workspaceId).catch(() => undefined)
     }
   })
   // Иконка сайта для панели вкладок.
@@ -248,7 +279,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     // Только метаданные: иконка прилетает после навигации,
     // новый визит не засчитываем (иначе один заход = ×2).
     if (!ws.incognito) {
-      void updateMetadata(rec.url, { favicon: rec.favicon }).catch(() =>
+      void updateMetadata(rec.url, { favicon: rec.favicon }, ws.workspaceId).catch(() =>
         undefined
       )
     }
@@ -299,7 +330,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
     // бы и keydown поля (а дефолтное меню Electron гасит уже
     // setIgnoreMenuShortcuts, см. main/hotkeys.ts).
     if (isHotkeyCapture(view.webContents)) return
-    const action = matchHotkey(input)
+    const action = matchHotkey(input, ws.workspaceId)
     if (action !== null) {
       e.preventDefault()
       if (action === 'reload') {
@@ -308,6 +339,8 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
         closeTab(ws, deps, id)
       } else if (action === 'new-tab') {
         createTab(ws, deps)
+      } else if (action === 'reopen-closed') {
+        deps.reopenClosed(ws)
       } else if (action === 'find') {
         openFindOverlay(ws)
       } else if (action === 'devtools') {
@@ -378,6 +411,7 @@ export function createTab(ws: WindowState, deps: TabsDeps, url = START_URL): num
   // класса. Теперь это поле find.counter, и оно меняется реактивно.
   view.webContents.on('found-in-page', (_e, result) => {
     if (id !== ws.activeTabId || !ws.window) return
+    const t = tFor(ws.workspaceId)
     const text =
       result.matches === 0
         ? t('find.none')
@@ -450,6 +484,7 @@ export function setActiveTab(ws: WindowState, deps: TabsDeps, id: number): void 
 export function closeTab(ws: WindowState, deps: TabsDeps, id: number): void {
   const rec = ws.tabs.get(id)
   if (!rec || !ws.window) return
+  recordClosedTab(ws, rec)
   // DevTools закрываем ДО уничтожения webContents: умирающий view уносит
   // панель с собой, а closeDevTools на живом сбрасывает состояние явно.
   // При закрытии неактивной вкладки состояние всё равно уходит с записью.
@@ -457,6 +492,44 @@ export function closeTab(ws: WindowState, deps: TabsDeps, id: number): void {
   ws.window.contentView.removeChildView(rec.view)
   rec.view.webContents?.close()
   dropTabRecord(ws, deps, id)
+}
+
+/**
+ * Кладёт закрываемую вкладку в журнал «недавно закрытых».
+ *
+ * Журнал — не история: он нужен, чтобы вернуть вкладку в исходное окно
+ * (ключ окна в записи) и чтобы хоткей «открыть закрытую» работал. Поэтому
+ * пишутся только пользовательские закрытия через `closeTab`: закрытие окна
+ * пишет журнал отдельно и целиком, а переключение в инкогнито, выход из
+ * приложения и detach сюда не доходят.
+ *
+ * Служебные страницы пропускаются, как и в слепке окон: `konstruktor://start`
+ * и `about:blank` закрываются и открываются одним движением, и в списке
+ * они вытесняли бы настоящие вкладки.
+ */
+function recordClosedTab(ws: WindowState, rec: TabData): void {
+  if (ws.incognito) return
+  if (rec.url === 'about:blank' || rec.url === START_URL) return
+  const tab = snapshotTabOf(rec)
+  // Ссылка на группу в записи не сохраняется: экземпляр группы живёт в
+  // конкретном окне, и после его закрытия ссылка была бы битой. Вкладка
+  // вернётся вне группы — это предсказуемее, чем пропавшая вкладка.
+  tab.groupId = undefined
+  recordClosed(ws.workspaceId, {
+    kind: 'tab',
+    windowKey: ws.key,
+    title: tab.title || tab.url,
+    snapshot: {
+      key: ws.key,
+      maximized: false,
+      uiInsets: { ...ws.uiInsets },
+      activeTabKey: tab.key,
+      tabs: [tab],
+      openGroups: [],
+      stripOrder: [`t:${tab.key}`],
+      pinnedStripOrder: tab.pinned ? [`t:${tab.key}`] : []
+    }
+  })
 }
 
 /**
@@ -538,7 +611,10 @@ export function cloneWindow(
 
   const ws = deps.createWindow({
     x: fromWin.getPosition()[0] + offsetX,
-    y: fromWin.getPosition()[1] + offsetY
+    y: fromWin.getPosition()[1] + offsetY,
+    // Клон живёт в том же пространстве: его вкладки открываются с той же
+    // партицией, а данные (история, группы) принадлежат пространству.
+    workspaceId: fromWs.workspaceId
   })
   if (!ws.window) return
   // Режим клона повторяет режим исходного окна, и флаг ставится ДО
@@ -596,6 +672,10 @@ export function cloneWindow(
     .map((tok) => sourceTokenToCopyToken.get(tok) ?? tok)
   reorderStrip(ws, stripOrder)
 
+  // Неактивные view клона скрываем явно: setActiveTab прячет только
+  // ПРЕДЫДУЩУЮ view, а здесь activeTabId ещё null — все копии остались бы
+  // видимыми и накладывались друг на друга слоями.
+  for (const id of ws.tabOrder) ws.tabs.get(id)?.view.setVisible(false)
   ws.activeTabId =
     activeId ?? (ws.tabOrder.length > 0 ? ws.tabOrder[ws.tabOrder.length - 1] : null)
   if (ws.activeTabId !== null) setActiveTab(ws, deps, ws.activeTabId)
@@ -696,6 +776,10 @@ export function switchIncognito(
   }
   // Активной делаем ту же вкладку, что была активной: переключение
   // режима не должно сбрасывать пользователя на первую вкладку.
+  // Неактивные view скрываем явно: setActiveTab прячет только предыдущую,
+  // а activeTabId здесь ещё null — иначе все вкладки остались бы видимыми
+  // слоями друг над другом (страница выглядит сжатой и смещённой).
+  for (const id of ws.tabOrder) ws.tabs.get(id)?.view.setVisible(false)
   ws.activeTabId =
     activeId ?? (ws.tabOrder.length > 0 ? ws.tabOrder[ws.tabOrder.length - 1] : null)
   if (ws.activeTabId !== null) setActiveTab(ws, deps, ws.activeTabId)
@@ -718,7 +802,11 @@ export function detachTabToNewWindow(
   // уже задана при создании, и обычное окно принять приватную view не должно.
   const ws = deps.createWindow({
     x: Math.round(sx - 80),
-    y: Math.round(sy - 40)
+    y: Math.round(sy - 40),
+    // Пространство ОБЯЗАТЕЛЬНО совпадает с исходным: view переносится
+    // как есть и остаётся в партиции исходного пространства. Окно другого
+    // пространства держало бы вкладку с чужими cookies.
+    workspaceId: fromWs.workspaceId
   })
   if (!ws.window) return
   ws.incognito = fromWs.incognito

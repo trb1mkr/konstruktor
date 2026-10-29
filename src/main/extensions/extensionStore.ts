@@ -1,10 +1,12 @@
-// Реестр установленных расширений: extensions.json в userData.
-// Единственный источник истины в main; shell и страница получают срез по IPC.
-// По образцу settingsStore: файл читается один раз, дальше живёт в кэше,
-// а запись идёт через upsert/remove — частичные патчи тут не нужны.
-import { app } from 'electron'
-import { dirname, join } from 'path'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+// Реестр установленных расширений: extensions.json в каталоге рабочего
+// пространства. Единственный источник истины в main; shell и страница
+// получают срез по IPC. По образцу settingsStore: файл читается один раз,
+// дальше живёт в кэше, а запись идёт через upsert/remove.
+import { dirname } from 'path'
+import { mkdir, readFile } from 'fs/promises'
+import { writeJsonAtomic } from '../workspaces/atomic'
+import { workspaceFile } from '../workspaces/paths'
+import { bootWorkspaceId } from '../workspaces/registry'
 import type { ExtensionSource } from '../../shared/extensions-types'
 
 export interface ExtensionRecord {
@@ -44,15 +46,17 @@ export interface ExtensionRecord {
   error?: string
 }
 
-let cache: ExtensionRecord[] | null = null
+// Кэш реестра по пространствам: у каждого свой список установленных.
+const caches = new Map<string, ExtensionRecord[]>()
 
-export function extensionsFilePath(): string {
-  return join(app.getPath('userData'), 'extensions.json')
+export function extensionsFilePath(wsId = bootWorkspaceId()): string {
+  return workspaceFile(wsId, 'extensions.json')
 }
 
-export async function loadExtensions(): Promise<ExtensionRecord[]> {
-  if (cache) return cache
-  const path = extensionsFilePath()
+export async function loadExtensions(wsId = bootWorkspaceId()): Promise<ExtensionRecord[]> {
+  const cached = caches.get(wsId)
+  if (cached) return cached
+  const path = extensionsFilePath(wsId)
   let list: ExtensionRecord[] = []
   try {
     const raw = await readFile(path, 'utf8')
@@ -63,47 +67,59 @@ export async function loadExtensions(): Promise<ExtensionRecord[]> {
   } catch {
     // Нет файла или битый JSON — пустой реестр.
   }
-  cache = list
+  caches.set(wsId, list)
   return list
 }
 
 // Синхронный доступ для кода, который не может ждать (push состояния).
-export function getExtensionsSync(): ExtensionRecord[] {
-  return cache ?? []
+export function getExtensionsSync(wsId = bootWorkspaceId()): ExtensionRecord[] {
+  return caches.get(wsId) ?? []
 }
 
 // Сброс кэша: реестр перечитывается с диска при следующем обращении.
-export function resetExtensionsCache(): void {
-  cache = null
+export function resetExtensionsCache(wsId = bootWorkspaceId()): void {
+  caches.delete(wsId)
 }
 
-export function setExtensionsCache(list: ExtensionRecord[]): void {
-  cache = list
+export function setExtensionsCache(list: ExtensionRecord[], wsId = bootWorkspaceId()): void {
+  caches.set(wsId, list)
 }
 
-export async function saveExtensions(list: ExtensionRecord[]): Promise<void> {
-  cache = list
-  const path = extensionsFilePath()
+export async function saveExtensions(
+  list: ExtensionRecord[],
+  wsId = bootWorkspaceId()
+): Promise<void> {
+  caches.set(wsId, list)
+  const path = extensionsFilePath(wsId)
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify(list, null, 2), 'utf8')
+  await writeJsonAtomic(path, list)
 }
 
-export async function upsertExtension(rec: ExtensionRecord): Promise<void> {
-  const list = [...(cache ?? (await loadExtensions()))]
+export async function upsertExtension(
+  rec: ExtensionRecord,
+  wsId = bootWorkspaceId()
+): Promise<void> {
+  const list = [...(caches.get(wsId) ?? (await loadExtensions(wsId)))]
   const idx = list.findIndex((r) => r.id === rec.id)
   if (idx >= 0) list[idx] = rec
   else list.push(rec)
-  await saveExtensions(list)
+  await saveExtensions(list, wsId)
 }
 
-export async function removeExtensionRecord(id: string): Promise<boolean> {
-  const list = (cache ?? (await loadExtensions())).filter((r) => r.id !== id)
-  await saveExtensions(list)
+export async function removeExtensionRecord(
+  id: string,
+  wsId = bootWorkspaceId()
+): Promise<boolean> {
+  const list = (caches.get(wsId) ?? (await loadExtensions(wsId))).filter((r) => r.id !== id)
+  await saveExtensions(list, wsId)
   return true
 }
 
-export function findExtensionRecord(id: string): ExtensionRecord | undefined {
-  return (cache ?? []).find((r) => r.id === id)
+export function findExtensionRecord(
+  id: string,
+  wsId = bootWorkspaceId()
+): ExtensionRecord | undefined {
+  return (caches.get(wsId) ?? []).find((r) => r.id === id)
 }
 
 // Запись, выключенная пользователем, не считается ошибкой и не грузится:
@@ -113,6 +129,38 @@ export function isPinned(rec: ExtensionRecord): boolean {
 }
 
 // Поиск по идентификатору Chromium: шим из расширения знает только его.
-export function findExtensionByElectronId(electronId: string): ExtensionRecord | undefined {
-  return (cache ?? []).find((r) => r.electronId === electronId)
+export function findExtensionByElectronId(
+  electronId: string,
+  wsId = bootWorkspaceId()
+): ExtensionRecord | undefined {
+  return (caches.get(wsId) ?? []).find((r) => r.electronId === electronId)
+}
+
+/**
+ * Запись по electronId во ВСЕХ пространствах.
+ *
+ * Мост loopback один на процесс и обслуживает расширения всех открытых
+ * пространств, а `electronId` выдаётся при загрузке в партицию — то есть
+ * однозначен в пределах процесса. Поиск только в пространстве запуска
+ * работал, пока открыто было одно пространство: расширение второго при
+ * первом же вызове получало `unknown extension` и теряло меню, хранилище и
+ * попап (замерено на копировании расширений в новое пространство).
+ */
+export function findExtensionByElectronIdAny(
+  electronId: string
+): ExtensionRecord | undefined {
+  for (const list of caches.values()) {
+    const rec = list.find((r) => r.electronId === electronId)
+    if (rec) return rec
+  }
+  return undefined
+}
+
+/** Запись по id расширения во всех пространствах: для событий моста. */
+export function findExtensionRecordAny(id: string): ExtensionRecord | undefined {
+  for (const list of caches.values()) {
+    const rec = list.find((r) => r.id === id)
+    if (rec) return rec
+  }
+  return undefined
 }

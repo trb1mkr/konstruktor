@@ -1,50 +1,39 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { tabs, activeTabId, isIncognito, savedGroups, openGroups } from '../../core/useTabs'
+import type { BookmarkInfo } from '../../../preload/shell/index'
 
 // Панель закладок: звезда, закладки, закрепленные группы вкладок.
 // Незакрепленная группа здесь не показывается — она живет только
 // на панели вкладок, пока открыта. Закрепленная видна всегда,
 // даже когда все ее вкладки закрыты.
-interface Bookmark {
-  title: string
-  url: string
-  favicon: string
-}
-
-const KEY = 'konstruktor.bookmarks.v1'
-const bookmarks = ref<Bookmark[]>([])
+//
+// Закладки хранит main в файле рабочего пространства: localStorage шелла
+// лежит в in-memory партиции и перезапуска не переживает.
+const bookmarks = ref<BookmarkInfo[]>([])
 const bar = ref<HTMLElement | null>(null)
 
-function load() {
+async function load() {
   try {
-    bookmarks.value = JSON.parse(localStorage.getItem(KEY) ?? '[]')
+    bookmarks.value = await window.browserAPI.listBookmarks()
   } catch {
     bookmarks.value = []
   }
 }
-function save() {
-  localStorage.setItem(KEY, JSON.stringify(bookmarks.value))
-}
 
-function addCurrent() {
-  // В инкогнито закладки не пишем.
+// В инкогнито закладки не пишем.
+async function addCurrent() {
   if (isIncognito.value) return
   const current = tabs.value.find((t) => t.id === activeTabId.value)
   if (!current || !current.url || current.url === 'about:blank') return
   // Внутренние страницы (konstruktor://) тоже можно в закладки:
   // открываются через navigate в активной вкладке, как обычные URL.
   // Тоггл: повторный клик по закрашенной звезде снимает закладку.
-  if (bookmarks.value.some((b) => b.url === current.url)) {
-    remove(current.url)
-    return
-  }
-  bookmarks.value.push({
+  bookmarks.value = await window.browserAPI.toggleBookmark({
     title: current.title || current.url,
     url: current.url,
     favicon: current.favicon ?? ''
   })
-  save()
 }
 
 // Закрашенная звезда = текущая страница уже в закладках.
@@ -54,9 +43,8 @@ const isBookmarked = computed(() => {
   return bookmarks.value.some((b) => b.url === current.url)
 })
 
-function remove(url: string) {
-  bookmarks.value = bookmarks.value.filter((b) => b.url !== url)
-  save()
+async function remove(url: string) {
+  bookmarks.value = await window.browserAPI.removeBookmark(url)
 }
 
 async function open(url: string) {
@@ -96,7 +84,9 @@ function onWheel(e: WheelEvent) {
   el.scrollLeft += dx
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+})
 </script>
 
 <template>

@@ -27,8 +27,10 @@ import type {
   ExtensionsMenuModel,
   ExtensionsState
 } from '../../shared/extensions-types'
-import { NORMAL_PARTITION, windows } from '../windows/browserState'
+import { windows } from '../windows/browserState'
 import { getSettingsSync } from '../store/settingsStore'
+import { workspaceExtensionsDir } from '../workspaces/paths'
+import { bootWorkspaceId, partitionFor } from '../workspaces/registry'
 import {
   chromeIdFromCrxId,
   chromeIdFromKey,
@@ -65,16 +67,23 @@ import {
   upsertExtension,
   type ExtensionRecord
 } from './extensionStore'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 
 // --- Карта установки: где лежат расширения пользователя ----------------
 
-export function extensionsRoot(): string {
-  return join(app.getPath('userData'), 'extensions')
+/**
+ * Каталог расширений рабочего пространства.
+ *
+ * Расширения принадлежат пространству: у каждого свой реестр и свои
+ * файлы. Партиция тоже своя, иначе одно и то же расширение грузилось бы
+ * в общую сессию и видело cookies чужих пространств.
+ */
+export function extensionsRoot(wsId = bootWorkspaceId()): string {
+  return workspaceExtensionsDir(wsId)
 }
 
-function installDirFor(id: string): string {
-  return join(extensionsRoot(), id)
+function installDirFor(id: string, wsId = bootWorkspaceId()): string {
+  return join(extensionsRoot(wsId), id)
 }
 
 // Путь источника в каноническом виде — основа идентификатора расширения,
@@ -274,31 +283,34 @@ function toInfo(rec: ExtensionRecord): ExtensionInfo {
   }
 }
 
-export function extensionsState(): ExtensionsState {
-  const settings = getSettingsSync()
+export function extensionsState(wsId = bootWorkspaceId()): ExtensionsState {
+  const settings = getSettingsSync(wsId)
   return {
-    list: getExtensionsSync().map(toInfo),
+    list: getExtensionsSync(wsId).map(toInfo),
     enabled: settings.extensionsEnabled !== false,
     devMode: settings.extensionsDevMode === true
   }
 }
 
-// Пуш состояния во все окна: и shell (кнопки), и открытую страницу расширений.
-export function pushExtensionsState(): void {
-  const payload = extensionsState()
+// Пуш состояния во все окна пространства: shell (кнопки) и открытую
+// страницу расширений. Чужим окнам состояние не нужно: у них свой реестр.
+export function pushExtensionsState(wsId = bootWorkspaceId()): void {
+  const payload = extensionsState(wsId)
   for (const ws of windows.values()) {
+    if (ws.workspaceId !== wsId) continue
     ws.window?.webContents.send('extensions:state', payload)
   }
 }
 
 // --- Загрузка в сессию ---------------------------------------------------
 
-function extensionSession(): Electron.Session {
-  return session.fromPartition(NORMAL_PARTITION)
+function extensionSession(wsId = bootWorkspaceId()): Electron.Session {
+  return session.fromPartition(partitionFor(wsId))
 }
 
-async function loadRecord(rec: ExtensionRecord): Promise<void> {
-  if (getSettingsSync().extensionsEnabled === false) {
+async function loadRecord(rec: ExtensionRecord, wsId = bootWorkspaceId()): Promise<void> {
+  const t = tFor(wsId)
+  if (getSettingsSync(wsId).extensionsEnabled === false) {
     rec.error = t('extensions.errDisabled')
     return
   }
@@ -312,7 +324,7 @@ async function loadRecord(rec: ExtensionRecord): Promise<void> {
     // (замерено: после удаления каталога пробника воркер ещё жил и падал).
     if (rec.electronId) {
       try {
-        extensionSession().extensions.removeExtension(rec.electronId)
+        extensionSession(wsId).extensions.removeExtension(rec.electronId)
       } catch {
         // Регистрации нет — цель достигнута.
       }
@@ -329,12 +341,12 @@ async function loadRecord(rec: ExtensionRecord): Promise<void> {
     // со ссылками на файлы, которых уже нет.
     if (rec.electronId) {
       try {
-        extensionSession().extensions.removeExtension(rec.electronId)
+        extensionSession(wsId).extensions.removeExtension(rec.electronId)
       } catch {
         // Регистрации нет — цель достигнута.
       }
     }
-    const ext = await extensionSession().extensions.loadExtension(rec.dir)
+    const ext = await extensionSession(wsId).extensions.loadExtension(rec.dir)
     rec.electronId = ext.id
     rec.error = ''
     // Команды ставятся ПОСЛЕ успешной загрузки: сочетание без живущего
@@ -347,10 +359,10 @@ async function loadRecord(rec: ExtensionRecord): Promise<void> {
   }
 }
 
-async function unloadRecord(rec: ExtensionRecord): Promise<void> {
+async function unloadRecord(rec: ExtensionRecord, wsId = bootWorkspaceId()): Promise<void> {
   if (!rec.electronId) return
   try {
-    extensionSession().extensions.removeExtension(rec.electronId)
+    extensionSession(wsId).extensions.removeExtension(rec.electronId)
   } catch {
     // Расширение уже выгружено — цель достигнута.
   }
@@ -496,7 +508,8 @@ function seedAction(manifest: Record<string, unknown>, dir: string): ActionSeed 
   }
 }
 
-export async function installFromFolder(): Promise<ExtensionInstallResult> {
+export async function installFromFolder(wsId?: string): Promise<ExtensionInstallResult> {
+  const t = tFor(wsId)
   const picked = await dialog.showOpenDialog({
     title: t('extensions.chooseFolder'),
     properties: ['openDirectory']
@@ -505,7 +518,8 @@ export async function installFromFolder(): Promise<ExtensionInstallResult> {
   return installFromPath(picked.filePaths[0])
 }
 
-export async function installFromArchive(): Promise<ExtensionInstallResult> {
+export async function installFromArchive(wsId?: string): Promise<ExtensionInstallResult> {
+  const t = tFor(wsId)
   const picked = await dialog.showOpenDialog({
     title: t('extensions.chooseArchive'),
     filters: [{ name: 'Chrome extension', extensions: ['crx'] }],
@@ -601,9 +615,9 @@ export async function reloadExtension(id: string): Promise<boolean> {
   return rec.error === ''
 }
 
-export function extensionsMenuModel(): ExtensionsMenuModel {
+export function extensionsMenuModel(wsId = bootWorkspaceId()): ExtensionsMenuModel {
   return {
-    items: extensionsState().list.map((info) => ({
+    items: extensionsState(wsId).list.map((info) => ({
       id: info.id,
       name: info.name,
       icon: info.action?.icon ?? '',
@@ -615,7 +629,7 @@ export function extensionsMenuModel(): ExtensionsMenuModel {
       hasPopup: info.action?.hasPopup ?? false,
       warningCount: info.warnings.length
     })),
-    enabled: getSettingsSync().extensionsEnabled !== false
+    enabled: getSettingsSync(wsId).extensionsEnabled !== false
   }
 }
 
@@ -652,24 +666,33 @@ export async function activateExtension(
 // --- Старт --------------------------------------------------------------
 
 let started = false
+/** Пространства, для которых расширения уже подняты. */
+const startedSpaces = new Set<string>()
 
-export async function initExtensions(): Promise<void> {
-  if (started) return
-  started = true
-  await loadExtensions()
-  await startBridge()
-  setActionChangeListener(() => pushExtensionsState())
-  if (getSettingsSync().extensionsEnabled === false) return
-  for (const rec of getExtensionsSync()) {
+export async function initExtensions(wsId = bootWorkspaceId()): Promise<void> {
+  if (startedSpaces.has(wsId)) return
+  startedSpaces.add(wsId)
+  await loadExtensions(wsId)
+  if (!started) {
+    // Мост loopback — один на процесс: он обслуживает расширения всех
+    // пространств, а расширение различается по Origin запроса.
+    await startBridge()
+    setActionChangeListener(() => {
+      for (const id of startedSpaces) pushExtensionsState(id)
+    })
+    started = true
+  }
+  if (getSettingsSync(wsId).extensionsEnabled === false) return
+  for (const rec of getExtensionsSync(wsId)) {
     if (!rec.enabled) continue
-    await loadRecord(rec)
-    await upsertExtension(rec)
+    await loadRecord(rec, wsId)
+    await upsertExtension(rec, wsId)
   }
   // Чистка сирот идёт ПОСЛЕ загрузки своих расширений: Chromium поднимает
   // расширения из профиля асинхронно, и до первой загрузки список
   // getAllExtensions() пуст (замерено: loaded: 0 при старте).
-  await dropOrphanRegistrations()
-  pushExtensionsState()
+  await dropOrphanRegistrations(wsId)
+  pushExtensionsState(wsId)
   // Обновления проверяются в фоне: старт браузера из-за сети не задерживаем.
   scheduleUpdateCheck()
 }
@@ -689,15 +712,15 @@ export async function initExtensions(): Promise<void> {
 // Полный список лежит в Preferences партиции (extensions.settings);
 // читаем его как строку JSON, без своей модели — формат внутренний,
 // и при его смене достаточно тихо пропустить этот источник.
-async function dropOrphanRegistrations(): Promise<void> {
+async function dropOrphanRegistrations(wsId = bootWorkspaceId()): Promise<void> {
   const known = new Set(
-    getExtensionsSync()
+    getExtensionsSync(wsId)
       .map((rec) => rec.electronId)
       .filter((id): id is string => !!id)
   )
-  const ids = new Set<string>(readPersistedExtensionIds())
+  const ids = new Set<string>(readPersistedExtensionIds(wsId))
   try {
-    for (const ext of extensionSession().extensions.getAllExtensions()) ids.add(ext.id)
+    for (const ext of extensionSession(wsId).extensions.getAllExtensions()) ids.add(ext.id)
   } catch {
     // Список недоступен — работаем по сохранённому.
   }
@@ -705,23 +728,23 @@ async function dropOrphanRegistrations(): Promise<void> {
   for (const id of ids) {
     if (known.has(id)) continue
     try {
-      extensionSession().extensions.removeExtension(id)
+      extensionSession(wsId).extensions.removeExtension(id)
       dropped.push(id)
     } catch {
       // Регистрации уже нет — цель достигнута.
     }
   }
-  log('lifecycle', 'ext: регистрации', { registered: ids.size, dropped })
+  log('lifecycle', 'ext: регистрации', { registered: ids.size, dropped, wsId })
 }
 
 // Идентификаторы расширений, записанные в профиль партиции.
 // Путь: <userData>/Partitions/<partition>/Preferences -> extensions.settings.
-function readPersistedExtensionIds(): string[] {
+function readPersistedExtensionIds(wsId = bootWorkspaceId()): string[] {
   try {
     const file = join(
       app.getPath('userData'),
       'Partitions',
-      NORMAL_PARTITION.replace(/^persist:/, ''),
+      partitionFor(wsId).replace(/^persist:/, ''),
       'Preferences'
     )
     if (!existsSync(file)) return []
@@ -748,42 +771,51 @@ function readPersistedExtensionIds(): string[] {
 // Ошибка на одной записи не должна мешать остальным: выход из приложения
 // не место для частичной работы.
 export async function shutdownExtensions(): Promise<void> {
-  if (!started) return
-  for (const rec of getExtensionsSync()) {
-    if (!rec.electronId) continue
-    try {
-      await unloadRecord(rec)
-      await upsertExtension(rec)
-    } catch (e) {
-      logError('extensions shutdown failed', e)
+  // При выходе выгружаем расширения ВСЕХ поднятых пространств: иначе
+  // воркеры останутся зарегистрированными в партициях и на следующем старте
+  // поднимутся раньше нашего кода (см. комментарий выше).
+  for (const wsId of [...startedSpaces]) {
+    for (const rec of getExtensionsSync(wsId)) {
+      if (!rec.electronId) continue
+      try {
+        await unloadRecord(rec, wsId)
+        await upsertExtension(rec, wsId)
+      } catch (e) {
+        logError('extensions shutdown failed', e)
+      }
     }
   }
 }
 
 // Смена глобального выключателя расширений: выгружает или поднимает всё.
-export async function applyExtensionsEnabled(enabled: boolean): Promise<void> {
+export async function applyExtensionsEnabled(
+  enabled: boolean,
+  wsId = bootWorkspaceId()
+): Promise<void> {
   if (enabled) {
-    if (!started) {
-      await initExtensions()
+    if (!startedSpaces.has(wsId)) {
+      await initExtensions(wsId)
       return
     }
-    for (const rec of getExtensionsSync()) {
+    for (const rec of getExtensionsSync(wsId)) {
       if (!rec.enabled || rec.electronId) continue
-      await loadRecord(rec)
-      await upsertExtension(rec)
+      await loadRecord(rec, wsId)
+      await upsertExtension(rec, wsId)
     }
   } else {
-    for (const rec of getExtensionsSync()) {
-      if (rec.electronId) await unloadRecord(rec)
-      await upsertExtension(rec)
+    for (const rec of getExtensionsSync(wsId)) {
+      if (rec.electronId) await unloadRecord(rec, wsId)
+      await upsertExtension(rec, wsId)
     }
   }
-  pushExtensionsState()
+  pushExtensionsState(wsId)
 }
 
 // Пересборка кэша из файла: нужно странице расширений после установки извне.
-export async function refreshExtensions(): Promise<ExtensionsState> {
-  resetExtensionsCache()
-  await loadExtensions()
-  return extensionsState()
+export async function refreshExtensions(
+  wsId = bootWorkspaceId()
+): Promise<ExtensionsState> {
+  resetExtensionsCache(wsId)
+  await loadExtensions(wsId)
+  return extensionsState(wsId)
 }

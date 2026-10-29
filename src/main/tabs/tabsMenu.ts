@@ -7,7 +7,7 @@ import { ensureStripToken, removeStripToken } from './stripOrder'
 import { getGroups, createSavedGroup } from '../groups/groupsStore'
 import { showOverlay, type OverlayMenuItem } from '../overlay'
 import { hotkeyLabel } from '../hotkeys'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 import { createTab, closeTab, pushTabsState, pruneEmptyGroup } from '../windows/deps'
 import { START_URL } from '../pages/internalPages'
 
@@ -18,6 +18,7 @@ export function registerTabsMenuIpc(): void {
     if (!win || !ws) return
     const rec = ws.tabs.get(payload.id)
     if (!rec) return
+    const t = tFor(ws.workspaceId)
     const id = payload.id
     // Пункт добавления в группу — всегда: второй уровень показывает
     // открытые группы + шаблоны из закладок (закрытые откроются).
@@ -35,8 +36,8 @@ export function registerTabsMenuIpc(): void {
       { id: 'rename', label: t('tabs.rename'), icon: '✏️' },
       { id: 'set-icon', label: t('tabs.changeIcon'), icon: '🖼️' },
       { id: 'copy-url', label: t('tabs.copyUrl'), icon: '🔗' },
-      { id: 'reload', label: t('tabs.reload'), icon: '🔄', hotkey: hotkeyLabel('reload') },
-      { id: 'close', label: t('tabs.close'), icon: '✕', hotkey: hotkeyLabel('close-tab') }
+      { id: 'reload', label: t('tabs.reload'), icon: '🔄', hotkey: hotkeyLabel('reload', ws.workspaceId) },
+      { id: 'close', label: t('tabs.close'), icon: '✕', hotkey: hotkeyLabel('close-tab', ws.workspaceId) }
     ]
     showOverlay(win, {
       kind: 'menu',
@@ -78,7 +79,7 @@ export function registerTabsMenuIpc(): void {
             pushTabsState(tws)
             return
           }
-          void getGroups().then((saved) => {
+          void getGroups(ws.workspaceId).then((saved) => {
             const live = findTab(id)
             if (!live) return
             // Все открытые корневые экземпляры (как на панели вкладок)
@@ -121,7 +122,7 @@ export function registerTabsMenuIpc(): void {
                 // Закрытый шаблон: открываем экземпляр, вкладка — первой.
                 if (targetId.startsWith('saved:')) {
                   const savedId = targetId.slice('saved:'.length)
-                  void getGroups().then((fresh) => {
+                  void getGroups(ws.workspaceId).then((fresh) => {
                     const s = fresh.find((g) => g.id === savedId)
                     const l2 = findTab(id)?.ws
                     if (!s || !l2) return
@@ -189,8 +190,9 @@ export function registerTabsMenuIpc(): void {
     const win = BrowserWindow.fromWebContents(e.sender)
     const ws = win ? getState(win) : undefined
     if (!win || !ws) return
+    const t = tFor(ws.workspaceId)
     const items: OverlayMenuItem[] = [
-      { id: 'new-tab', label: t('tabs.newTab'), icon: '＋', hotkey: hotkeyLabel('new-tab') },
+      { id: 'new-tab', label: t('tabs.newTab'), icon: '＋', hotkey: hotkeyLabel('new-tab', ws.workspaceId) },
       { id: 'new-group', label: t('groups.menu.new'), icon: '📁' },
       // Подпись про вкладки, а не про группу: это меню панели, а не
       // заголовка группы, и пункт закрывает все вкладки окна.

@@ -53,30 +53,43 @@ export const lastClosed = new Map<number, { toggleKey?: string; at: number }>()
 export const TOGGLE_ECHO_MS = 250
 
 //
-// Слушатель завершения оверлейной сессии родителя.
+// Слушатели завершения оверлейной сессии родителя.
 //
-// Зарегистрирован permissions/permissionManager: пока показан промпт
-// разрешения, страница ждёт getUserMedia, и очередь обязана узнать, что
-// поверхность сняли — иначе обработчик разрешения не вызовет callback(),
-// и запрос зависнет навсегда.
+// Зарегистрированы permissions/permissionManager (промпт разрешения держит
+// getUserMedia страницы — не ответив, его не отпустить) и
+// workspaces/restoreDialog (диалог восстановления после аварии обязан
+// получить решение, даже если его сняли Esc'ом или уходом из приложения).
+//
+// Слушателей несколько, а не один: список растёт по мере подсистем, у
+// которых есть незакрытый запрос, и единственный слот отдавал бы событие
+// только последнему подписавшемуся.
 //
 // Одно событие на все сценарии снятия (закрытие по Esc/подложке, вытеснение
 // меню, переключение вкладки, прерванный показ) — потому что различать их
 // обязан сам владелец очереди, а не оверлей: оверлей не знает, что значат
 // его поверхности для потребителя.
-let overlayEndedListener: ((parentId: number) => void) | null = null
+const overlayEndedListeners = new Set<(parentId: number) => void>()
 
-/** Регистрирует единственный слушатель завершения сессий. */
-export function setOverlayEndedListener(fn: (parentId: number) => void): void {
-  overlayEndedListener = fn
+/**
+ * Подписка на снятие сессий родителя. Возвращает отписку.
+ *
+ * Отписка обязательна там, где событие одноразовое: диалог восстановления
+ * снимается после решения, и без отписки его обработчик получал бы чужие
+ * закрытия (меню, поиск, тосты) до конца жизни окна.
+ */
+export function onOverlayEnded(fn: (parentId: number) => void): () => void {
+  overlayEndedListeners.add(fn)
+  return () => overlayEndedListeners.delete(fn)
 }
 
-/** Сообщает слушателю, что сессии родителя сняты. */
+/** Сообщает слушателям, что сессии родителя сняты. */
 export function notifyOverlayEnded(parentId: number): void {
-  try {
-    overlayEndedListener?.(parentId)
-  } catch (err) {
-    logError('overlay ended listener failed', err)
+  for (const fn of [...overlayEndedListeners]) {
+    try {
+      fn(parentId)
+    } catch (err) {
+      logError('overlay ended listener failed', err)
+    }
   }
 }
 

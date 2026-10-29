@@ -14,8 +14,21 @@ import { switchIncognito, cloneWindow } from '../tabs/tabsManager'
 import { applyZoomToWs, openZoomPopup, stepActiveZoom } from '../zoomManager'
 import { showWindowMenu } from './windowMenu'
 import { createWindow, pushTabsState, tabsDeps, wsOf } from './deps'
+import { readWorkspaceMeta } from '../workspaces/registry'
 
 export function registerWindowIpc(): void {
+  // Пространство текущего окна — для значка перед кнопкой меню браузера.
+  // Shell не знает своего пространства и не должен: партиция и метаданные
+  // живут в main. Иконка — один эмодзи (см. registry.normalizeIcon), имя
+  // нужно для подсказки.
+  ipcMain.handle('window:workspace', (e) => {
+    const ws = getStateBySender(e.sender)
+    if (!ws) return null
+    const meta = readWorkspaceMeta(ws.workspaceId)
+    return meta
+      ? { id: meta.id, name: meta.name, icon: meta.icon, color: meta.color }
+      : { id: ws.workspaceId, name: ws.workspaceId, icon: '', color: '#888888' }
+  })
   // Переключение приватности ТЕКУЩЕГО окна. Отдельного приватного окна
   // больше нет: пункт меняет режим этого окна, и все его вкладки
   // переоткрываются в другой партиции (см. switchIncognito).
@@ -77,11 +90,11 @@ export function registerWindowIpc(): void {
     const ws = win ? getState(win) : undefined
     if (!win || !ws) return
     showWindowMenu(win, { x: payload.x, y: payload.y }, {
-      // restoreSession: false — иначе sessionTabs (общий слот на всё
-      // приложение) подставил бы сюда вкладки какого-то другого окна,
-      // и «новое окно» оказалось бы копией.
+      // restoreSession: false — новое окно получает только стартовую
+      // страницу, а не слепок вкладок. Пространство наследуется: данные
+      // (история, группы, расширения) у окон одного пространства общие.
       newWindow: () => {
-        createWindow({ restoreSession: false })
+        createWindow({ restoreSession: false, workspaceId: ws.workspaceId })
       },
       // Клон создаёт окно и кладёт вкладки сам (cloneWindow), поэтому
       // restoreSession тут не нужен: сессия прочитана не будет, так как

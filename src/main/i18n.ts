@@ -1,11 +1,12 @@
-// i18n main-процесса: init до первого окна, смена языка из настроек,
-// синхронный t() для меню, диалогов, тостов и счётчиков.
+// i18n main-процесса: init до первого окна и переводчицы ПРОСТРАНСТВА.
 //
-// После init() вызов t() синхронен — так и собираются контекстные меню
-// (контекст требует синхронности, как у getSettingsSync()).
+// Глобальной `t` у main больше нет намеренно: пространств может быть
+// открыто несколько, и у каждого свой язык. Меню, диалоги и тосты зовут
+// `tFor(wsId)`, внутренние страницы — `translatorFor(lang)`.
 import { app } from 'electron'
 import i18next from 'i18next'
-import { getSettings } from './store/settingsStore'
+import { getSettingsSync } from './store/settingsStore'
+import { bootWorkspaceId } from './workspaces/registry'
 import { i18nOptions, resolveLocale } from '../shared/i18n'
 
 // Логи только в dev-сборке, общий префикс [i18n] (см. shared/i18n/I18N.md).
@@ -13,34 +14,47 @@ function devLog(message: string): void {
   if (import.meta.env.DEV) console.log(`[i18n] ${message}`)
 }
 
-// Init при старте: настройки -> резолв 'auto' по локали системы -> init.
+// Init при старте: язык пространства, которое стартует, -> init.
 // Вызывается в whenReady ДО первого createWindow и регистрации страниц.
+// Язык инстанса — только база для `getFixedT`; сами поверхности берут
+// язык своего пространства.
 export async function initI18n(): Promise<void> {
-  const settings = await getSettings()
-  const lang = resolveLocale(settings.locale, app.getLocale())
+  const lang = langFor()
   await i18next.init(
     i18nOptions(lang, (key, languages) => devLog(`missing: ${key} (${languages})`)),
   )
   devLog(`init lang=${lang}`)
 }
 
+/** Тип переводчика: общий и для глобальной `t`, и для фиксированной. */
+export type Translator = typeof i18next.t
+
 /**
- * Смена языка из settings:save. Возвращает фактический код: 'auto'
- * резолвится по локали системы, незнакомый код деградирует до 'en'.
+ * Язык пространства: 'auto' резолвится по локали системы, незнакомый код
+ * деградирует до 'en'. Читается синхронно — меню и страницы собираются
+ * синхронно, как и настройки.
  */
-export async function setLocalePreference(pref: string): Promise<string> {
-  const lang = resolveLocale(pref, app.getLocale())
-  if (lang === i18next.language) return lang
-  await i18next.changeLanguage(lang)
-  devLog(`language -> ${lang}`)
-  return lang
+export function langFor(wsId = bootWorkspaceId()): string {
+  return resolveLocale(getSettingsSync(wsId).locale, app.getLocale())
 }
 
-// Текущий язык: код для PushMessage.language и сборки внутренних страниц.
-export function currentLang(): string {
-  return i18next.language || 'en'
+/**
+ * Переводчица на заданный язык.
+ *
+ * Нужна, чтобы язык был настройкой ПРОСТРАНСТВА: у i18next язык один на
+ * инстанс, а пространств может быть открыто несколько. `getFixedT` отдаёт
+ * функцию с тем же контрактом, что `t`, но со своим языком — поэтому
+ * меню и страницы собираются в языке своего пространства, не трогая
+ * глобальное состояние переводчика.
+ *
+ * Каталоги вшиты статически (i18nOptions), так что переключение не требует
+ * загрузки ресурсов.
+ */
+export function translatorFor(lang: string): Translator {
+  return i18next.getFixedT(lang) as Translator
 }
 
-// bind + cast: сорванный с this вызов сломал бы резолв fallback'а,
-// а cast сохраняет строгие типы ключей из CustomTypeOptions.
-export const t = i18next.t.bind(i18next) as typeof i18next.t
+/** Переводчица пространства. Меню и страницы зовут её. */
+export function tFor(wsId = bootWorkspaceId()): Translator {
+  return translatorFor(langFor(wsId))
+}

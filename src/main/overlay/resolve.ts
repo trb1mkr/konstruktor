@@ -5,7 +5,8 @@
 // Команды приходят от renderer'а оверлея, а адресованы родителю.
 // Родителя находим через обратную карту сессий (session.ts), а не перебором.
 import { BrowserWindow, dialog } from 'electron'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
+import { getState } from '../windows/browserState'
 import { log, logError } from './logger'
 import { hideContent } from './pool'
 import { clearSession, isTopSession, parentIdOfOverlay, sessionOf } from './session'
@@ -152,6 +153,8 @@ export async function resolveOverlaySubmitIcon(
   log('command', `submit-icon: ${buttonId} (${value.slice(0, 30)})`)
   const parentId = parentIdOfOverlay(overlay)
   if (parentId === undefined) return false
+  const wsId = getState(BrowserWindow.fromId(parentId) ?? null)?.workspaceId
+  const t = tFor(wsId)
   const entry = sessionOf<OverlayRequest>(parentId)
   if (!entry) return false
   const apply = entry.request.onIconApply
@@ -187,7 +190,7 @@ export async function resolveOverlaySubmitIcon(
         if (res.canceled || !res.filePaths || res.filePaths.length === 0 || overlay.isDestroyed()) {
           return true
         }
-        const conv = fileToIconDataUrl(res.filePaths[0])
+        const conv = fileToIconDataUrl(res.filePaths[0], wsId)
         if (!conv.ok) {
           logError('icon file conversion failed', conv.error)
           // Ошибка уходит через overlay:update, а не executeJavaScript:
@@ -211,9 +214,9 @@ export async function resolveOverlaySubmitIcon(
     }
     let check: { ok: true; icon: string } | { ok: false; error: string }
     if (buttonId === 'emoji') {
-      check = verifyEmojiButton(value)
+      check = verifyEmojiButton(value, wsId)
     } else {
-      check = verifyIconSource(value)
+      check = verifyIconSource(value, wsId)
       if (check.ok && check.icon.startsWith('emoji:')) {
         check = { ok: false, error: t('icon.error.useEmojiButton') }
       }

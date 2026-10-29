@@ -19,7 +19,7 @@ import { findTab, type TabData, type WindowState } from '../windows/browserState
 import { showOverlay, type OverlayMenuItem } from '../overlay'
 import { getSettingsSync } from '../store/settingsStore'
 import { hotkeyLabel } from '../hotkeys'
-import { t } from '../i18n'
+import { tFor, type Translator } from '../i18n'
 
 export interface PageMenuDeps {
   // Открыть URL вкладкой в окне, где вызвано меню.
@@ -69,7 +69,7 @@ function searchArg(params: ContextMenuParams, ctx: PageContext): string {
 
 // Общий хвост: разделитель, поиск, исходник страницы, инспектор.
 // Один набор на все контексты — без дублей между блоками.
-function commonTail(searchLabel: string): OverlayMenuItem[] {
+function commonTail(t: Translator, searchLabel: string): OverlayMenuItem[] {
   return [
     { id: 'sep-tail', label: '', icon: '', separator: true },
     { id: 'search', label: searchLabel, icon: '🔍' },
@@ -91,11 +91,16 @@ export interface PageMenuContext {
  * скрываются «открыть» при неразрешённой схеме, у редактируемого поля меню
  * нет вовсе (detectContext вернул null до сюда).
  */
-export function buildPageMenu(params: ContextMenuParams, ctx: PageMenuContext): OverlayMenuItem[] {
+export function buildPageMenu(
+  params: ContextMenuParams,
+  ctx: PageMenuContext,
+  wsId: string
+): OverlayMenuItem[] {
+  const t = tFor(wsId)
   // Подпись поиска — без пояснений: название движка и текст запроса
   // удлиняли пункт, а движок берётся из настроек в момент выбора, поэтому
   // в подписи он был бы либо повтором, либо устаревшим значением.
-  const tail = commonTail(t('pageMenu.search'))
+  const tail = commonTail(t, t('pageMenu.search'))
 
   if (ctx.kind === 'link') {
     const items: OverlayMenuItem[] = []
@@ -135,7 +140,7 @@ export function buildPageMenu(params: ContextMenuParams, ctx: PageMenuContext): 
   return [
     { id: 'back', label: t('pageMenu.back'), icon: '◀️', disabled: !ctx.canGoBack },
     { id: 'forward', label: t('pageMenu.forward'), icon: '▶️', disabled: !ctx.canGoForward },
-    { id: 'reload', label: t('pageMenu.reload'), icon: '🔄', hotkey: hotkeyLabel('reload') },
+    { id: 'reload', label: t('pageMenu.reload'), icon: '🔄', hotkey: hotkeyLabel('reload', wsId) },
     { id: 'sep-nav', label: '', icon: '', separator: true },
     { id: 'save-page', label: t('pageMenu.savePage'), icon: '💾' },
     { id: 'print', label: t('pageMenu.print'), icon: '🖨️' },
@@ -145,7 +150,13 @@ export function buildPageMenu(params: ContextMenuParams, ctx: PageMenuContext): 
 
 // Сохранение страницы: системный диалог + savePage.
 // savePage не проходит через will-download, поэтому тост шлём сами.
-async function savePageAs(win: BrowserWindow, wc: WebContents, rec: TabData): Promise<void> {
+async function savePageAs(
+  win: BrowserWindow,
+  wc: WebContents,
+  rec: TabData,
+  wsId: string
+): Promise<void> {
+  const t = tFor(wsId)
   const base = (rec.title || 'page').replace(/[\\/:*?"<>|]/g, '_').slice(0, 80).trim() || 'page'
   try {
     const res = await dialog.showSaveDialog(win, {
@@ -196,11 +207,15 @@ export function showPageContextMenu(
   const kind = detectContext(params)
   if (!kind) return
 
-  const items = buildPageMenu(params, {
-    kind,
-    canGoBack: wc.navigationHistory.canGoBack(),
-    canGoForward: wc.navigationHistory.canGoForward()
-  })
+  const items = buildPageMenu(
+    params,
+    {
+      kind,
+      canGoBack: wc.navigationHistory.canGoBack(),
+      canGoForward: wc.navigationHistory.canGoForward()
+    },
+    ws.workspaceId
+  )
   const vb = rec.view.getBounds()
   showOverlay(win, {
     kind: 'menu',
@@ -222,7 +237,7 @@ export function showPageContextMenu(
         live.reload()
       } else if (action === 'save-page') {
         const parent = liveWs.window
-        if (parent) void savePageAs(parent, live, liveRec)
+        if (parent) void savePageAs(parent, live, liveRec, liveWs.workspaceId)
       } else if (action === 'print') {
         live.print()
       } else if (action === 'open-image-tab') {
@@ -250,7 +265,7 @@ export function showPageContextMenu(
         // адресной строки: своего движка у меню нет, и хардкода Google в
         // нём тоже. Читаем в момент выбора, а не при сборке меню, — иначе
         // смена настройки не подействовала бы на открытое меню.
-        const template = getSettingsSync().searchEngine
+        const template = getSettingsSync(liveWs.workspaceId).searchEngine
         const url = template.replace('%s', encodeURIComponent(searchArg(params, kind)))
         void live.loadURL(url).catch((err: unknown) =>
           console.error('[pageMenu] search load failed:', err)

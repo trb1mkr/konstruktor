@@ -18,10 +18,11 @@
 // окна занимает одну строку и вряд ли кем-то используется.
 import { BrowserWindow } from 'electron'
 import { showOverlay, type OverlayMenuItem } from '../overlay'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
+import { getState } from './browserState'
 
-/** Подписи меню. Отдельная функция — смена языка меняет только её. */
-function labels(): {
+/** Подписи меню. Отдельная функция — язык берётся у пространства окна. */
+function labels(wsId?: string): {
   maximize: string
   restore: string
   minimize: string
@@ -29,6 +30,7 @@ function labels(): {
   newWindow: string
   cloneWindow: string
 } {
+  const t = tFor(wsId)
   return {
     maximize: t('window.menu.maximize'),
     restore: t('window.menu.restore'),
@@ -57,7 +59,7 @@ export function showWindowMenu(
     cloneWindow: () => void
   }
 ): void {
-  const L = labels()
+  const L = labels(getState(win)?.workspaceId)
   // Maximize и Restore — взаимоисключающие: одно и то же действие в двух
   // состояниях, поэтому в меню присутствует ровно один из них. Раздельные
   // пункты вместо смены подписи выбраны по требованию: скрываются, а не

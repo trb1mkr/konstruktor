@@ -8,7 +8,9 @@
 // проект уже переживал ровно это с локальной копией OverlayPayload.
 import { nativeTheme, type BrowserWindow } from 'electron'
 import { getSettingsSync } from '../store/settingsStore'
-import { currentLang } from '../i18n'
+import { getState } from '../windows/browserState'
+import { bootWorkspaceId } from '../workspaces/registry'
+import { langFor } from '../i18n'
 import { log, logError } from './logger'
 import { getPooledOverlay, pushPayload } from './pool'
 import {
@@ -128,7 +130,10 @@ export function buildPushMessage(
   union: Electron.Rectangle
 ): PushMessage {
   const entries = stackOf<OverlayRequest>(parent.id)
-  const settings = getSettingsSync()
+  // Меню принадлежит окну, а настройки — его пространству: видимость
+  // частей пункта, тема и язык у каждого пространства свои.
+  const wsId = getState(parent)?.workspaceId ?? bootWorkspaceId()
+  const settings = getSettingsSync(wsId)
   const theme =
     settings.theme === 'system'
       ? nativeTheme.shouldUseDarkColors
@@ -153,7 +158,7 @@ export function buildPushMessage(
     stack,
     theme,
     animations: settings.animations !== false,
-    language: currentLang(),
+    language: langFor(wsId),
     // Видимость частей пункта меню — из настроек, одним полем на всё
     // сообщение: это свойство интерфейса, а не уровня стека.
     menuDisplay: {
@@ -323,8 +328,10 @@ export function overlayModel(request: OverlayRequest): OverlayModel {
       view: 'dialog',
       dialog: {
         title: request.dialog?.title ?? '',
+        message: request.dialog?.message,
         placeholder: request.dialog?.placeholder,
         initial: request.dialog?.initial,
+        input: request.dialog?.input,
         buttons: request.dialog?.buttons ?? []
       }
     }

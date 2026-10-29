@@ -12,8 +12,10 @@ const props = defineProps<{
   sessionId?: number
   dialog: {
     title: string
+    message?: string
     placeholder?: string
     initial?: string
+    input?: boolean
     buttons: { id: string; label: string }[]
   }
 }>()
@@ -31,6 +33,8 @@ function onSubmit(buttonId: string, value: string): void {
 <template>
   <DialogForm
     :title="dialog.title"
+    :message="dialog.message"
+    :input="dialog.input"
     :placeholder="dialog.placeholder"
     :initial="dialog.initial"
     :buttons="dialog.buttons"

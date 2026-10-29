@@ -17,7 +17,7 @@ import {
 import { toggleDevTools, devToolsStateOf } from './devtools'
 import { layoutActiveView } from '../windows/windowsManager'
 import { percentOf } from '../zoomManager'
-import { pushTabsState, createTab, closeTab, setActiveTab, detachTabToNewWindow, wsOf } from '../windows/deps'
+import { pushTabsState, createTab, closeTab, setActiveTab, detachTabToNewWindow, reopenClosed, wsOf } from '../windows/deps'
 import { getSettings } from '../store/settingsStore'
 import { HISTORY_URL, SETTINGS_URL, DOWNLOADS_URL, EXTENSIONS_URL } from '../pages/internalPages'
 
@@ -27,6 +27,11 @@ export function registerTabsIpc(): void {
     closeTab(wsOf(e), id)
     return true
   })
+  // Возврат закрытой вкладки/окна: дубль хоткея для фокуса в shell (адресная
+  // строка, панели). Без аргумента — самая свежая запись журнала.
+  ipcMain.handle('tabs:reopen-closed', (e, entryId?: string) =>
+    reopenClosed(wsOf(e), entryId)
+  )
   ipcMain.handle('tabs:activate', (e, id: number) => {
     setActiveTab(wsOf(e), id)
     return true
@@ -214,7 +219,9 @@ export function registerTabsIpc(): void {
     if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target)) {
       if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(target)) target = 'https://' + target
       else {
-        const { searchEngine } = await getSettings()
+        // Поисковик — из пространства вкладки, а не из окна-отправителя:
+        // вкладку можно перенести в другое окно, но она остаётся в своём.
+        const { searchEngine } = await getSettings(found.ws.workspaceId)
         target = searchEngine.replace('%s', encodeURIComponent(rawUrl))
       }
     }

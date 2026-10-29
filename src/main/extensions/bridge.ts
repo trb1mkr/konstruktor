@@ -18,7 +18,7 @@ import { join } from 'path'
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { app, shell } from 'electron'
 import type { ChromeTabLike } from '../../shared/extensions-types'
-import { findExtensionByElectronId, getExtensionsSync } from './extensionStore'
+import { findExtensionByElectronIdAny, findExtensionRecordAny } from './extensionStore'
 import { commandsOfRecord, type RegisteredCommand } from './commands'
 import { getSettings, saveSettings } from '../store/settingsStore'
 import { getHistory, searchHistory } from '../store/historyStore'
@@ -41,7 +41,7 @@ export interface ExtensionHostDeps {
   createWindow(url?: string): number | null
   closeWindow(id: number): boolean
   notify(toast: { title: string; body?: string }): void
-  downloadUrl(url: string): void
+  downloadUrl(url: string, wsId?: string): void
 }
 
 // Состояние кнопки расширения на панели + пункты контекстного меню.
@@ -185,7 +185,7 @@ const METHOD_CAPABILITY: Record<string, string> = {
 function assertPermission(electronId: string, method: string): void {
   const capability = METHOD_CAPABILITY[method]
   if (capability) {
-    const rec = findExtensionByElectronId(electronId)
+    const rec = findExtensionByElectronIdAny(electronId)
     if (!rec) throw new Error('unknown extension: ' + electronId)
     if (!rec.native) throw new Error('konstruktor API is available to native extensions only')
     if (!(rec.capabilities ?? []).includes(capability)) {
@@ -195,7 +195,7 @@ function assertPermission(electronId: string, method: string): void {
   }
   const required = METHOD_PERMISSION[method]
   if (!required) return
-  const rec = findExtensionByElectronId(electronId)
+  const rec = findExtensionByElectronIdAny(electronId)
   if (!rec) throw new Error('unknown extension: ' + electronId)
   if (!rec.permissions.includes(required)) {
     throw new Error('permission "' + required + '" is not declared by the extension')
@@ -204,15 +204,18 @@ function assertPermission(electronId: string, method: string): void {
 
 // --- Хранилище собственного API konstruktor.storage ----------------------
 
-async function nativeStoragePath(id: string): Promise<string> {
-  const dir = join(app.getPath('userData'), 'extensions', id)
+async function nativeStoragePath(dir: string): Promise<string> {
+  // Хранилище расширения лежит рядом с его файлами, а файлы принадлежат
+  // рабочему пространству. Принимается КАТАЛОГ расширения, а не его id:
+  // пространство запуска тут не годится — у расширения второго
+  // пространства хранилище оказалось бы в чужом каталоге.
   await mkdir(dir, { recursive: true })
   return join(dir, 'konstruktor-storage.json')
 }
 
-async function nativeStorageGet(id: string, keys?: string[]): Promise<Record<string, unknown>> {
+async function nativeStorageGet(dir: string, keys?: string[]): Promise<Record<string, unknown>> {
   try {
-    const raw = JSON.parse(await readFile(await nativeStoragePath(id), 'utf8')) as Record<
+    const raw = JSON.parse(await readFile(await nativeStoragePath(dir), 'utf8')) as Record<
       string,
       unknown
     >
@@ -225,19 +228,19 @@ async function nativeStorageGet(id: string, keys?: string[]): Promise<Record<str
   }
 }
 
-async function nativeStorageSet(id: string, patch: Record<string, unknown>): Promise<void> {
-  const current = await nativeStorageGet(id)
+async function nativeStorageSet(dir: string, patch: Record<string, unknown>): Promise<void> {
+  const current = await nativeStorageGet(dir)
   await writeFile(
-    await nativeStoragePath(id),
+    await nativeStoragePath(dir),
     JSON.stringify({ ...current, ...patch }, null, 2),
     'utf8'
   )
 }
 
-async function nativeStorageRemove(id: string, keys: string[]): Promise<void> {
-  const current = await nativeStorageGet(id)
+async function nativeStorageRemove(dir: string, keys: string[]): Promise<void> {
+  const current = await nativeStorageGet(dir)
   for (const k of keys) delete current[k]
-  await writeFile(await nativeStoragePath(id), JSON.stringify(current, null, 2), 'utf8')
+  await writeFile(await nativeStoragePath(dir), JSON.stringify(current, null, 2), 'utf8')
 }
 
 // Локализация расширения: Electron не умеет chrome.i18n, читаем _locales сами.
@@ -274,7 +277,7 @@ function tabSnapshot(id: number): ChromeTabLike | undefined {
 
 async function dispatch(electronId: string, method: string, args: unknown[]): Promise<unknown> {
   assertPermission(electronId, method)
-  const rec = findExtensionByElectronId(electronId)
+  const rec = findExtensionByElectronIdAny(electronId)
   const arg0 = args[0] as Record<string, unknown> | undefined
 
   switch (method) {
@@ -472,12 +475,12 @@ async function dispatch(electronId: string, method: string, args: unknown[]): Pr
     case 'konstruktor.downloads.list':
       return getDownloads(Number(args[0]) || 100)
     case 'konstruktor.storage.get':
-      return rec ? nativeStorageGet(rec.id, args[0] as string[] | undefined) : {}
+      return rec ? nativeStorageGet(rec.dir, args[0] as string[] | undefined) : {}
     case 'konstruktor.storage.set':
-      if (rec) await nativeStorageSet(rec.id, (arg0 ?? {}) as Record<string, unknown>)
+      if (rec) await nativeStorageSet(rec.dir, (arg0 ?? {}) as Record<string, unknown>)
       return true
     case 'konstruktor.storage.remove':
-      if (rec) await nativeStorageRemove(rec.id, (args[0] as string[]) ?? [])
+      if (rec) await nativeStorageRemove(rec.dir, (args[0] as string[]) ?? [])
       return true
     case 'konstruktor.notify': {
       const o = (arg0 ?? {}) as { title?: string; body?: string }
@@ -571,7 +574,7 @@ export function extensionMenuItems(recId: string): ContextMenuItem[] {
 
 // Пользователь выбрал пункт меню расширения: уходит в service worker.
 export function fireMenuClick(recId: string, itemId: string, info: Record<string, unknown>): void {
-  const rec = getExtensionsSync().find((r) => r.id === recId)
+  const rec = findExtensionRecordAny(recId)
   if (!rec?.electronId) return
   const item = (state.menus.get(recId) ?? []).find((m) => m.id === itemId)
   if (!item) return
@@ -583,7 +586,7 @@ export function fireMenuClick(recId: string, itemId: string, info: Record<string
 // Здесь остаются только эти две отдельные операции — иначе bridge знал бы
 // про окна, чего он делать не должен.
 export function actionPopupPage(recId: string): { electronId: string; page: string } | null {
-  const rec = getExtensionsSync().find((r) => r.id === recId)
+  const rec = findExtensionRecordAny(recId)
   if (!rec?.electronId) return null
   const action = actionState(rec.electronId)
   const page = action.popup || rec.actionSeed?.popup || ''
@@ -592,7 +595,7 @@ export function actionPopupPage(recId: string): { electronId: string; page: stri
 }
 
 export function fireActionClick(recId: string): boolean {
-  const rec = getExtensionsSync().find((r) => r.id === recId)
+  const rec = findExtensionRecordAny(recId)
   if (!rec?.electronId) return false
   pushEvent(rec.electronId, 'action.onClicked', [{ id: host().activeWindowId() ?? -1, url: '' }])
   return true

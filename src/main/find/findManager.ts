@@ -22,7 +22,7 @@ import {
   buildClearCustomFindScript,
   type CustomFindOptions
 } from './findScripts'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 
 // Панель поиска поверх страницы: один конструктор на все точки входа
 // (before-input-event view, Ctrl+F shell, find:open). Повторный вызов
@@ -63,6 +63,11 @@ function setFindCounter(parent: BrowserWindow | undefined, text: string): void {
   updateActiveOverlay(parent, { find: { counter: text } })
 }
 
+/** Пространство окна-родителя: язык счётчика — язык этого пространства. */
+function wsIdOf(parent: BrowserWindow | undefined): string | undefined {
+  return parent ? getState(parent)?.workspaceId : undefined
+}
+
 // Собственный поиск для wholeWord/regex: findInPage их не умеет
 // (только подстрока + matchCase). Разбиваем текст на слова границами
 // Unicode-букв/цифр — пробелы и пунктуация считаются разделителями.
@@ -77,6 +82,7 @@ export async function runCustomFind(rec: TabData, opts: CustomFindOptions): Prom
     res = { matches: 0 }
   }
   const n = res.matches ?? 0
+  const t = tFor(wsIdOf(parent))
   setFindCounter(
     parent,
     res.error === 'bad-regex'
@@ -98,6 +104,7 @@ export async function stepCustomFind(rec: TabData, forward: boolean): Promise<vo
     return
   }
   const n = res.matches ?? 0
+  const t = tFor(wsIdOf(parent))
   setFindCounter(
     parent,
     n === 0 ? t('find.none') : t('find.counter', { active: res.active ?? 0, total: n })

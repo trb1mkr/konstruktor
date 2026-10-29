@@ -1,9 +1,10 @@
-import { app } from 'electron'
-import { join } from 'path'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile } from 'fs/promises'
+import { writeJsonAtomic } from '../workspaces/atomic'
+import { workspaceFile } from '../workspaces/paths'
+import { bootWorkspaceId } from '../workspaces/registry'
 
-// История посещений: JSON-файл в userData, один источник истины в main.
-// Renderer ходит через IPC, инкогнито-окна не пишут и не читают.
+// История посещений: JSON в каталоге рабочего пространства, один источник
+// истины в main. Renderer ходит через IPC, инкогнито-окна не пишут и не читают.
 // Модель: одна строка на URL + массив меток визитов. Счётчик = visits.length,
 // время последнего визита = visits[0]. Старый формат (visitedAt/visitCount)
 // мигрируется при загрузке: visitCount превращается в N меток.
@@ -27,24 +28,23 @@ interface LegacyEntry {
 const MAX_ENTRIES = 1000
 // Храним не больше N меток на URL, чтобы файл не рос бесконечно.
 const MAX_VISITS_PER_URL = 500
-let filePath = ''
-let cache: HistoryEntry[] | null = null
 
-async function path(): Promise<string> {
-  if (!filePath) filePath = join(app.getPath('userData'), 'history.json')
-  return filePath
-}
+// Кэш по пространствам: у каждого свой файл, общего состояния нет.
+const caches = new Map<string, HistoryEntry[]>()
 
-async function load(): Promise<HistoryEntry[]> {
-  if (cache) return cache
+async function load(wsId: string): Promise<HistoryEntry[]> {
+  const cached = caches.get(wsId)
+  if (cached) return cached
+  let next: HistoryEntry[] = []
   try {
-    const raw = await readFile(await path(), 'utf-8')
+    const raw = await readFile(workspaceFile(wsId, 'history.json'), 'utf-8')
     const parsed = JSON.parse(raw) as LegacyEntry[]
-    cache = Array.isArray(parsed) ? parsed.map(migrateEntry).filter((e) => e.visits.length > 0) : []
+    next = Array.isArray(parsed) ? parsed.map(migrateEntry).filter((e) => e.visits.length > 0) : []
   } catch {
-    cache = []
+    // Нет файла или битый JSON — истории ещё нет.
   }
-  return cache
+  caches.set(wsId, next)
+  return next
 }
 
 // Миграция старой записи: visitCount меток на момент visitedAt.
@@ -68,10 +68,10 @@ function migrateEntry(raw: LegacyEntry): HistoryEntry {
   }
 }
 
-async function save(): Promise<void> {
-  if (!cache) return
-  await mkdir(app.getPath('userData'), { recursive: true })
-  await writeFile(await path(), JSON.stringify(cache), 'utf-8')
+async function save(wsId: string): Promise<void> {
+  const list = caches.get(wsId)
+  if (!list) return
+  await writeJsonAtomic(workspaceFile(wsId, 'history.json'), list)
 }
 
 // Внутренние страницы не пишем.
@@ -84,13 +84,16 @@ function isSkippable(url: string): boolean {
   )
 }
 
-export async function recordVisit(entry: {
-  url: string
-  title: string
-  favicon: string
-}): Promise<void> {
+export async function recordVisit(
+  entry: {
+    url: string
+    title: string
+    favicon: string
+  },
+  wsId = bootWorkspaceId()
+): Promise<void> {
   if (isSkippable(entry.url)) return
-  const list = await load()
+  const list = await load(wsId)
   const now = Date.now()
   const existing = list.find((e) => e.url === entry.url)
   if (existing) {
@@ -113,7 +116,7 @@ export async function recordVisit(entry: {
   }
   // Жесткий лимит, чтобы файл не рос бесконечно.
   if (list.length > MAX_ENTRIES) list.length = MAX_ENTRIES
-  await save()
+  await save(wsId)
 }
 
 // Обновление метаданных без нового визита: заголовок и иконка прилетают
@@ -122,26 +125,31 @@ export async function recordVisit(entry: {
 // считается за два (это и давало лишний ×2).
 export async function updateMetadata(
   url: string,
-  patch: { title?: string; favicon?: string }
+  patch: { title?: string; favicon?: string },
+  wsId = bootWorkspaceId()
 ): Promise<void> {
   if (isSkippable(url)) return
   if (!patch.title && !patch.favicon) return
-  const list = await load()
+  const list = await load(wsId)
   const existing = list.find((e) => e.url === url)
   if (!existing) return
   if (patch.title) existing.title = patch.title
   if (patch.favicon) existing.favicon = patch.favicon
-  await save()
+  await save(wsId)
 }
 
-export async function getHistory(limit = 200): Promise<HistoryEntry[]> {
-  return (await load()).slice(0, limit)
+export async function getHistory(limit = 200, wsId = bootWorkspaceId()): Promise<HistoryEntry[]> {
+  return (await load(wsId)).slice(0, limit)
 }
 
-export async function searchHistory(query: string, limit = 50): Promise<HistoryEntry[]> {
+export async function searchHistory(
+  query: string,
+  limit = 50,
+  wsId = bootWorkspaceId()
+): Promise<HistoryEntry[]> {
   const q = query.trim().toLowerCase()
-  if (!q) return getHistory(limit)
-  return (await load())
+  if (!q) return getHistory(limit, wsId)
+  return (await load(wsId))
     .filter(
       (e) => e.url.toLowerCase().includes(q) || e.title.toLowerCase().includes(q)
     )
@@ -157,10 +165,14 @@ export interface VisitRow {
   at: number
 }
 
-export async function getTimeline(query = '', limit = 2000): Promise<VisitRow[]> {
+export async function getTimeline(
+  query = '',
+  limit = 2000,
+  wsId = bootWorkspaceId()
+): Promise<VisitRow[]> {
   const q = query.trim().toLowerCase()
   const rows: VisitRow[] = []
-  for (const e of await load()) {
+  for (const e of await load(wsId)) {
     if (q && !e.url.toLowerCase().includes(q) && !e.title.toLowerCase().includes(q)) continue
     for (const at of e.visits) {
       rows.push({ url: e.url, title: e.title, favicon: e.favicon, at })
@@ -174,24 +186,34 @@ export async function getTimeline(query = '', limit = 2000): Promise<VisitRow[]>
 }
 
 // Удаление одного визита (точка в хронологии), а не всего URL.
-export async function deleteVisit(url: string, at: number): Promise<void> {
-  const list = await load()
+export async function deleteVisit(
+  url: string,
+  at: number,
+  wsId = bootWorkspaceId()
+): Promise<void> {
+  const list = await load(wsId)
   const existing = list.find((e) => e.url === url)
   if (!existing) return
   existing.visits = existing.visits.filter((t) => t !== at)
   if (existing.visits.length === 0) {
-    cache = list.filter((e) => e !== existing)
+    caches.set(
+      wsId,
+      list.filter((e) => e !== existing)
+    )
   }
-  await save()
+  await save(wsId)
 }
 
-export async function deleteEntry(url: string): Promise<void> {
-  const list = await load()
-  cache = list.filter((e) => e.url !== url)
-  await save()
+export async function deleteEntry(url: string, wsId = bootWorkspaceId()): Promise<void> {
+  const list = await load(wsId)
+  caches.set(
+    wsId,
+    list.filter((e) => e.url !== url)
+  )
+  await save(wsId)
 }
 
-export async function clearHistory(): Promise<void> {
-  cache = []
-  await save()
+export async function clearHistory(wsId = bootWorkspaceId()): Promise<void> {
+  caches.set(wsId, [])
+  await save(wsId)
 }

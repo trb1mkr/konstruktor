@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 // Каркас диалога с полем ввода и кнопками. Общий для PromptDialog и
 // IconDialog: оба — заголовок, одно поле, ряд кнопок.
@@ -13,15 +13,26 @@ import { ref, computed, onMounted } from 'vue'
 const props = withDefaults(
   defineProps<{
     title: string
+    /** Пояснение под заголовком. Показывается вместо поля у подтверждений. */
+    message?: string
     placeholder?: string
     initial?: string
+    /** false — без поля ввода: диалог выбора из кнопок. */
+    input?: boolean
     /** Подпись под полем: ошибка верификации, подсказка. */
     error?: string
     /** Кнопки под полем. icon — смайлик перед подписью, title — подсказка. */
     buttons: { id: string; label: string; icon?: string; title?: string; group?: 'sources' }[]
     sessionId?: number
   }>(),
-  { placeholder: undefined, initial: undefined, error: undefined, sessionId: undefined }
+  {
+    message: undefined,
+    placeholder: undefined,
+    initial: undefined,
+    input: true,
+    error: undefined,
+    sessionId: undefined
+  }
 )
 
 const emit = defineEmits<{
@@ -30,7 +41,8 @@ const emit = defineEmits<{
 }>()
 
 const value = ref(props.initial ?? '')
-const input = ref<HTMLInputElement | null>(null)
+const inputEl = ref<HTMLInputElement | null>(null)
+const root = ref<HTMLElement | null>(null)
 
 // Кнопка по умолчанию: первая не-отменяющая. Отмена всегда последняя
 // (её так задаёт main), иначе Enter отправлял бы форму вместо выхода.
@@ -68,17 +80,36 @@ function onBackdrop(e: MouseEvent): void {
 }
 
 onMounted(() => {
-  input.value?.focus()
-  input.value?.select()
+  // Диалог без поля: фокус на корне, а Enter ловит глобальный обработчик.
+  // Без этого клавиатура осталась бы в shell, и Enter не выбрал бы
+  // кнопку по умолчанию — а именно её пользователь и ждёт.
+  if (props.input === false) {
+    root.value?.focus()
+    window.addEventListener('keydown', onGlobalKey)
+    onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
+    return
+  }
+  inputEl.value?.focus()
+  inputEl.value?.select()
 })
+
+// Enter на диалоге без поля. Слушатель глобальный, а не на корне: фокус
+// может остаться на body оверлея, и событие до корня не поднимется.
+function onGlobalKey(e: KeyboardEvent): void {
+  if (e.key !== 'Enter') return
+  e.preventDefault()
+  if (defaultButton.value !== undefined) choose(defaultButton.value)
+}
 </script>
 
 <template>
   <div class="dialog-root" @mousedown="onBackdrop">
-    <div class="dialog" @mousedown.stop>
+    <div ref="root" class="dialog" tabindex="-1" @mousedown.stop>
       <div class="dialog-title">{{ title }}</div>
+      <div v-if="message" class="dialog-message">{{ message }}</div>
       <input
-        ref="input"
+        v-if="input !== false"
+        ref="inputEl"
         v-model="value"
         class="dialog-input"
         :placeholder="placeholder ?? ''"
@@ -132,6 +163,20 @@ onMounted(() => {
   color: var(--ov-text);
 }
 .dialog-title { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+/* Пояснение у диалога выбора: обычный текст, не заголовок и не ошибка.
+   Перенос по словам обязателен — текст собирается в main и приходит
+   готовой строкой без разметки. */
+.dialog-message {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ov-text);
+  opacity: 0.85;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+/* Корень диалога — цель фокуса для диалогов без поля ввода: рамка от
+   tabindex не нужна. */
+.dialog:focus { outline: none; }
 .dialog-input {
   width: 100%;
   padding: 8px 10px;

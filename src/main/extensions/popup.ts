@@ -12,8 +12,9 @@
 import { BrowserWindow, ipcMain, screen } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { NORMAL_PARTITION, getState } from '../windows/browserState'
-import { webContentBackground, effectiveColorScheme } from '../browserTheme'
+import { getState } from '../windows/browserState'
+import { partitionFor, bootWorkspaceId } from '../workspaces/registry'
+import { webContentBackgroundFor, schemeForWorkspace } from '../browserTheme'
 import { logError } from '../overlay/logger'
 import { dispatchExtensionRpc } from './bridge'
 import { findExtensionRecord } from './extensionStore'
@@ -193,6 +194,8 @@ export async function openActionPopup(params: {
   // «not a website» вместо панели (проверено: browser.permissions в попапе
   // тоже undefined, поэтому вычислять вкладку в самой странице нельзя).
   const ws = getState(parent)
+  // Схема попапа — по настройкам пространства-родителя: у каждого оно своё.
+  const popupWsId = ws?.workspaceId ?? bootWorkspaceId()
   const activeRec = ws && ws.activeTabId !== null ? ws.tabs.get(ws.activeTabId) : undefined
   const popupTab = activeRec
     ? {
@@ -221,11 +224,15 @@ export async function openActionPopup(params: {
     // веб-контент. Без явного цвета окно стартует белым и мигает
     // при тёмной схеме (и наоборот). Схему prefers-color-scheme внутри
     // попапа ведет nativeTheme.themeSource — см. browserTheme.ts.
-    backgroundColor: webContentBackground(),
+    backgroundColor: webContentBackgroundFor(popupWsId),
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
     webPreferences: {
-      partition: NORMAL_PARTITION,
+      // Партиция пространства окна-родителя: попап должен видеть те же
+      // cookies и storage, что и вкладка, иначе расширение работает
+      // в чужой сессии. Пространство берём у родителя, а не у реестра:
+      // попап всегда открывается из конкретного окна.
+      partition: partitionFor(popupWsId),
       contextIsolation: true,
       nodeIntegration: false,
       preload: popupPreload()
@@ -239,7 +246,7 @@ export async function openActionPopup(params: {
   // Used-схема попапа: цвет ползунка, формы, канвас. prefers-color-scheme
   // внутри него ведет nativeTheme.themeSource (см. browserTheme.ts).
   void popupWin.webContents
-    .insertCSS(`:root { color-scheme: ${effectiveColorScheme()} !important; }`, {
+    .insertCSS(`:root { color-scheme: ${schemeForWorkspace(popupWsId)} !important; }`, {
       cssOrigin: 'author'
     })
     .catch(() => undefined)

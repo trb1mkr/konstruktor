@@ -1,8 +1,9 @@
-import { app } from 'electron'
-import { join } from 'path'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile } from 'fs/promises'
+import { writeJsonAtomic } from '../workspaces/atomic'
+import { workspaceFile } from '../workspaces/paths'
+import { bootWorkspaceId } from '../workspaces/registry'
 
-// Плитки табло стартовой страницы: userData/shortcuts.json.
+// Плитки табло стартовой страницы: каталог пространства, shortcuts.json.
 // Правятся прямо на konstruktor://start (add/remove), мост window.konstruktor.
 export interface Shortcut {
   name: string
@@ -15,40 +16,50 @@ const DEFAULTS: Shortcut[] = [
   { name: 'GitHub', url: 'https://github.com', favicon: '' }
 ]
 
-let filePath = ''
-let cache: Shortcut[] | null = null
+// Кэш по пространствам: у каждого свой набор плиток.
+const caches = new Map<string, Shortcut[]>()
 
-async function load(): Promise<Shortcut[]> {
-  if (cache) return cache
+function fileOf(wsId: string): string {
+  return workspaceFile(wsId, 'shortcuts.json')
+}
+
+async function save(wsId: string): Promise<void> {
+  const list = caches.get(wsId)
+  if (!list) return
+  await writeJsonAtomic(fileOf(wsId), list)
+}
+
+async function load(wsId: string): Promise<Shortcut[]> {
+  const cached = caches.get(wsId)
+  if (cached) return cached
+  let next: Shortcut[]
   try {
-    const raw = await readFile(filePath || join(app.getPath('userData'), 'shortcuts.json'), 'utf-8')
+    const raw = await readFile(fileOf(wsId), 'utf-8')
     const parsed = JSON.parse(raw) as Shortcut[]
-    cache = Array.isArray(parsed) ? parsed : [...DEFAULTS]
+    next = Array.isArray(parsed) ? parsed : [...DEFAULTS]
   } catch {
-    cache = [...DEFAULTS]
+    next = [...DEFAULTS]
   }
   // Миграция: убираем example.com из старых файлов.
-  const filtered = cache.filter((s) => !s.url.includes('example.com'))
-  if (filtered.length !== cache.length) {
-    cache = filtered
-    await save()
+  const filtered = next.filter((s) => !s.url.includes('example.com'))
+  if (filtered.length !== next.length) {
+    caches.set(wsId, filtered)
+    await save(wsId)
+    return filtered
   }
-  return cache
+  caches.set(wsId, next)
+  return next
 }
 
-async function save(): Promise<void> {
-  if (!cache) return
-  filePath = filePath || join(app.getPath('userData'), 'shortcuts.json')
-  await mkdir(app.getPath('userData'), { recursive: true })
-  await writeFile(filePath, JSON.stringify(cache, null, 2), 'utf-8')
+export async function getShortcuts(wsId = bootWorkspaceId()): Promise<Shortcut[]> {
+  return [...(await load(wsId))]
 }
 
-export async function getShortcuts(): Promise<Shortcut[]> {
-  return [...(await load())]
-}
-
-export async function addShortcut(input: { name?: string; url: string }): Promise<Shortcut[]> {
-  const list = await load()
+export async function addShortcut(
+  input: { name?: string; url: string },
+  wsId = bootWorkspaceId()
+): Promise<Shortcut[]> {
+  const list = await load(wsId)
   let url = input.url.trim()
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) url = 'https://' + url
   const existing = list.find((s) => s.url === url)
@@ -57,13 +68,14 @@ export async function addShortcut(input: { name?: string; url: string }): Promis
   } else {
     list.push({ name: input.name || url, url, favicon: '' })
   }
-  await save()
+  await save(wsId)
   return [...list]
 }
 
-export async function removeShortcut(url: string): Promise<Shortcut[]> {
-  const list = await load()
-  cache = list.filter((s) => s.url !== url)
-  await save()
-  return [...(cache ?? [])]
+export async function removeShortcut(url: string, wsId = bootWorkspaceId()): Promise<Shortcut[]> {
+  const list = await load(wsId)
+  const next = list.filter((s) => s.url !== url)
+  caches.set(wsId, next)
+  await save(wsId)
+  return [...next]
 }

@@ -5,10 +5,12 @@
 // Страница не правит реестр напрямую: все действия уходят в main через
 // window.konstruktor.*, а состояние приезжает либо ответом, либо пушем
 // extensions:state (его шлёт main после любой операции).
-import { t } from '../i18n'
+import { translatorFor } from '../i18n'
 import { shell } from './shell'
 
+// Язык — параметр сборки: страница отдаётся в языке СВОЕГО пространства.
 export function buildExtensionsPage(lang: string): string {
+  const t = translatorFor(lang)
   return shell(
     t('extensions.title'),
     `<div class="toolbar">

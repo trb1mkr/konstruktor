@@ -14,6 +14,7 @@ export type HotkeyActionId =
   | 'reload'
   | 'close-tab'
   | 'new-tab'
+  | 'reopen-closed'
   | 'find'
   | 'devtools'
   | 'fullscreen'
@@ -28,6 +29,10 @@ export const HOTKEY_ACTIONS: readonly HotkeyActionDef[] = [
   { id: 'reload', defaultAccelerator: 'CmdOrCtrl+R' },
   { id: 'close-tab', defaultAccelerator: 'CmdOrCtrl+W' },
   { id: 'new-tab', defaultAccelerator: 'CmdOrCtrl+T' },
+  // Возврат последней закрытой вкладки или окна. Стоит СРАЗУ после
+  // new-tab: при совпадении сочетаний (пользователь назначил одно и то же)
+  // срабатывает первый по реестру, и порядок здесь — осмысленный.
+  { id: 'reopen-closed', defaultAccelerator: 'CmdOrCtrl+Shift+T' },
   { id: 'find', defaultAccelerator: 'CmdOrCtrl+F' },
   { id: 'devtools', defaultAccelerator: 'F12' },
   { id: 'fullscreen', defaultAccelerator: 'F11' }

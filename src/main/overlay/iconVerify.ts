@@ -2,8 +2,12 @@
 // Выделено из сервиса оверлеев: без зависимостей от окон. Ошибки
 // возвращаются уже переведёнными (t) — их видит overlay-рендерер.
 // Возвращает { ok: true, icon } или { ok: false, error }.
-import { t } from '../i18n'
-export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok: false; error: string } {
+import { tFor } from '../i18n'
+export function verifyIconSource(
+  raw: string,
+  wsId?: string
+): { ok: true; icon: string } | { ok: false; error: string } {
+  const t = tFor(wsId)
   const text = raw.trim()
   if (!text) return { ok: true, icon: '' }
   if (text.startsWith('emoji:')) {
@@ -34,7 +38,11 @@ export function verifyIconSource(raw: string): { ok: true; icon: string } | { ok
 
 // Строгая проверка emoji для кнопки Emoji диалога: только pictographic,
 // до 4 графем. Голый emoji через кнопку URL отклоняется.
-export function verifyEmojiButton(value: string): { ok: true; icon: string } | { ok: false; error: string } {
+export function verifyEmojiButton(
+  value: string,
+  wsId?: string
+): { ok: true; icon: string } | { ok: false; error: string } {
+  const t = tFor(wsId)
   const text = value.trim()
   if (text && [...text].length <= 4 && /\p{Extended_Pictographic}|\p{Emoji}/u.test(text)) {
     return { ok: true, icon: `emoji:${text.replace(/^emoji:/, '')}` }
@@ -44,7 +52,11 @@ export function verifyEmojiButton(value: string): { ok: true; icon: string } | {
 
 // Локальный файл в dataURL 16px: читаем, ресайзим через nativeImage, храним dataURL.
 // Большие картинки сжимаются — иконка не тянет мегабайты за собой.
-export function fileToIconDataUrl(filePath: string): { ok: true; icon: string } | { ok: false; error: string } {
+export function fileToIconDataUrl(
+  filePath: string,
+  wsId?: string
+): { ok: true; icon: string } | { ok: false; error: string } {
+  const t = tFor(wsId)
   try {
     const fs = require('fs') as typeof import('fs')
     const { nativeImage } = require('electron') as typeof import('electron')

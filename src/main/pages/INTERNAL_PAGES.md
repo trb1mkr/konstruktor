@@ -4,7 +4,7 @@
 
 ## 🧩 Адреса
 
-Поддерживаются `konstruktor://start`, `history`, `settings`, `downloads`, `extensions`, `permissions` и `ext/<id>/<файл>` для страниц собственных расширений. HTML собирают `build*Page` в `startPage.ts`/`historyPage.ts`/`settingsPage.ts`/`downloadsPage.ts`/`extensionsPage.ts`/`permissionsPage.ts` (общий каркас — `shell.ts`); URL адресов и реэкспорт builders — `internalPages.ts`, единая точка входа для `protocol.ts`, меню и кластеров windows/groups. Файлы расширений читает `protocol.ts` напрямую из каталога расширения (см. [EXTENSIONS.md](../extensions/EXTENSIONS.md)). Страницы без внешних ресурсов — работают офлайн. Каждая страница собирается на запрос с текущим языком: статические строки переводятся `t()`, динамические строки скриптов — встроенным `tr()` по каталогу из `window.__I18N__`, даты — по `window.__I18N_INTL__` (см. [I18N.md](../../shared/i18n/I18N.md)).
+Поддерживаются `konstruktor://start`, `history`, `settings`, `downloads`, `extensions`, `permissions`, `workspaces` и `ext/<id>/<файл>` для страниц собственных расширений. HTML собирают `build*Page` в `startPage.ts`/`historyPage.ts`/`settingsPage.ts`/`downloadsPage.ts`/`extensionsPage.ts`/`permissionsPage.ts`/`workspacesPage.ts` (общий каркас — `shell.ts`); URL адресов и реэкспорт builders — `internalPages.ts`, единая точка входа для `protocol.ts`, меню и кластеров windows/groups. Файлы расширений читает `protocol.ts` напрямую из каталога расширения (см. [EXTENSIONS.md](../extensions/EXTENSIONS.md)). Страницы без внешних ресурсов — работают офлайн. Каждая страница собирается на запрос с языком СВОЕГО пространства (`langFor(wsId)` в `protocol.ts`, переводчик — `translatorFor(lang)` в начале билдера): статические строки переводятся `t()`, динамические строки скриптов — встроенным `tr()` по запечённому каталогу (`window.__I18N__`), даты — по `window.__I18N_INTL__` (см. [I18N.md](../../shared/i18n/I18N.md)). Окна разных пространств при этом могут показывать страницы на разных языках.
 
 | Адрес | Назначение | Хранилище |
 |---|---|---|
@@ -14,6 +14,7 @@
 | `konstruktor://settings` | Поиск, домашняя страница, DNS, тема, режимы зума, состав пункта меню, таблица горячих клавиш | `settings.json` |
 | `konstruktor://permissions` | Разрешения сайтов: решения по каждому сайту (разрешённые и заблокированные раздельно), снятие одной области, сайта и всех сразу; раздел проверки — над кнопкой общего сброса | `permissions.json` |
 | `konstruktor://extensions` | Расширения: установка, тумблеры, предупреждения совместимости | `extensions.json` |
+| `konstruktor://workspaces` | Рабочие пространства: список, создание, дублирование, правка, удаление | `workspaces.json`, все файлы пространства |
 | `konstruktor://ext/<id>/<файл>` | Страницы собственных расширений (только из их каталога) | файлы расширения |
 
 ## 🔀 Роутинг
@@ -32,7 +33,7 @@ flowchart LR
 
 ## 🔌 Мост
 
-`internalBridge.ts` ставит `registerPreloadScript` на каждую партицию. Скрипт выполняется в каждом фрейме до загрузки документа и отдает `window.konstruktor`: история, настройки, шорткаты, загрузки, расширения, разрешения сайтов, захват сочетаний (`setHotkeyCapture`).
+`internalBridge.ts` ставит `registerPreloadScript` на каждую партицию. Скрипт выполняется в каждом фрейме до загрузки документа и отдает `window.konstruktor`: история, настройки, шорткаты, загрузки, расширения, разрешения сайтов, захват сочетаний (`setHotkeyCapture`), рабочие пространства (`workspaces*`).
 
 ## 🎨 Темы и поведение
 

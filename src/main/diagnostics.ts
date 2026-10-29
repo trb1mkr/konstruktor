@@ -3,9 +3,10 @@
 // Выделено из index.ts: всё включается только флагами окружения,
 // в проде код мёртвый. Флаги НЕ входят в обычный OVERLAY_DEBUG,
 // кроме сводки статистики (см. OVERLAY_DEBUG в OVERLAY.md).
-import { app, BrowserWindow } from 'electron'
-import { getState, type WindowState } from './windows/browserState'
-import { showOverlay, closeOverlay, getActiveOverlay } from './overlay'
+import { app, BrowserWindow, screen } from 'electron'
+import { getState, windows, type WindowState } from './windows/browserState'
+import { showOverlay, closeOverlay, getActiveOverlay, getActiveRequest } from './overlay'
+import { showBrowserMenu } from './windows/browserMenu'
 import { openFindOverlay } from './find/findManager'
 import { log, dumpStats as dumpOverlayStats } from './overlay/logger'
 import {
@@ -18,10 +19,15 @@ import {
 import { bridgePort } from './extensions/bridge'
 import { createTab, setActiveTab } from './windows/deps'
 import { clearOrigin } from './permissions/permissionsStore'
+import { workspaceFile } from './workspaces/paths'
+import { bootWorkspaceId } from './workspaces/registry'
+import { langFor } from './i18n'
 import { originOfUrl } from './permissions/policy'
+import { parseAccelerator } from '../shared/hotkeys'
+import { isHotkeyActionId } from '../shared/hotkey-actions'
+import { acceleratorFor } from './hotkeys'
 import { PERMISSIONS_URL } from './pages/internalPages'
 import { showPermissionsMenu } from './permissions/ipc'
-import { join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 
 // Запрос микрофона из страницы для автопрогона разрешений: результат
@@ -94,7 +100,7 @@ export function setupDiagnostics(bootState: WindowState): void {
       await idle(1200)
       // Второй запрос: решение запомнено, промпта быть не должно.
       console.log('[perm-smoke] second request:', await ask())
-      const file = join(app.getPath('userData'), 'permissions.json')
+      const file = workspaceFile(bootWorkspaceId(), 'permissions.json')
       console.log(
         '[perm-smoke] permissions.json:',
         existsSync(file) ? readFileSync(file, 'utf-8').replace(/\s+/g, ' ') : '(нет файла)',
@@ -241,6 +247,184 @@ export function setupDiagnostics(bootState: WindowState): void {
   // с выгрузкой расширений.
   const quitAt = Number(process.env['KONSTRUKTOR_APP_QUIT_MS'] ?? '0') || 0
   if (quitAt > 0) setTimeout(() => app.quit(), quitAt)
+  // Закрытие окна как крестиком (а не выход из приложения) через N мс.
+  // Нужно для проверки слепка окон: путь закрытия и путь выхода разные,
+  // и ошибка в одном из них видна только так.
+  const closeAt = Number(process.env['KONSTRUKTOR_CLOSE_WINDOW_MS'] ?? '0') || 0
+  if (closeAt > 0) {
+    setTimeout(() => {
+      const win = bootState.window
+      if (win && !win.isDestroyed()) {
+        console.log('[diag] closing window (like the close button):', bootState.key)
+        win.close()
+      }
+    }, closeAt)
+  }
+  // Аварийное завершение через N мс: убивает процесс без before-quit,
+  // поэтому маркер сессии остаётся на диске. Следующий запуск обязан
+  // предложить восстановление — иначе проверять этот путь можно только
+  // настоящим падением.
+  //
+  // Именно SIGKILL: `process.exit(1)` аварию НЕ имитирует — Electron
+  // прогоняет закрытие окон, хук 'closed' снимает маркер, и сессия
+  // записывается штатной (проверено: ложное «всё чисто»).
+  const crashAt = Number(process.env['KONSTRUKTOR_CRASH_MS'] ?? '0') || 0
+  if (crashAt > 0) {
+    setTimeout(() => {
+      console.log('[diag] simulating crash: SIGKILL, no shutdown handlers')
+      process.kill(process.pid, 'SIGKILL')
+    }, crashAt)
+  }
+  // Цикл переключения вкладок: снимает тот самый «лечебный» эффект,
+  // который пользователь делает руками. С `KONSTRUKTOR_LAYOUT_DEBUG=1`
+  // по строкам [layout] видно, меняются ли bounds: если после цикла те же
+  // числа, а картинка стала правильной, дело не в раскладке.
+  const cycleAt = Number(process.env['KONSTRUKTOR_CYCLE_TABS_MS'] ?? '0') || 0
+  if (cycleAt > 0) {
+    setTimeout(() => {
+      const ws = bootState
+      if (!ws.window || ws.window.isDestroyed()) return
+      const order = [...ws.tabOrder]
+      if (order.length < 2) return
+      console.log('[diag] cycling tabs, window bounds:', JSON.stringify(ws.window.getBounds()))
+      console.log('[diag] display:', JSON.stringify(screen.getDisplayMatching(ws.window.getBounds())))
+      // Уходим на соседнюю вкладку и назад — ровно то, что делает
+      // пользователь, когда артефакт «лечится».
+      const other = order.find((id) => id !== ws.activeTabId)
+      if (other === undefined) return
+      setActiveTab(ws, other)
+      setTimeout(() => {
+        if (!ws.window || ws.window.isDestroyed()) return
+        const back = order.find((id) => id !== other)
+        if (back !== undefined) setActiveTab(ws, back)
+      }, 800)
+    }, cycleAt)
+  }
+  // Внутренняя страница и её сценарий без мыши.
+  //
+  //   KONSTRUKTOR_OPEN_URL=konstruktor://workspaces  открыть в активной вкладке
+  //   KONSTRUKTOR_EVAL_MS=N                          через N мс выполнить скрипт
+  //   KONSTRUKTOR_EVAL_JS=<js>                       и напечатать результат
+  //
+  // Скрипт выполняется в САМОЙ странице, то есть через её preload и её IPC:
+  // так проверяется вся цепочка «страница -> мост -> main», а не только
+  // сборка HTML. Обе строки идут в лог префиксом [diag].
+  const openUrl = process.env['KONSTRUKTOR_OPEN_URL']
+  if (openUrl) {
+    const at = Number(process.env['KONSTRUKTOR_OPEN_URL_MS'] ?? '1500') || 1500
+    setTimeout(() => {
+      const rec = bootState.activeTabId !== null ? bootState.tabs.get(bootState.activeTabId) : undefined
+      if (!rec) {
+        console.log('[diag] open url: no active tab')
+        return
+      }
+      console.log('[diag] open url:', openUrl)
+      void rec.view.webContents.loadURL(openUrl)
+    }, at)
+  }
+  const evalJs = process.env['KONSTRUKTOR_EVAL_JS']
+  if (evalJs) {
+    const at = Number(process.env['KONSTRUKTOR_EVAL_MS'] ?? '4000') || 4000
+    // Цель выполнения: вкладка (по умолчанию), shell окна или окно
+    // оверлея. Без выбора цели нельзя проверить ни состав меню (рисует
+    // оверлей), ни кнопки shell — они живут в разных webContents.
+    const target = process.env['KONSTRUKTOR_EVAL_TARGET'] ?? 'tab'
+    setTimeout(() => {
+      const win = bootState.window
+      const tab =
+        bootState.activeTabId !== null ? bootState.tabs.get(bootState.activeTabId) : undefined
+      const contents =
+        target === 'shell'
+          ? win?.webContents
+          : target === 'overlay'
+            ? win
+              ? getActiveOverlay(win)?.webContents
+              : undefined
+            : tab?.view?.webContents
+      if (!contents || contents.isDestroyed()) {
+        console.log('[diag] eval: no target', target)
+        return
+      }
+      console.log('[diag] eval target:', target)
+      void contents
+        .executeJavaScript(evalJs)
+        .then((result: unknown) => console.log('[diag] eval:', JSON.stringify(result)))
+        .catch((err: unknown) => console.log('[diag] eval failed:', String(err)))
+    }, at)
+  }
+  // Сочетание клавиш без клавиатуры: KONSTRUKTOR_HOTKEY_TEST=<действие>
+  // посылает в активную вкладку то самое сочетание, которое назначено
+  // действию, через sendInputEvent. Проверяет всю цепочку
+  // before-input-event -> matchHotkey -> действие, включая вызов
+  // preventDefault: руками это не воспроизвести без клавиатуры и фокуса.
+  const hotkeyTest = process.env['KONSTRUKTOR_HOTKEY_TEST']
+  if (hotkeyTest) {
+    const at = Number(process.env['KONSTRUKTOR_HOTKEY_TEST_MS'] ?? '4000') || 4000
+    setTimeout(() => {
+      const rec =
+        bootState.activeTabId !== null ? bootState.tabs.get(bootState.activeTabId) : undefined
+      if (!rec) {
+        console.log('[diag] hotkey test: no active tab')
+        return
+      }
+      const action = isHotkeyActionId(hotkeyTest) ? hotkeyTest : null
+      if (!action) {
+        console.log('[diag] hotkey test: unknown action', hotkeyTest)
+        return
+      }
+      const accelerator = acceleratorFor(action, bootState.workspaceId)
+      const parsed = parseAccelerator(accelerator)
+      if (!parsed || !parsed.code) {
+        console.log('[diag] hotkey test: accelerator not parsed', accelerator)
+        return
+      }
+      // code вида 'KeyT' -> keyCode 'T'. sendInputEvent знает и имена
+      // ('t'), и коды; берём букву/цифру из code, служебные клавиши — как есть.
+      const keyCode = parsed.code.startsWith('Key')
+        ? parsed.code.slice(3)
+        : parsed.code.startsWith('Digit')
+          ? parsed.code.slice(5)
+          : parsed.code
+      const modifiers: ('control' | 'meta' | 'alt' | 'shift')[] = []
+      if (parsed.primary || parsed.ctrl) modifiers.push('control')
+      if (parsed.meta) modifiers.push('meta')
+      if (parsed.alt) modifiers.push('alt')
+      if (parsed.shift) modifiers.push('shift')
+      console.log('[diag] hotkey test:', action, accelerator, keyCode, modifiers)
+      rec.view.webContents.sendInputEvent({
+        type: 'keyDown',
+        keyCode,
+        modifiers
+      })
+      rec.view.webContents.sendInputEvent({
+        type: 'keyUp',
+        keyCode,
+        modifiers
+      })
+    }, at)
+  }
+  // Меню браузера без мыши: тот же вызов, что у кнопки ☰, плюс состав
+  // в лог. Нужно потому, что пункты меню проверяются только глазами, а
+  // ошибка в id пункта тихая: пункт есть, но ничего не открывает.
+  //
+  // Обход ВСЕХ окон, а не только стартового: язык — настройка пространства,
+  // и проверить это можно лишь сравнив меню двух пространств, открытых
+  // одновременно. В логе у каждого набора — workspaceId и lang.
+  const browserMenuAt = Number(process.env['KONSTRUKTOR_BROWSER_MENU_MS'] ?? '0') || 0
+  if (browserMenuAt > 0) {
+    setTimeout(() => {
+      for (const ws of windows.values()) {
+        const win = ws.window
+        if (!win || win.isDestroyed()) continue
+        showBrowserMenu(win, { x: 400, y: 300 })
+        const request = getActiveRequest(win)
+        console.log(
+          `[diag] browser menu items (${ws.workspaceId}, lang=${langFor(ws.workspaceId)}):`,
+          (request?.items ?? []).map((i) => `${i.id}:${i.label}`)
+        )
+      }
+    }, browserMenuAt)
+  }
   // Автопрогон расширений: KONSTRUKTOR_EXT_SMOKE=<путь к папке или .crx>
   // ставит расширение, печатает состояние и выходит. Проверяет всю
   // цепочку разом: распаковку, переписывание манифеста, загрузку в сессию,

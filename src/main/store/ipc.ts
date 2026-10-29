@@ -27,66 +27,70 @@ import {
 import { getSettings, getSettingsSync, saveSettings } from './settingsStore'
 import { setHotkeyCapture } from '../hotkeys'
 import { getShortcuts, addShortcut, removeShortcut } from './shortcutsStore'
-import { setLocalePreference, t } from '../i18n'
-import { applyThemeToViews, applyWebContentScheme, effectivePageTheme } from '../browserTheme'
+import { getBookmarks, toggleBookmark, removeBookmark } from './bookmarksStore'
+import { tFor } from '../i18n'
+import { applyThemeToViewsFor, effectivePageTheme, syncProcessScheme } from '../browserTheme'
 import { applyZoomToWs, percentOf, zoomModeFor } from '../zoomManager'
 import { applyExtensionsEnabled } from '../extensions/manager'
 import { showOverlay } from '../overlay'
 import { join } from 'path'
 
 export function registerStoresIpc(): void {
+  // Пространство отправителя. Все хранилища ниже принадлежат ему: у каждого
+  // пространства свои история, загрузки, настройки и закладки.
+  const wsIdOf = (e: { sender: Electron.WebContents }): string => wsOf(e).workspaceId
   // История: чтение/поиск/удаление. Инкогнито-окнам отдаем пусто.
   ipcMain.handle('history:list', async (e, limit?: number) => {
     if (wsOf(e).incognito) return []
-    return getHistory(limit ?? 200)
+    return getHistory(limit ?? 200, wsIdOf(e))
   })
   ipcMain.handle('history:search', async (e, query: string, limit?: number) => {
     if (wsOf(e).incognito) return []
-    return searchHistory(query, limit ?? 50)
+    return searchHistory(query, limit ?? 50, wsIdOf(e))
   })
   ipcMain.handle('history:delete', async (e, url: string) => {
     if (wsOf(e).incognito) return false
-    await deleteEntry(url)
+    await deleteEntry(url, wsIdOf(e))
     return true
   })
   ipcMain.handle('history:timeline', async (e, query?: string, limit?: number) => {
     if (wsOf(e).incognito) return []
-    return getTimeline(query ?? '', limit ?? 2000)
+    return getTimeline(query ?? '', limit ?? 2000, wsIdOf(e))
   })
   ipcMain.handle('history:delete-visit', async (e, url: string, at: number) => {
     if (wsOf(e).incognito) return false
-    await deleteVisit(url, at)
+    await deleteVisit(url, at, wsIdOf(e))
     return true
   })
   ipcMain.handle('history:clear', async (e) => {
     if (wsOf(e).incognito) return false
-    await clearHistory()
+    await clearHistory(wsIdOf(e))
     return true
   })
   // Загрузки: список/поиск/удаление/открытие файла. Инкогнито читает общий список.
   ipcMain.handle('downloads:list', (e, limit?: number) => {
     if (wsOf(e).incognito) return []
-    return getDownloads(limit ?? 200)
+    return getDownloads(limit ?? 200, wsIdOf(e))
   })
   ipcMain.handle('downloads:search', (e, query: string, limit?: number) => {
     if (wsOf(e).incognito) return []
-    return searchDownloads(query, limit ?? 100)
+    return searchDownloads(query, limit ?? 100, wsIdOf(e))
   })
   // remove/clear/open тоже закрыты: инкогнито видело пустой список, но
   // могло удалить или открыть чужую запись по id из основного окна.
   ipcMain.handle('downloads:remove', async (e, id: string) => {
     if (wsOf(e).incognito) return false
-    await removeDownload(id)
+    await removeDownload(id, wsIdOf(e))
     return true
   })
   ipcMain.handle('downloads:clear', async (e) => {
     if (wsOf(e).incognito) return false
-    await clearDownloads()
+    await clearDownloads(wsIdOf(e))
     return true
   })
   ipcMain.handle('downloads:open', async (e, id: string) => {
     if (wsOf(e).incognito) return false
-    const list = await getDownloads(200)
+    const list = await getDownloads(200, wsIdOf(e))
     const found = list.find((d) => d.id === id)
     if (!found) return false
     try {
@@ -98,8 +102,8 @@ export function registerStoresIpc(): void {
   })
   // Системная иконка файла через Electron app.getFileIcon.
   // Возвращает dataURL PNG; пустая строка = fallback на эмодзи по расширению.
-  ipcMain.handle('downloads:icon', async (_e, id: string) => {
-    const list = await getDownloads(200)
+  ipcMain.handle('downloads:icon', async (e, id: string) => {
+    const list = await getDownloads(200, wsIdOf(e))
     const found = list.find((d) => d.id === id)
     if (!found) return ''
     try {
@@ -111,7 +115,7 @@ export function registerStoresIpc(): void {
     }
   })
   // Настройки браузера.
-  ipcMain.handle('settings:get', () => getSettings())
+  ipcMain.handle('settings:get', (e) => getSettings(wsIdOf(e)))
   // Резолв темы внутренней страницы конструктором (см. THEMES.md).
   //
   // Странице нужен именно разрешенный вариант: matchMedia внутри нее
@@ -120,7 +124,9 @@ export function registerStoresIpc(): void {
   // страницы. Канал async: sync-IPC видят и обычные сайты (прелоад
   // регистрируется на всю сессию), а блокировать main из чужого
   // документа нельзя.
-  ipcMain.handle('theme:page', () => effectivePageTheme(getSettingsSync().theme ?? 'dark'))
+  ipcMain.handle('theme:page', (e) =>
+    effectivePageTheme(getSettingsSync(wsIdOf(e)).theme ?? 'dark')
+  )
   ipcMain.handle(
     'settings:save',
     async (
@@ -150,10 +156,14 @@ export function registerStoresIpc(): void {
         hotkeys?: Record<string, string>
       }
     ) => {
-      const next = await saveSettings(patch)
-      // Язык меняется ДО рассылки: последующие сборки меню уже на новом
-      // языке, а shell получает код из того же settings:changed.
-      if (patch.locale !== undefined) await setLocalePreference(patch.locale)
+      const wsId = wsIdOf(e)
+      const next = await saveSettings(patch, wsId)
+      // Язык — настройка пространства: он уже лежит в его settings.json и
+      // уезжает в settings:changed ниже (shell резолвит 'auto' сам).
+      // Глобального языка у процесса нет, поэтому менять нечего:
+      // страницы собираются в языке своей партии, меню — `tFor(wsId)`.
+      // Открытые внутренние страницы перерисуются после reload вкладки —
+      // HTML запекается в момент запроса (см. pages/protocol.ts).
       // Shell перечитывает тему/скругление/язык без перезагрузки: пуш во все окна.
       // Смена сценария F11 сбрасывает контентный fullscreen: view возвращается
       // в обычные bounds, иначе окно останется в рассинхроне с настройкой.
@@ -169,6 +179,10 @@ export function registerStoresIpc(): void {
         patch.hotkeys !== undefined
       ) {
         for (const ws of windows.values()) {
+          // Настройки принадлежат пространству: чужим окнам их изменение
+          // не рассылается, иначе тема одного пространства переписала бы UI
+          // другого.
+          if (ws.workspaceId !== wsId) continue
           if (patch.fullscreenMode !== undefined && ws.contentFullscreen) {
             ws.contentFullscreen = false
             layoutActiveView(ws)
@@ -185,8 +199,11 @@ export function registerStoresIpc(): void {
         if (patch.theme !== undefined || patch.webContentTheme !== undefined) {
           // Сначала схема в Chromium (prefers-color-scheme сайтов и окон
           // расширений), потом перекраска view и внутренних страниц.
-          applyWebContentScheme(next)
-          applyThemeToViews(next.theme)
+          // Тема — настройка пространства: перекрашиваются вкладки только
+          // своего пространства, а общую на процесс схему меняет лишь его
+          // фокусированное окно (nativeTheme один на процесс).
+          syncProcessScheme()
+          applyThemeToViewsFor(wsId)
         }
       }
       // Режим зума применяется к уже открытым view сразу: политика —
@@ -195,6 +212,7 @@ export function registerStoresIpc(): void {
       if (patch.zoomMode !== undefined) {
         const mode = zoomModeFor(next)
         for (const ws of windows.values()) {
+          if (ws.workspaceId !== wsId) continue
           for (const rec of ws.tabs.values()) {
             const wc = rec.view.webContents
             if (!wc.isDestroyed()) wc.setZoomMode(mode)
@@ -206,7 +224,9 @@ export function registerStoresIpc(): void {
       // шагу лестницы: иначе после включения проценты остаются разными,
       // пока пользователь не изменит зум повторно.
       if (patch.zoomSync === true) {
-        const seedWs = [...windows.values()].find((w) => w.activeTabId !== null)
+        const seedWs = [...windows.values()].find(
+          (w) => w.workspaceId === wsId && w.activeTabId !== null
+        )
         const rec = seedWs?.activeTabId != null ? seedWs.tabs.get(seedWs.activeTabId) : undefined
         if (seedWs && rec) {
           applyZoomToWs(seedWs, percentOf(rec.view.webContents), pushTabsState)
@@ -215,9 +235,8 @@ export function registerStoresIpc(): void {
       // Глобальный выключатель расширений: выгрузка из сессии или обратная
       // загрузка всех включённых. Состояние рассылается своим пушем.
       if (patch.extensionsEnabled !== undefined) {
-        await applyExtensionsEnabled(patch.extensionsEnabled)
+        await applyExtensionsEnabled(patch.extensionsEnabled, wsId)
       }
-      void e
       return next
     }
   )
@@ -231,11 +250,20 @@ export function registerStoresIpc(): void {
     return true
   })
   // Плитки табло стартовой страницы.
-  ipcMain.handle('shortcuts:list', () => getShortcuts())
-  ipcMain.handle('shortcuts:add', (_e, input: { name?: string; url: string }) =>
-    addShortcut(input)
+  ipcMain.handle('shortcuts:list', (e) => getShortcuts(wsIdOf(e)))
+  ipcMain.handle('shortcuts:add', (e, input: { name?: string; url: string }) =>
+    addShortcut(input, wsIdOf(e))
   )
-  ipcMain.handle('shortcuts:remove', (_e, url: string) => removeShortcut(url))
+  ipcMain.handle('shortcuts:remove', (e, url: string) => removeShortcut(url, wsIdOf(e)))
+  // Закладки панели: раньше жили в localStorage шелла (in-memory партиция),
+  // из-за чего не переживали перезапуск. Теперь они в пространстве.
+  ipcMain.handle('bookmarks:list', (e) => getBookmarks(wsIdOf(e)))
+  ipcMain.handle(
+    'bookmarks:toggle',
+    (e, input: { title: string; url: string; favicon?: string }) =>
+      toggleBookmark(input, wsIdOf(e))
+  )
+  ipcMain.handle('bookmarks:remove', (e, url: string) => removeBookmark(url, wsIdOf(e)))
 }
 
 // Загрузки: один обработчик на сессию. Файл качается через will-download,
@@ -249,7 +277,7 @@ export function registerStoresIpc(): void {
 // Поэтому флаг приватности ниже НЕ передаётся: setupDownloads работает
 // одинаково для всех партиций, а скрытие следов загрузки — задача
 // downloads:* (там приватное окно получает пустой список).
-export function setupDownloads(ses: Electron.Session, privateMode = false) {
+export function setupDownloads(ses: Electron.Session, wsId: string, privateMode = false) {
   ses.on('will-download', (_e, item) => {
     // Окно-владелец загрузки — нужно, чтобы тост о загрузке всплыл
     // в том окне, где шла загрузка, а не во всех сразу.
@@ -260,14 +288,11 @@ export function setupDownloads(ses: Electron.Session, privateMode = false) {
     // нему.
     //
     // Сверять окно с самой сессией обработчика нельзя: партиция ТАБКИ и
-    // партиция окна-шелла разные (вкладки живут в NORMAL/INCOGNITO, окно
-    // всегда в INCOGNITO — см. windowsManager), так что сравнение не
-    // нашло бы ни одного окна.
+    // партиция окна-шелла разные (вкладки живут в партиции пространства,
+    // окно — в его приватной), так что сравнение не нашло бы ни одного окна.
+    // Поэтому сверяем ТОЛЬКО пространство и режим.
     const ownerWindow = [...windows.values()].find(
-      (ws) =>
-        ws.incognito === privateMode &&
-        ws.window &&
-        !ws.window.isDestroyed()
+      (ws) => ws.workspaceId === wsId && ws.incognito === privateMode && ws.window && !ws.window.isDestroyed()
     )?.window
     const filename = item.getFilename() || 'download'
     const id = newDownloadId()
@@ -288,28 +313,37 @@ export function setupDownloads(ses: Electron.Session, privateMode = false) {
       startedAt: Date.now(),
       endedAt: null
     }
-    void addDownload(entry)
+    void addDownload(entry, wsId)
     item.on('updated', () => {
-      void updateDownload(id, {
-        receivedBytes: item.getReceivedBytes(),
-        totalBytes: item.getTotalBytes(),
-        state: 'progressing'
-      })
+      void updateDownload(
+        id,
+        {
+          receivedBytes: item.getReceivedBytes(),
+          totalBytes: item.getTotalBytes(),
+          state: 'progressing'
+        },
+        wsId
+      )
     })
     item.once('done', (_ev, state) => {
       const finalState =
         state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted'
-      void updateDownload(id, {
-        receivedBytes: item.getReceivedBytes(),
-        totalBytes: item.getTotalBytes(),
-        state: finalState,
-        endedAt: Date.now()
-      }).then(() => {
+      void updateDownload(
+        id,
+        {
+          receivedBytes: item.getReceivedBytes(),
+          totalBytes: item.getTotalBytes(),
+          state: finalState,
+          endedAt: Date.now()
+        },
+        wsId
+      ).then(() => {
         if (finalState !== 'completed') return
         // Тост шлём в то окно, где шла загрузка. Раньше он рассылался во
         // все окна, и скачивание в обычном окне всплывало тостом в
         // приватном — в другом окне и о другом действии.
         if (!ownerWindow || ownerWindow.isDestroyed()) return
+        const t = tFor(wsId)
         showOverlay(ownerWindow, {
           kind: 'toast',
           // anchor не задаётся: для тоста он игнорируется, положение

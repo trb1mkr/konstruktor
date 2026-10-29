@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useTabs, isIncognito, activeTabId } from './core/useTabs'
 import { parseAccelerator, matchesInput, type HotkeyInput } from '../shared/hotkeys'
 import {
@@ -40,6 +40,13 @@ useTabs()
 const topPanel = ref<HTMLElement | null>(null)
 const bottomPanel = ref<HTMLElement | null>(null)
 const isMaximized = ref(false)
+// Пространство этого окна: иконка и имя для значка в заголовке. Пусто до
+// ответа main — тогда значок не рисуется (мигать заглушкой незачем).
+const workspaceIcon = ref('')
+const workspaceName = ref('')
+// Приватная вкладка пространству не принадлежит: в приватном режиме значок
+// пространства заменяется значком инкогнито, и подсказка тоже другая.
+const badgeIcon = computed(() => (isIncognito.value ? '🕵️' : workspaceIcon.value))
 // F11: в fullscreen скругление тоже снимаем, как в maximize.
 const isFullscreen = ref(false)
 // Контентный fullscreen: панели прячутся, view растягивается на все окно.
@@ -54,6 +61,22 @@ async function refreshMaximized() {
     isMaximized.value = await window.browserAPI.isMaximized()
   } catch {
     isMaximized.value = false
+  }
+}
+
+// Значок пространства в заголовке: иконка принадлежит окну, а не странице,
+// и читается один раз при старте shell. Смена иконки на странице пространств
+// применится к уже открытым окнам только при следующем открытии окна —
+// отдельного пуша для этого нет, а держать подписку ради одного эмодзи
+// дороже, чем перезапустить окно.
+async function loadWorkspaceBadge(): Promise<void> {
+  try {
+    const info = await window.browserAPI.workspaceInfo()
+    workspaceIcon.value = info?.icon || ''
+    workspaceName.value = info?.name || ''
+  } catch {
+    workspaceIcon.value = ''
+    workspaceName.value = ''
   }
 }
 
@@ -109,6 +132,8 @@ function onKey(e: KeyboardEvent) {
     void window.browserAPI.reload()
   } else if (action === 'new-tab') {
     void window.browserAPI.createTab()
+  } else if (action === 'reopen-closed') {
+    void window.browserAPI.reopenClosedTab()
   } else if (action === 'close-tab') {
     if (activeTabId.value !== null) void window.browserAPI.closeTab(activeTabId.value)
   } else if (action === 'find') {
@@ -186,6 +211,7 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onMounted(() => {
   void refreshMaximized()
   void loadTheme()
+  void loadWorkspaceBadge()
   // Стартовые сочетания: переопределения из настроек поверх дефолтов.
   void window.browserAPI
     .getSettings()
@@ -257,11 +283,18 @@ onMounted(() => {
         <TabStrip class="grow" />
         <WindowControls class="controls">
           <template #menu>
-            <!-- Бейдж приватности перед кнопкой меню браузера: он
-                 обозначает окно, а не начало панели вкладок. Раньше стоял
-                 отдельным элементом слева от TabStrip и висел в стороне от
-                 кнопок окна, к которым относится. -->
-            <span v-if="isIncognito" class="incognito-badge" :title="$t('shell.incognito')">🕵️</span>
+            <!-- Значок принадлежности окна перед кнопкой меню браузера.
+                 Обычный режим — иконка рабочего пространства (у каждого
+                 своя), приватный — 🕵️: приватная вкладка работает в
+                 in-memory партиции и пространству не принадлежит. Раньше
+                 здесь был только значок инкогнито, и о том, в каком
+                 пространстве открыто окно, приходилось догадываться. -->
+            <span
+              v-if="badgeIcon"
+              class="workspace-badge"
+              :class="{ private: isIncognito }"
+              :title="isIncognito ? $t('shell.incognito') : workspaceName"
+            >{{ badgeIcon }}</span>
             <DropdownMenu title="☰" class="menu" />
           </template>
         </WindowControls>
@@ -313,9 +346,12 @@ onMounted(() => {
 .titlebar .menu { display: flex; align-items: center; }
 .panel-bottom { display: none; }
 .shell.rounded:not(.maximized):not(.content-fs) .panel-bottom { display: flex; flex-direction: column; flex-shrink: 0; height: 12px; min-height: 12px; z-index: 10; background: transparent; }
-/* Бейдж приватности: та же высота и выравнивание, что у кнопок окна,
-   иначе строка заголовка стала бы выше 32px. */
-.incognito-badge {
+/* Значок окна: та же высота и выравнивание, что у кнопок окна, иначе
+   строка заголовка стала бы выше 32px. Один класс на два состояния —
+   иконка пространства и значок инкогнито; .private только гасит
+   прозрачность, чтобы приватный режим читался как «другой» и не спорил
+   с иконкой пространства. */
+.workspace-badge {
   display: flex;
   align-items: center;
   height: 32px;
@@ -324,5 +360,6 @@ onMounted(() => {
   cursor: default;
   user-select: none;
 }
+.workspace-badge.private { opacity: 0.75; }
 
 </style>

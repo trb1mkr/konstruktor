@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import type { MenuDisplay, MenuItem } from '../../../shared/overlay-types'
+// Самоссылка: боковая панель — тот же список, отрисованный вложенно.
+// Импорт из своего файла разрешён Vue и нужен vue-tsc: неявная
+// самоссылка по имени файла в шаблоне компилятором TS не видна.
+import MenuList from './MenuList.vue'
 
 // Список пунктов меню: единственная реализация для всех меню приложения
 // (вкладки, группы, панель, меню браузера).
@@ -30,9 +34,28 @@ const props = withDefaults(
      * выглядят дефолты настроек.
      */
     display?: MenuDisplay
+    /**
+     * Брать ли фокус при монтировании.
+     *
+     * false нужно боковой панели: она монтируется от НАВЕДЕНИЯ и не должна
+     * уводить фокус — иначе наведение мышью отбирало бы клавиатуру у
+     * родительского меню.
+     */
+    autofocus?: boolean
+    /**
+     * Выравнивание родительского меню относительно якоря.
+     *
+     * От него зависит сторона боковой панели: у меню, прижатого правым
+     * краем к кнопке ('end'), панель растёт ВЛЕВО — тогда карточка меню
+     * остаётся на месте, а окно расширяется в свободную сторону. Для
+     * меню от левого края ('start') — вправо, по той же причине.
+     */
+    align?: 'start' | 'end'
   }>(),
   {
     modelValue: -1,
+    autofocus: true,
+    align: 'end',
     display: () => ({ icons: true, labels: true, hotkeys: true, hotkeysOnHover: false }),
   },
 )
@@ -40,6 +63,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'select', id: string): void
   (e: 'update:modelValue', index: number): void
+  /** Просьба вернуться на уровень выше (стрелка влево в боковой панели). */
+  (e: 'back'): void
 }>()
 
 // Активный пункт. Локальное состояние, а не только проп: меню
@@ -116,7 +141,9 @@ function toEnd(): void {
 // в окно, и без прокрутки стрелка уводила бы подсветку за нижний край.
 function scrollActiveIntoView(): Promise<void> {
   return nextTick(() => {
-    const el = document.querySelector<HTMLElement>('.menu-item--active')
+    // Поиск внутри СВОЕГО списка: при открытой боковой панели в документе
+    // два списка, и глобальный селектор нашёл бы подсветку чужого.
+    const el = root.value?.querySelector<HTMLElement>('.menu-item--active')
     el?.scrollIntoView({ block: 'nearest' })
   })
 }
@@ -124,6 +151,12 @@ function scrollActiveIntoView(): Promise<void> {
 function activate(index: number): void {
   const item = props.items[index]
   if (!item || item.disabled) return
+  // Пункт с подпунктами не выбирается, а раскрывает боковую панель: выбор
+  // ушёл бы в main, и подменю не было бы видно вообще.
+  if (hasChildren(item)) {
+    openFlyout(index)
+    return
+  }
   emit('select', item.id)
 }
 
@@ -131,9 +164,15 @@ function activate(index: number): void {
 // пункт нажимается. У строки-справки (plain) нажимается только кнопка
 // справа, поэтому наведение НЕ делает её активной — иначе имя разрешения
 // подсвечивалось бы как кнопка, а это текст.
+//
+// Здесь же открывается и закрывается боковая панель: она следует за
+// наведением, как в системных меню. Наведение на пункт БЕЗ подпунктов
+// закрывает её — иначе панель висела бы над соседними пунктами.
 function onEnter(index: number, item: MenuItem): void {
   if (item.plain) return
   if (active.value !== index) active.value = index
+  if (hasChildren(item)) openFlyout(index)
+  else closeFlyout()
 }
 
 // Клик по строке. Строку-справку не нажимаем: единственное её действие
@@ -141,6 +180,11 @@ function onEnter(index: number, item: MenuItem): void {
 // пункта меню — то есть как другой действие.
 function onClick(index: number, item: MenuItem): void {
   if (item.plain) return
+  // Пункт с подпунктами: клик раскрывает панель, а не выбирает пункт.
+  if (hasChildren(item)) {
+    openFlyout(index)
+    return
+  }
   activate(index)
 }
 
@@ -149,6 +193,24 @@ function onClick(index: number, item: MenuItem): void {
 // двадцати пунктов просматривается только стрелками.
 function onKey(e: KeyboardEvent): void {
   switch (e.key) {
+    case 'ArrowRight': {
+      const item = props.items[active.value]
+      if (!hasChildren(item)) return
+      e.preventDefault()
+      openFlyout(active.value)
+      // Фокус переезжает в панель: иначе ArrowRight пришлось бы нажимать
+      // дважды — стрелки навигации работают у того списка, который в фокусе.
+      void nextTick(() => flyoutRef.value?.focusFirst())
+      return
+    }
+    case 'ArrowLeft':
+      // Панель открыта — закрываем её и возвращаемся в список. Если панели
+      // нет, стрелка означает «назад» для того, кто открыл ЭТОТ список
+      // (боковая панель в родителе — так же).
+      e.preventDefault()
+      if (flyoutIndex.value !== null) closeFlyout()
+      else emit('back')
+      return
     case 'ArrowDown':
       e.preventDefault()
       step(1)
@@ -198,7 +260,75 @@ const onKeydown = (e: KeyboardEvent): void => onKey(e)
 // страницы оверлея, когда меню ещё нет, и повторно не срабатывает.
 const root = ref<HTMLElement | null>(null)
 
+// --- Боковая панель подпунктов -----------------------------------------
+//
+// Пункт с `children` открывает подменю СБОКУ, как «История» в Яндекс.Браузере:
+// по наведению, по Enter и по клику. Панель живёт в том же окне оверлея и
+// является вторым ребёнком карточки-обёртки (display: flex): тогда высота и
+// ШИРИНА окна считаются по обоим карточкам, и панель не срезается кромкой.
+//
+// Абсолютное позиционирование здесь не годится ровно поэтому: вылетающий за
+// карточку блок не входит в getBoundingClientRect родителя, окно осталось бы
+// узким, и панель была бы обрезана.
+const flyoutIndex = ref<number | null>(null)
+const flyoutTop = ref(0)
+const flyoutRef = ref<InstanceType<typeof MenuList> | null>(null)
+
+const flyoutItems = computed(() => {
+  if (flyoutIndex.value === null) return []
+  return props.items[flyoutIndex.value]?.children ?? []
+})
+
+const flyoutSide = computed(() => (props.align === 'start' ? 'right' : 'left'))
+
+// Пока панель открыта, уровень НЕ ограничен шириной окна.
+//
+// `.overlay-level` стоит `max-width: 100%`: карточка не должна вылезать за
+// окно, посчитанное по прошлому замеру. Но именно эту границу панель и
+// обязана пересечь — иначе замер видит ширину, равную окну, окно ждёт
+// замера, и панель остаётся сжатой в полоску (замерено: 256 px при нужных
+// 515). Класс ставится на <html>, потому что правило живёт в общем
+// overlay.css, а уровень — не наш элемент.
+watch(
+  () => flyoutItems.value.length,
+  (count) => document.documentElement.classList.toggle('overlay-flyout', count > 0)
+)
+onUnmounted(() => document.documentElement.classList.remove('overlay-flyout'))
+
+function hasChildren(item: MenuItem | undefined): boolean {
+  return !!item?.children && item.children.length > 0
+}
+
+function openFlyout(index: number): void {
+  const item = props.items[index]
+  if (!hasChildren(item)) return
+  // Смещение пункта внутри списка: панель встаёт на уровень своего пункта.
+  // Минус отступ списка — иначе первая строка панели была бы ниже первой
+  // строки пункта на высоту верхнего поля карточки.
+  const el = root.value?.children[index] as HTMLElement | undefined
+  flyoutTop.value = Math.max(0, (el?.offsetTop ?? 0) - 6)
+  flyoutIndex.value = index
+}
+
+function closeFlyout(): void {
+  flyoutIndex.value = null
+}
+
+function onFlyoutSelect(id: string): void {
+  emit('select', id)
+}
+
+// Стрелка влево в самой панели: назад к родительскому меню, а не закрытие
+// всего оверлея. Фокус возвращается списку — иначе следующая стрелка
+// ушла бы в никуда.
+function backToParent(): void {
+  closeFlyout()
+  void nextTick(() => root.value?.focus())
+}
+
 onMounted(() => {
+  // Боковая панель не забирает фокус: она появляется от наведения мыши.
+  if (props.autofocus === false) return
   root.value?.focus()
   toStart()
 })
@@ -207,77 +337,124 @@ defineExpose({ focusFirst: toStart })
 </script>
 
 <template>
+  <!-- Обёртка из двух карточек: боковая панель и само меню. Flex, а не
+       абсолютное позиционирование: размер окна оверлея снимается с этого
+       контейнера, и только flex-сосед добавляет панели ширину. -->
   <div
-    ref="root"
-    class="menu-list"
-    :class="{
-      'menu-list--icons': widthMode === 'icons',
-      'menu-list--hotkeys': widthMode === 'hotkeys',
-      'menu-list--wide': widthMode === 'wide',
-      'menu-list--no-label': !display.labels,
-    }"
-    role="menu"
-    tabindex="0"
-    @keydown="onKeydown"
-    @mousedown.stop
+    class="menu-frame"
+    :class="{ 'menu-frame--right': flyoutSide === 'right' }"
+    @mouseleave="closeFlyout"
   >
-    <template v-for="(item, index) in items" :key="item.id">
-      <div v-if="item.separator" class="menu-separator" role="separator" />
-      <!-- Строка-справка (item.plain) — div, а не button: её действие
-           живёт в отдельной кнопке справа, а кнопка в кнопке невалидна.
-           Стрелками строка по-прежнему выбирается, и Enter выполняет то
-           же, что корзина: иначе снять решение с клавиатуры было бы
-           нечем — мышь целится в кнопку, клавиатура в строку. -->
-      <component
-        :is="item.plain ? 'div' : 'button'"
-        v-else
-        class="menu-item"
-        :class="{
-          'menu-item--active': index === active,
-          'menu-item--heading': item.heading,
-          'menu-item--plain': item.plain,
-        }"
-        role="menuitem"
-        :disabled="item.plain ? undefined : item.disabled"
-        :tabindex="index === active ? 0 : -1"
-        @click="onClick(index, item)"
-        @mouseenter="onEnter(index, item)"
-      >
-        <span v-if="display.icons" class="menu-icon">
-          <span v-if="item.color" class="menu-dot" :style="{ background: item.color }" />
-          <template v-if="item.icon">{{ item.icon }}</template>
-        </span>
-        <!-- Текст всегда в растущем span, даже когда скрыт: он раздвигает
-             пункт и прижимает хоткей к правому краю. Без него подпись
-             хоткея встала бы вплотную к иконке. -->
-        <span class="menu-label">{{ display.labels ? item.label : '' }}</span>
-        <!-- Кнопка-действие справа (🗑️ у разрешений). У строки-справки это
-             настоящая кнопка (родитель — div), у обычного пункта — span
-             с role=button: вложенная в кнопку кнопка была бы невалидной
-             разметкой. Клик гасим (stop), чтобы он не считался выбором
-             пункта. -->
+    <MenuList
+      v-if="flyoutItems.length"
+      ref="flyoutRef"
+      class="menu-flyout"
+      :style="{ marginTop: flyoutTop + 'px' }"
+      :items="flyoutItems"
+      :display="display"
+      :autofocus="false"
+      :align="align"
+      @select="onFlyoutSelect"
+      @back="backToParent"
+    />
+    <div
+      ref="root"
+      class="menu-list"
+      :class="{
+        'menu-list--icons': widthMode === 'icons',
+        'menu-list--hotkeys': widthMode === 'hotkeys',
+        'menu-list--wide': widthMode === 'wide',
+        'menu-list--no-label': !display.labels,
+      }"
+      role="menu"
+      tabindex="0"
+      @keydown="onKeydown"
+      @mousedown.stop
+    >
+      <template v-for="(item, index) in items" :key="item.id">
+        <div v-if="item.separator" class="menu-separator" role="separator" />
+        <!-- Строка-справка (item.plain) — div, а не button: её действие
+             живёт в отдельной кнопке справа, а кнопка в кнопке невалидна.
+             Стрелками строка по-прежнему выбирается, и Enter выполняет то
+             же, что корзина: иначе снять решение с клавиатуры было бы
+             нечем — мышь целится в кнопку, клавиатура в строку. -->
         <component
-          :is="item.plain ? 'button' : 'span'"
-          v-if="item.actionIcon"
-          class="menu-action"
-          :type="item.plain ? 'button' : undefined"
-          :role="item.plain ? undefined : 'button'"
-          :title="item.actionTitle ?? ''"
-          @click.stop="emit('select', item.id)"
-          >{{ item.actionIcon }}</component
+          :is="item.plain ? 'div' : 'button'"
+          v-else
+          class="menu-item"
+          :class="{
+            'menu-item--active': index === active,
+            'menu-item--heading': item.heading,
+            'menu-item--plain': item.plain,
+            'menu-item--submenu': hasChildren(item),
+          }"
+          role="menuitem"
+          :disabled="item.plain ? undefined : item.disabled"
+          :tabindex="index === active ? 0 : -1"
+          @click="onClick(index, item)"
+          @mouseenter="onEnter(index, item)"
         >
-        <span
-          v-if="display.hotkeys && item.hotkey"
-          class="menu-hotkey"
-          :class="{ 'menu-hotkey--hover': display.hotkeysOnHover }"
-          >{{ item.hotkey }}</span
-        >
-      </component>
-    </template>
+          <span v-if="display.icons" class="menu-icon">
+            <span v-if="item.color" class="menu-dot" :style="{ background: item.color }" />
+            <template v-if="item.icon">{{ item.icon }}</template>
+          </span>
+          <!-- Текст всегда в растущем span, даже когда скрыт: он раздвигает
+               пункт и прижимает хоткей к правому краю. Без него подпись
+               хоткея встала бы вплотную к иконке. -->
+          <span class="menu-label">{{ display.labels ? item.label : '' }}</span>
+          <!-- Кнопка-действие справа (🗑️ у разрешений). У строки-справки это
+               настоящая кнопка (родитель — div), у обычного пункта — span
+               с role=button: вложенная в кнопку кнопка была бы невалидной
+               разметкой. Клик гасим (stop), чтобы он не считался выбором
+               пункта. -->
+          <component
+            :is="item.plain ? 'button' : 'span'"
+            v-if="item.actionIcon"
+            class="menu-action"
+            :type="item.plain ? 'button' : undefined"
+            :role="item.plain ? undefined : 'button'"
+            :title="item.actionTitle ?? ''"
+            @click.stop="emit('select', item.id)"
+            >{{ item.actionIcon }}</component
+          >
+          <!-- Стрелка у пункта с подпунктами: без неё пользователь не знает,
+               что за пунктом есть второй уровень, и ждёт действия по клику. -->
+          <span v-if="hasChildren(item)" class="menu-arrow" aria-hidden="true">›</span>
+          <span
+            v-if="display.hotkeys && item.hotkey"
+            class="menu-hotkey"
+            :class="{ 'menu-hotkey--hover': display.hotkeysOnHover }"
+            >{{ item.hotkey }}</span
+          >
+        </component>
+      </template>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* Контейнер уровня: карточка меню и, если пункт раскрыт, боковая панель.
+   Flex обязателен: ширина окна оверлея снимается с этого контейнера, и
+   только сосед в потоке добавляет панели место. Абсолютно
+   спозиционированная панель не вошла бы в getBoundingClientRect и была
+   бы срезана краем окна. */
+.menu-frame {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
+}
+/* Меню от левого края ('start'): панель справа раскрывается в свободную
+   сторону. row-reverse ставит список первым по видимому порядку. */
+.menu-frame--right {
+  flex-direction: row-reverse;
+}
+/* Боковая панель — такая же карточка, как меню: своя рамка, радиус и
+   тень. Тень отделяет её от карточки меню, иначе две рамки вплотную
+   читаются как одна сломанная. */
+.menu-flyout {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
 .menu-list {
   min-width: 220px;
   max-width: 320px;
@@ -296,6 +473,16 @@ defineExpose({ focusFirst: toStart })
 .menu-list:focus-visible {
   outline: 1px solid var(--ov-border);
 }
+/* Стрелка пункта с подпунктами. Прижата вправо, как в системных меню:
+   она показывает направление раскрытия, а не украшает пункт. */
+.menu-arrow {
+  flex-shrink: 0;
+  color: var(--ov-dim, #888);
+  font-size: 15px;
+  line-height: 1;
+}
+/* Шеврон у пункта с подпунктами занимает место подписи хоткея, поэтому
+   когда есть и то, и другое, они стоят рядом — стрелка левее подписи. */
 /* Текст выключен: распорка .menu-label убирается совсем. Это главное для
    соседних режимов (см. ниже) — пустая распорка с flex:1 раздвигала пункт,
    и между иконкой и хоткеем оставалась дыра во всю ширину карточки. */

@@ -24,7 +24,7 @@ type LayoutFn = (ws: WindowState) => void
 // т.к. окно уже было немаксимизированным — восстанавливаем вручную.
 export function toggleFullscreenMode(ws: WindowState, layout: LayoutFn): boolean {
   if (!ws.window || ws.window.isDestroyed()) return false
-  const mode = getSettingsSync().fullscreenMode === 'content' ? 'content' : 'window'
+  const mode = getSettingsSync(ws.workspaceId).fullscreenMode === 'content' ? 'content' : 'window'
   if (mode === 'content') {
     if (!ws.contentFullscreen) {
       ws.savedBounds = ws.window.getBounds()

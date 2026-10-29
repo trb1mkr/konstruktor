@@ -12,7 +12,7 @@
 // media-запросы, по которым выбирает палитру большинство сайтов.
 import { nativeTheme } from 'electron'
 import { windows, type TabData } from './windows/browserState'
-import { getSettings } from './store/settingsStore'
+import { getSettingsSync } from './store/settingsStore'
 
 // База темы браузера: во что тема превращается для веб-контента.
 // Цветная тема обязана объявить базу явно — иначе новая тема молча
@@ -72,7 +72,13 @@ export function webContentScheme(settings: ThemeSettings): WebContentScheme {
 
 // Применяет схему веб-контента к Chromium. Без этого сайты и окна
 // расширений следуют теме ОС, что бы ни стояло в настройках браузера.
-// Вызывать при старте (до первого окна) и на каждое изменение темы.
+//
+// ВНИМАНИЕ: `nativeTheme.themeSource` ОДИН на процесс, поэтому
+// prefers-color-scheme общий для всех пространств. Схему ставит то
+// пространство, чьё окно в фокусе (syncProcessScheme): подмена видна
+// только в нефокусированном окне, а used-цвета (полосы прокрутки, формы,
+// канвас) у каждого пространства свои — их даёт инъекция color-scheme
+// из schemeForWorkspace.
 export function applyWebContentScheme(settings: ThemeSettings): void {
   const next = webContentScheme(settings)
   if (nativeTheme.themeSource !== next) nativeTheme.themeSource = next
@@ -86,17 +92,49 @@ export function applyWebContentScheme(settings: ThemeSettings): void {
   )
 }
 
+/**
+ * Ставит схему веб-контента по настройкам пространства.
+ *
+ * Зовётся при старте (для стартующего пространства), при смене темы и при
+ * смене фокуса: `nativeTheme` общий на процесс, поэтому действует схема
+ * того пространства, в чьём окне сейчас работают.
+ */
+export function applyWebContentSchemeFor(wsId: string): void {
+  applyWebContentScheme(getSettingsSync(wsId))
+}
+
+/** Пространство, чьё окно в фокусе: оно и задаёт схему процесса. */
+function focusedWorkspaceId(): string | null {
+  for (const ws of windows.values()) {
+    if (ws.window && !ws.window.isDestroyed() && ws.window.isFocused()) return ws.workspaceId
+  }
+  return null
+}
+
+/**
+ * Синхронизирует общую на процесс схему с фокусированным пространством.
+ *
+ * Вызывается при смене фокуса окна и после смены темы: без этого окна
+ * разных пространств с разной темой заставляли бы сайты мигать при каждом
+ * переключении внимания.
+ */
+export function syncProcessScheme(): void {
+  const wsId = focusedWorkspaceId()
+  if (!wsId) return
+  applyWebContentSchemeFor(wsId)
+}
+
 // Системная тема ОС: nativeTheme следит сам и шлет обновления.
-// Перекрашиваем нативный фон view, когда за ОС следуем; предпочтения
-// сайтов Chromium пересчитывает сам (событие 'updated' от themeSource
-// сюда тоже приходит — повторный проход безвреден).
+// Перекрашиваем нативный фон view и used-схему всех открытых вкладок:
+// 'system' у каждого пространства резолвится по ОС, а перекрасить нужно
+// и те пространства, чья схема не совпала с темой процесса.
 export function watchSystemTheme(): void {
   nativeTheme.on('updated', () => {
     readOsTheme()
     logTheme(`OS updated: osDark=${osDark} themeSource=${nativeTheme.themeSource}`)
-    void getSettings()
-      .then((s) => applyThemeToViews(s.theme ?? 'dark'))
-      .catch(() => undefined)
+    const wsIds = new Set<string>()
+    for (const ws of windows.values()) wsIds.add(ws.workspaceId)
+    for (const wsId of wsIds) applyThemeToViewsFor(wsId)
   })
 }
 
@@ -127,14 +165,15 @@ export function effectivePageTheme(theme: string): 'dark' | 'light' | 'slate' {
 //   на системных цветах не перекрашиваются, даже если медиазапрос уже сменился.
 // Сайты с захардкоженными цветами не изменятся ничем — их палитра
 // не зависит от браузера.
-export function applyThemeToViews(theme: string): void {
+export function applyThemeToViewsFor(wsId: string): void {
   for (const ws of windows.values()) {
+    if (ws.workspaceId !== wsId) continue
     for (const rec of ws.tabs.values()) {
-      applyThemeToTab(rec, theme)
+      applyThemeToTab(rec, wsId)
       // Нативный фон view под тему: иначе при смене темы старая view
       // вспыхнет белым до первой отрисовки после переключения.
       try {
-        rec.view.setBackgroundColor(viewBackgroundFor(rec.url, theme))
+        rec.view.setBackgroundColor(viewBackgroundFor(rec.url, wsId))
       } catch {
         // Старый Electron без setBackgroundColor у View — игнорим.
       }
@@ -142,11 +181,30 @@ export function applyThemeToViews(theme: string): void {
   }
 }
 
+/**
+ * Схема used-цветов сайтов пространства, уже разрешённая до 'dark'|'light'.
+ *
+ * Тема веб-контента — настройка пространства, поэтому инъекция
+ * `color-scheme` берётся из НАСТРОЕК СВОЕГО пространства, а не из
+ * `nativeTheme`: тот один на процесс и отражает то пространство, чьё окно
+ * сейчас в фокусе (см. syncProcessScheme).
+ */
+export function schemeForWorkspace(wsId: string): 'dark' | 'light' {
+  const scheme = webContentScheme(getSettingsSync(wsId))
+  if (scheme === 'system') return effectiveColorScheme()
+  return scheme
+}
+
 // Схема used-цветов конкретной вкладки: у сайтов — базовая тема
 // веб-контента, у внутренних страниц — их собственная (slate это dark).
-function schemeForTab(rec: TabData, theme: string): 'dark' | 'light' {
-  if (!rec.url.startsWith('konstruktor://')) return effectiveColorScheme()
-  return effectivePageTheme(theme) === 'light' ? 'light' : 'dark'
+function schemeForTab(rec: TabData, wsId: string): 'dark' | 'light' {
+  if (!rec.url.startsWith('konstruktor://')) return schemeForWorkspace(wsId)
+  return effectivePageTheme(pageThemeOf(wsId)) === 'light' ? 'light' : 'dark'
+}
+
+/** Тема shell пространства: база палитры внутренних страниц. */
+function pageThemeOf(wsId: string): string {
+  return getSettingsSync(wsId).theme ?? 'dark'
 }
 
 // Инъекция used-схемы во вкладку. Ключ последнего insertCSS хранится в
@@ -169,13 +227,13 @@ function applyColorSchemeToTab(rec: TabData, scheme: 'dark' | 'light'): void {
 // Вызывается при создании вкладки И на каждой загрузке документа —
 // тогда первая же перезагрузка после смены темы даёт верную схему,
 // а не несколько (инъекция синхронна, медиазапрос — нет).
-export function applyThemeToTab(rec: TabData, theme: string): void {
-  applyColorSchemeToTab(rec, schemeForTab(rec, theme))
+export function applyThemeToTab(rec: TabData, wsId: string): void {
+  applyColorSchemeToTab(rec, schemeForTab(rec, wsId))
   // Внутренние страницы читают тему только при загрузке —
   // проставляем dataset.theme вживую без перезагрузки.
   if (rec.url.startsWith('konstruktor://')) {
     rec.view.webContents
-      .executeJavaScript(buildPageThemeScript(effectivePageTheme(theme)))
+      .executeJavaScript(buildPageThemeScript(effectivePageTheme(pageThemeOf(wsId))))
       .catch(() => undefined)
   }
 }
@@ -183,20 +241,20 @@ export function applyThemeToTab(rec: TabData, theme: string): void {
 // Фон сайтов и окон расширений — по схеме веб-контента.
 // Служит и нативным фоном view, и backgroundColor окон расширений:
 // без него попап стартует с белым #FFF и мигает при тёмной схеме.
-export function webContentBackground(): string {
-  return effectiveColorScheme() === 'light' ? '#f2f2f2' : '#141414'
+export function webContentBackgroundFor(wsId: string): string {
+  return schemeForWorkspace(wsId) === 'light' ? '#f2f2f2' : '#141414'
 }
 
 // Нативный фон view до первой отрисовки страницы: иначе новая вкладка
 // на пару миллисекунд вспыхивает белым (#FFF по умолчанию).
 // У сайтов цвет от базовой темы веб-контента, у внутренних страниц — от
 // палитры темы страницы (у slate свой фон), чтобы переход был бесшовным.
-export function viewBackgroundFor(url: string, theme: string): string {
+export function viewBackgroundFor(url: string, wsId: string): string {
   if (url.startsWith('konstruktor://')) {
-    const page = effectivePageTheme(theme)
+    const page = effectivePageTheme(pageThemeOf(wsId))
     if (page === 'light') return '#f2f2f2'
     if (page === 'slate') return '#232a35'
     return '#141414'
   }
-  return webContentBackground()
+  return webContentBackgroundFor(wsId)
 }

@@ -22,17 +22,16 @@
 // getUserMedia повиснет навсегда.
 import { desktopCapturer, session, webContents } from 'electron'
 import {
-  INCOGNITO_PARTITION,
-  NORMAL_PARTITION,
   getState,
   parentOfSenderView,
   windows,
   type WindowState,
 } from '../windows/browserState'
-import { getActiveRequest, setOverlayEndedListener, showOverlay } from '../overlay'
+import { bootWorkspaceId } from '../workspaces/registry'
+import { getActiveRequest, onOverlayEnded, showOverlay } from '../overlay'
 import type { OverlayRequest } from '../overlay'
 import { log } from '../overlay/logger'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 import { pushTabsState } from '../tabs/tabsManager'
 import { setCaptureChangeHandler } from './captureIndicator'
 import {
@@ -149,6 +148,7 @@ function watchTab(ws: WindowState, tabId: number, onGone: () => void): () => voi
  * пользователь мог сменить пресет раскладки.
  */
 function permissionRequest(ws: WindowState, prompt: Prompt): OverlayRequest {
+  const t = tFor(ws.workspaceId)
   return {
     kind: 'permission',
     anchor: anchorFor(ws),
@@ -239,7 +239,7 @@ export function handleTabChange(ws: WindowState): void {
  * остальное (Esc, клик по подложке, уход из приложения, вытеснение меню,
  * прерванный показ) — отказ, и он обязан дойти до страницы.
  */
-function onOverlayEnded(parentId: number): void {
+function onOverlayEndedHandler(parentId: number): void {
   const ws = windows.get(parentId)
   const cur = shown.get(parentId)
   if (!cur) {
@@ -326,8 +326,12 @@ function askUser(
   })
 }
 
-/** Устанавливает обработчики разрешений на одну сессию. */
-function installHandlers(ses: Electron.Session, persist: boolean): void {
+/** Устанавливает обработчики разрешений на одну сессию пространства. */
+export function installPermissionHandlers(
+  ses: Electron.Session,
+  persist: boolean,
+  wsId: string
+): void {
   // Проверка: только по сохранённому решению, без промпта (обработчик
   // синхронный). Нерешённое разрешение отдаёт false — тогда Chromium
   // пойдёт в обработчик запроса, и промпт покажется там.
@@ -339,7 +343,7 @@ function installHandlers(ses: Electron.Session, persist: boolean): void {
       parseOrigin((details as { securityOrigin?: string } | undefined)?.securityOrigin)
     if (!parsed || isInternalOrigin(parsed.origin)) return false
     if (isExtensionOrigin(parsed.origin)) return true
-    return cls.scopes.every((scope) => getDecision(parsed.origin, scope, persist) === 'allow')
+    return cls.scopes.every((scope) => getDecision(parsed.origin, scope, persist, wsId) === 'allow')
   })
 
   // Запрос: сверяем решение, при нерешённых областях показываем промпт.
@@ -364,13 +368,13 @@ function installHandlers(ses: Electron.Session, persist: boolean): void {
       return
     }
     const { origin, host } = parsed
-    if (cls.scopes.some((scope) => getDecision(origin, scope, persist) === 'block')) {
+    if (cls.scopes.some((scope) => getDecision(origin, scope, persist, wsId) === 'block')) {
       log('session', 'permission denied (remembered)', { origin, permission })
       callback(false)
       return
     }
     const undecided = cls.scopes.filter(
-      (scope) => getDecision(origin, scope, persist) === undefined,
+      (scope) => getDecision(origin, scope, persist, wsId) === undefined,
     )
     if (undecided.length === 0) {
       callback(true)
@@ -415,7 +419,7 @@ function installHandlers(ses: Electron.Session, persist: boolean): void {
       if (isExtensionOrigin(origin)) {
         allow = true
       } else {
-        const stored = getDecision(origin, 'display-capture', persist)
+        const stored = getDecision(origin, 'display-capture', persist, wsId)
         if (stored === 'allow') allow = true
         else if (stored === 'block') allow = false
         else {
@@ -427,8 +431,7 @@ function installHandlers(ses: Electron.Session, persist: boolean): void {
             return
           }
           const tabId = tabIdOf(ws, wc) ?? ws.activeTabId ?? -1
-          allow = await askUser(ws, tabId, origin, host, ['display-capture'], persist)
-        }
+          allow = await askUser(ws, tabId, origin, host, ['display-capture'], persist)        }
       }
       if (!allow) {
         deny()
@@ -456,21 +459,24 @@ function installHandlers(ses: Electron.Session, persist: boolean): void {
 }
 
 /**
- * Ставит обработчики разрешений на все сессии приложения.
+ * Готовит общее состояние разрешений: кэш решений и слушатели оверлея.
  *
- * Все три — те же, что у внутренних страниц и загрузок:
- * `defaultSession`, обычная партиция вкладок и приватная. Приватная пишет
- * решения только в память (persist: false).
+ * Обработчики на конкретные сессии ставит `installPermissionHandlers` —
+ * их вызывает workspaces/electronSession.ts при открытии пространства.
+ * Здесь остаётся то, что общее на процесс: кэш нужен до первого окна
+ * (обработчик проверки синхронный), слушатели оверлея — глобальные.
  */
 export async function initPermissions(): Promise<void> {
   // Кэш решений читаем до первого окна: обработчик проверки синхронный, и
   // без прогретого кэша первое же разрешение выглядело бы нерешённым даже
-  // при сохранённом ответе.
-  await loadPermissions()
-  setOverlayEndedListener(onOverlayEnded)
+  // при сохранённом ответе. Остальные пространства прогревают кэш лениво,
+  // при открытии окна.
+  await loadPermissions(bootWorkspaceId())
+  onOverlayEnded(onOverlayEndedHandler)
   setCaptureChangeHandler((ws) => pushTabsState(ws))
-  installHandlers(session.defaultSession, true)
-  installHandlers(session.fromPartition(NORMAL_PARTITION), true)
-  installHandlers(session.fromPartition(INCOGNITO_PARTITION), false)
+  // defaultSession не принадлежит ни одному пространству, но Chromium
+  // может спросить разрешение и у неё (например, у служебных страниц).
+  // Решения для неё пишутся в пространство запуска.
+  installPermissionHandlers(session.defaultSession, true, bootWorkspaceId())
   log('session', 'permission handlers installed')
 }

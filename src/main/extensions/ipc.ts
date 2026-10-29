@@ -21,6 +21,7 @@ import {
   setExtensionPinned
 } from './manager'
 import { findExtensionRecord } from './extensionStore'
+import { bootWorkspaceId } from '../workspaces/registry'
 import { actionPopupExtensionId, closeActionPopup, consumeBlurClosedPopup } from './popup'
 import { checkExtensionUpdates } from './updater'
 
@@ -32,10 +33,13 @@ function openExtensionsPage(win: BrowserWindow): void {
 }
 
 export function registerExtensionsIpc(): void {
-  ipcMain.handle('extensions:list', () => extensionsState())
-  ipcMain.handle('extensions:refresh', () => refreshExtensions())
-  ipcMain.handle('extensions:install-folder', () => installFromFolder())
-  ipcMain.handle('extensions:install-archive', () => installFromArchive())
+  // Пространство окна-отправителя: реестр расширений у каждого свой.
+  const wsIdOf = (e: { sender: Electron.WebContents }): string =>
+    getState(BrowserWindow.fromWebContents(e.sender) ?? null)?.workspaceId ?? bootWorkspaceId()
+  ipcMain.handle('extensions:list', (e) => extensionsState(wsIdOf(e)))
+  ipcMain.handle('extensions:refresh', (e) => refreshExtensions(wsIdOf(e)))
+  ipcMain.handle('extensions:install-folder', (e) => installFromFolder(wsIdOf(e)))
+  ipcMain.handle('extensions:install-archive', (e) => installFromArchive(wsIdOf(e)))
   ipcMain.handle('extensions:install-path', (_e, path: string) => installFromPath(path))
   ipcMain.handle('extensions:enable', (_e, id: string) => enableExtension(id))
   ipcMain.handle('extensions:disable', (_e, id: string) => disableExtension(id))
@@ -81,7 +85,7 @@ export function registerExtensionsIpc(): void {
     showOverlay(win, {
       kind: 'extensions',
       anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
-      extensions: extensionsMenuModel(),
+      extensions: extensionsMenuModel(wsIdOf(e)),
       toggleKey: 'extensions-menu',
       // Команды строк: pin/unpin/open и manage без id (вход на страницу
       // расширений в конце списка).
@@ -120,13 +124,13 @@ export function registerExtensionsIpc(): void {
     const result = await shell.openPath(rec.dir)
     return result === ''
   })
-  ipcMain.handle('extensions:set-enabled', async (_e, enabled: boolean) => {
-    await saveSettings({ extensionsEnabled: enabled })
-    return extensionsState()
+  ipcMain.handle('extensions:set-enabled', async (e, enabled: boolean) => {
+    await saveSettings({ extensionsEnabled: enabled }, wsIdOf(e))
+    return extensionsState(wsIdOf(e))
   })
-  ipcMain.handle('extensions:set-dev-mode', async (_e, on: boolean) => {
-    await saveSettings({ extensionsDevMode: on })
-    return extensionsState()
+  ipcMain.handle('extensions:set-dev-mode', async (e, on: boolean) => {
+    await saveSettings({ extensionsDevMode: on }, wsIdOf(e))
+    return extensionsState(wsIdOf(e))
   })
   // Ручная проверка обновлений с страницы расширений.
   ipcMain.handle('extensions:check-updates', () => checkExtensionUpdates())

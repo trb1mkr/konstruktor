@@ -7,11 +7,14 @@
 // статические строки переводятся t(), скрипт страницы — встроенным tr().
 import { langTag } from '../../shared/i18n'
 import { pageI18nScript } from '../../shared/i18n/pageRuntime'
-import { t } from '../i18n'
+import { translatorFor } from '../i18n'
 
 export const START_URL = 'konstruktor://start'
 
+// Язык — параметр сборки: страница отдаётся в языке СВОЕГО пространства,
+// а не в языке процесса (см. main/i18n.ts).
 export function buildStartPage(lang: string): string {
+  const t = translatorFor(lang)
   return `<!DOCTYPE html>
 <html lang="${langTag(lang)}">
 <head>

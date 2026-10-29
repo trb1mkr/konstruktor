@@ -9,6 +9,7 @@
 // Реестр действий — shared/hotkey-actions: один список для обработчиков,
 // таблицы настроек и подписей в меню.
 import { getSettingsSync } from './store/settingsStore'
+import { bootWorkspaceId } from './workspaces/registry'
 import { formatAccelerator, matchesInput, parseAccelerator } from '../shared/hotkeys'
 import { HOTKEY_ACTIONS, type HotkeyActionId, type HotkeyOverrides } from '../shared/hotkey-actions'
 import type { WebContents } from 'electron'
@@ -31,8 +32,10 @@ export interface HotkeyKeyInput {
  * а сопоставление (`matchHotkey`) его пропускает. Отсутствие ключа
  * отличается от пустого значения — там действует дефолт.
  */
-export function resolvedHotkeys(): Record<HotkeyActionId, string> {
-  const overrides: HotkeyOverrides = getSettingsSync().hotkeys ?? {}
+export function resolvedHotkeys(
+  wsId = bootWorkspaceId()
+): Record<HotkeyActionId, string> {
+  const overrides: HotkeyOverrides = getSettingsSync(wsId).hotkeys ?? {}
   const out = {} as Record<HotkeyActionId, string>
   for (const action of HOTKEY_ACTIONS) {
     const value = overrides[action.id]
@@ -42,13 +45,13 @@ export function resolvedHotkeys(): Record<HotkeyActionId, string> {
 }
 
 /** Акселератор действия (с учётом настроек) в синтаксисе Electron. */
-export function acceleratorFor(id: HotkeyActionId): string {
-  return resolvedHotkeys()[id]
+export function acceleratorFor(id: HotkeyActionId, wsId = bootWorkspaceId()): string {
+  return resolvedHotkeys(wsId)[id]
 }
 
 /** Подпись действия для меню: «Ctrl+R» на ПК, «⌘R» на macOS. */
-export function hotkeyLabel(id: HotkeyActionId): string {
-  return formatAccelerator(acceleratorFor(id), process.platform)
+export function hotkeyLabel(id: HotkeyActionId, wsId = bootWorkspaceId()): string {
+  return formatAccelerator(acceleratorFor(id, wsId), process.platform)
 }
 
 /**
@@ -60,9 +63,12 @@ export function hotkeyLabel(id: HotkeyActionId): string {
  * порядок реестра здесь решает: из двух действий с одним сочетанием
  * сработает первое.
  */
-export function matchHotkey(input: HotkeyKeyInput): HotkeyActionId | null {
+export function matchHotkey(
+  input: HotkeyKeyInput,
+  wsId = bootWorkspaceId()
+): HotkeyActionId | null {
   if (input.type !== 'keyDown') return null
-  const hotkeys = resolvedHotkeys()
+  const hotkeys = resolvedHotkeys(wsId)
   for (const action of HOTKEY_ACTIONS) {
     const parsed = parseAccelerator(hotkeys[action.id])
     if (parsed && matchesInput(input, parsed)) return action.id

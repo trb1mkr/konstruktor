@@ -158,7 +158,7 @@ export function applyZoomToWs(
   push: (ws: WindowState) => void
 ): number {
   const p = clampPercent(percent)
-  if (!getSettingsSync().zoomSync) {
+  if (!getSettingsSync(ws.workspaceId).zoomSync) {
     const wc = activeWcOf(ws)
     const applied = wc ? setZoom(wc, p) : 100
     push(ws)

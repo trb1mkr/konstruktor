@@ -104,6 +104,10 @@ export interface OverlayMenuItem {
   // них меню читается как сплошной список. Пустые label/icon игнорируются
   // renderer-ом, пункт не нажимается и не получает фокус.
   separator?: boolean
+  // Подпункты второго уровня: пункт раскрывает БОКОВУЮ панель и сам не
+  // выбирается. Так в меню браузера устроена «История» — вложенный список
+  // недавно закрытых вкладок и окон.
+  children?: OverlayMenuItem[] | null
 }
 
 export interface OverlayDialogButton {
@@ -141,8 +145,12 @@ export interface OverlayRequest {
   toast?: { title: string; body?: string; timeout?: number }
   dialog?: {
     title: string
+    /** Пояснение под заголовком. Вместе с `input: false` — диалог выбора. */
+    message?: string
     placeholder?: string
     initial?: string
+    /** false — диалог без поля ввода, только кнопки. */
+    input?: boolean
     buttons: OverlayDialogButton[]
   }
   icon?: IconDialogState

@@ -41,6 +41,16 @@ export interface SavedGroupInfo {
   pinned: boolean
 }
 
+// Закладка панели: принадлежит рабочему пространству и лежит в его
+// bookmarks.json. Раньше список жил в localStorage шелла, а шелл работает в
+// in-memory партиции — закладки не переживали перезапуск.
+export interface BookmarkInfo {
+  title: string
+  url: string
+  favicon: string
+  addedAt: number
+}
+
 export interface TabsState {
   tabs: TabInfo[]
   activeTabId: number | null
@@ -73,6 +83,10 @@ export interface UiInsets {
 const browserAPI = {
   createTab: (url?: string): Promise<number> => ipcRenderer.invoke('tabs:create', url),
   closeTab: (id: number): Promise<boolean> => ipcRenderer.invoke('tabs:close', id),
+  // Возврат закрытой вкладки/окна. Без id — самая свежая запись журнала
+  // (хоткей Ctrl+Shift+T); с id — конкретная запись из меню.
+  reopenClosedTab: (entryId?: string): Promise<boolean> =>
+    ipcRenderer.invoke('tabs:reopen-closed', entryId),
   activateTab: (id: number): Promise<boolean> => ipcRenderer.invoke('tabs:activate', id),
   listTabs: (): Promise<TabsState> => ipcRenderer.invoke('tabs:list'),
   navigate: (id: number, url: string): Promise<boolean> =>
@@ -117,6 +131,13 @@ const browserAPI = {
     ipcRenderer.invoke('groups:toggle-pin', instanceId),
   toggleGroupBookmarkPin: (savedId: string): Promise<SavedGroupInfo | null> =>
     ipcRenderer.invoke('groups:toggle-bookmark-pin', savedId),
+  // Закладки панели. Все три метода возвращают новый список целиком:
+  // панель рисует его без отдельного чтения и без гонок с перерисовкой.
+  listBookmarks: (): Promise<BookmarkInfo[]> => ipcRenderer.invoke('bookmarks:list'),
+  toggleBookmark: (input: { title: string; url: string; favicon?: string }): Promise<BookmarkInfo[]> =>
+    ipcRenderer.invoke('bookmarks:toggle', input),
+  removeBookmark: (url: string): Promise<BookmarkInfo[]> =>
+    ipcRenderer.invoke('bookmarks:remove', url),
   nestGroup: (childSavedId: string, parentSavedId: string): Promise<SavedGroupInfo | null> =>
     ipcRenderer.invoke('groups:nest', childSavedId, parentSavedId),
   unnestGroup: (childSavedId: string, parentSavedId: string): Promise<SavedGroupInfo | null> =>
@@ -141,6 +162,12 @@ const browserAPI = {
   // Переключить приватность текущего окна (вкладки переоткрываются
   // в другой партиции). Возвращает новый режим: true = приватный.
   toggleIncognito: (): Promise<boolean> => ipcRenderer.invoke('window:incognito'),
+  // Пространство этого окна: id, имя, иконка (один эмодзи) и цвет.
+  // Значок перед кнопкой меню браузера показывает иконку пространства, а в
+  // приватном режиме — значок инкогнито: приватная вкладка пространству не
+  // принадлежит.
+  workspaceInfo: (): Promise<{ id: string; name: string; icon: string; color: string } | null> =>
+    ipcRenderer.invoke('window:workspace'),
   // Кнопки кастомного заголовка окна.
   minimizeWindow: (): Promise<boolean> => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: (): Promise<boolean> => ipcRenderer.invoke('window:toggle-maximize'),

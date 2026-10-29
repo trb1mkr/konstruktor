@@ -74,3 +74,13 @@ html.no-anim .dialog,
 html.no-anim .toast,
 html.no-anim .find-bar,
 html.no-anim .permission-prompt { animation: none !important; }
+
+/* Открытая боковая панель меню.
+   `.overlay-level` ограничен `max-width: 100%`, чтобы карточка не вылезала
+   за окно, посчитанное по прошлому замеру. Панель подпунктов — ровно тот
+   случай, когда эту границу нужно пересечь: иначе замер видит ширину,
+   равную окну, окно ждёт замера, и панель остаётся сжатой. Класс ставит
+   MenuList на <html>, потому что уровень — не его элемент. */
+html.overlay-flyout .overlay-level {
+  max-width: none;
+}

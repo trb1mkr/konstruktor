@@ -32,6 +32,14 @@ export interface TabRecord {
 
 export interface TabData {
   view: WebContentsView
+  /**
+   * Стабильный ключ вкладки внутри окна (`t1`, `t2`, …).
+   *
+   * Runtime id меняется от запуска к запуску, а слепок окон и список
+   * недавно закрытых должны его пережить: именно по ключу вкладка
+   * возвращается на прежнее место в ряду.
+   */
+  key: string
   url: string
   title: string
   pinned: boolean
@@ -74,8 +82,23 @@ export interface OpenGroup {
 
 export interface WindowState {
   window: BrowserWindow | null
+  /**
+   * Рабочее пространство окна: определяет каталог данных, партиции вкладок
+   * и реестр расширений. Окна разных пространств живут одновременно.
+   */
+  workspaceId: string
+  /**
+   * Стабильный ключ окна внутри пространства (`w1`, `w2`, …).
+   *
+   * Runtime id Electron меняется от запуска к запуску, а слепок окон и
+   * список недавно закрытых должны пережить перезапуск: восстановление
+   * ищет исходное окно по этому ключу.
+   */
+  key: string
   tabs: Map<number, TabData>
   tabOrder: number[]
+  /** Следующий свободный ключ вкладки этого окна (`t<N>`). */
+  nextTabKey: number
   activeTabId: number | null
   // Единый порядок панели вкладок: токены корневых элементов.
   // 't:<id>' — вкладка без группы, 'g:<instanceId>' — корневая группа.
@@ -99,6 +122,9 @@ export interface WindowState {
 }
 
 // Партиции: обычная persistent, инкогнито in-memory (без persist:).
+// Конкретная партиция теперь зависит от рабочего пространства — её выбирает
+// workspaces/electronSession.ts (partitionFor / incognitoPartitionFor).
+// Константы оставлены для мигрированного профиля: его партиция историческая.
 export const NORMAL_PARTITION = 'persist:konstruktor'
 export const INCOGNITO_PARTITION = 'incognito-mem'
 
@@ -109,6 +135,13 @@ let nextTabId = 1
 // Выдача id вкладки со сквозным счетчиком на все окна.
 export function allocTabId(): number {
   return nextTabId++
+}
+
+/** Ключ вкладки внутри окна: `t1`, `t2`, … — счётчик у каждого окна свой. */
+export function allocTabKey(ws: WindowState): string {
+  const n = ws.nextTabKey && ws.nextTabKey > 0 ? ws.nextTabKey : 1
+  ws.nextTabKey = n + 1
+  return `t${n}`
 }
 
 export function getState(win: BrowserWindow | null): WindowState | undefined {

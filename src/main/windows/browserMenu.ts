@@ -6,85 +6,164 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { getState, parentOfSenderView } from './browserState'
 import { showOverlay, closeOverlay, closeOverlayIfMenu, type OverlayMenuItem } from '../overlay'
 import { log } from '../overlay/logger'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 import { devToolsStateOf, toggleDevTools } from '../tabs/devtools'
 import { switchIncognito } from '../tabs/tabsManager'
 import { createTab, pushTabsState, tabsDeps } from './deps'
-import { HISTORY_URL, SETTINGS_URL, DOWNLOADS_URL, EXTENSIONS_URL } from '../pages/internalPages'
+import { listClosed } from '../store/closedStore'
+import { hotkeyLabel } from '../hotkeys'
+import { HISTORY_URL, SETTINGS_URL, DOWNLOADS_URL, EXTENSIONS_URL, WORKSPACES_URL } from '../pages/internalPages'
+
+/**
+ * Пункты боковой панели «История».
+ *
+ * Первый пункт возвращает последнюю закрытую вкладку или окно и показывает
+ * своё сочетание: это же действие делает Ctrl+Shift+T, и подпись в меню —
+ * единственное место, где пользователь узнаёт о хоткее.
+ *
+ * Записи журнала адресуются префиксом `closed:<id>`: один обработчик
+ * `onSelect` разбирает и служебные пункты, и записи, не заводя по каналу
+ * на каждую.
+ *
+ * Порядок в меню — от новых к старым (так их отдаёт `listClosed`): список
+ * читается сверху вниз как «что закрыл последним».
+ */
+function historyItems(wsId: string): OverlayMenuItem[] {
+  const t = tFor(wsId)
+  const entries = listClosed(wsId)
+  const out: OverlayMenuItem[] = [
+    {
+      id: 'reopen-closed',
+      label: t('menu.reopenClosed'),
+      icon: '↩️',
+      hotkey: hotkeyLabel('reopen-closed', wsId),
+      disabled: entries.length === 0
+    },
+    { id: 'closed-sep', label: '', icon: '', separator: true }
+  ]
+  if (entries.length === 0) {
+    out.push({ id: 'closed-empty', label: t('menu.noClosed'), icon: '💤', disabled: true })
+  } else {
+    for (const entry of entries) {
+      out.push({
+        id: `closed:${entry.id}`,
+        // Окно подписано числом вкладок и первым заголовком: по одному
+        // заголовку непонятно, вернётся одна вкладка или пять.
+        label:
+          entry.kind === 'window'
+            ? t('closed.windowEntry', { count: entry.snapshot.tabs.length, title: entry.title })
+            : entry.title,
+        icon: entry.kind === 'window' ? '🪟' : '📄'
+      })
+    }
+  }
+  out.push({ id: 'open-sep', label: '', icon: '', separator: true })
+  out.push({ id: 'open-history', label: t('menu.openHistory'), icon: '📜' })
+  return out
+}
+
+/**
+ * Показ меню браузера.
+ *
+ * Вынесено из IPC-обработчика: тем же путём меню открывает диагностика
+ * (KONSTRUKTOR_BROWSER_MENU_MS), иначе новый пункт нельзя проверить без
+ * мыши — а именно так ловятся ошибки состава меню.
+ */
+export function showBrowserMenu(win: BrowserWindow, anchor: { x: number; y: number }): void {
+  const ws = getState(win)
+  if (!ws) return
+  const t = tFor(ws.workspaceId)
+  const openPage = (url: string) => {
+    // Внутреннюю страницу открываем в активной вкладке.
+    const rec = ws.activeTabId !== null ? ws.tabs.get(ws.activeTabId) : undefined
+    if (rec) void rec.view.webContents.loadURL(url)
+    else createTab(ws, url)
+  }
+  const items: OverlayMenuItem[] = [
+    // Заглушки: разделы в разработке, пункты неактивны.
+    { id: 'profile', label: t('menu.profile'), icon: '👤', disabled: true },
+    // Пространства стоят выше настроек: это выбор контейнера данных, в
+    // котором работает весь остальной браузер, а не одна из его опций.
+    { id: 'workspaces', label: t('menu.workspaces'), icon: '🗂️' },
+    { id: 'settings', label: t('menu.settings'), icon: '⚙️' },
+    // «История» — пункт с боковой панелью, как в Яндекс.Браузере: сама
+    // история и недавно закрытые в одном месте, вложенным списком. Страница
+    // истории открывается последним пунктом панели, чтобы у пункта
+    // верхнего уровня остался один смысл — «раскрыть».
+    { id: 'history', label: t('menu.history'), icon: '🕘', children: historyItems(ws.workspaceId) },
+    { id: 'downloads', label: t('menu.downloads'), icon: '📥' },
+    { id: 'extensions', label: t('menu.extensions'), icon: '🧩' },
+    // DevTools активной вкладки. Состояние читаем при открытии меню:
+    // панель могли закрыть крестиком в самом DevTools, и подпись пункта
+    // обязана это отражать.
+    {
+      id: 'devtools',
+      label: devToolsStateOf(ws, ws.activeTabId ?? -1).open
+        ? t('menu.devtoolsClose')
+        : t('menu.devtoolsOpen'),
+      icon: '🛠️'
+    },
+    // Debug — dev-only пункт, не переводится (см. I18N.md).
+    { id: 'debug', label: 'Debug', icon: '🐞', disabled: true },
+    // Пункт виден всегда: он переключает режим ТЕКУЩЕГО окна, а не
+    // создаёт новое. В приватном окне он предлагает обратный переход,
+    // поэтому скрывать его было бы неверно.
+    {
+      id: 'incognito',
+      label: ws.incognito ? t('menu.incognitoToNormal') : t('menu.incognitoToPrivate'),
+      icon: '🕵️'
+    }
+  ]
+  showOverlay(win, {
+    kind: 'menu',
+    anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
+    items,
+    // Второй клик по кнопке ☰ закрывает открытое ею же меню.
+    toggleKey: 'browser-menu',
+    onSelect: (id) => {
+      if (id === 'downloads') openPage(DOWNLOADS_URL)
+      else if (id === 'open-history') openPage(HISTORY_URL)
+      else if (id === 'settings') openPage(SETTINGS_URL)
+      else if (id === 'extensions') openPage(EXTENSIONS_URL)
+      else if (id === 'workspaces') openPage(WORKSPACES_URL)
+      else if (id === 'reopen-closed') {
+        // Оверлей закрываем до восстановления: восстановление окна или
+        // переключение вкладки меняет состояние под меню, и оставить его
+        // открытым значило бы показать пункты для прежнего состояния.
+        closeOverlay(win)
+        if (!tabsDeps.reopenClosed(ws)) {
+          console.log('[closed] nothing to reopen in', ws.workspaceId)
+        }
+      } else if (id.startsWith('closed:')) {
+        closeOverlay(win)
+        tabsDeps.reopenClosed(ws, id.slice('closed:'.length))
+      } else if (id === 'devtools') {
+        // Меню закрываем ДО открытия панели: оверлей лежит поверх view,
+        // и докнутые DevTools перерисовали бы его область. Плюс панель
+        // забирает фокус, а меню его держит — оставить открытым значало бы
+        // оставить окно без фокуса.
+        closeOverlay(win)
+        if (ws.activeTabId !== null) {
+          toggleDevTools(ws, ws.activeTabId)
+          pushTabsState(ws)
+        }
+      } else if (id === 'incognito') {
+        // Переключение переоткрывает вкладки, поэтому активный оверлей
+        // (меню, открытый поверх вкладок) закрываем заранее: его
+        // содержимое сейчас станет неактуальным.
+        closeOverlay(win)
+        switchIncognito(ws, tabsDeps, !ws.incognito)
+      }
+    }
+  })
+}
 
 export function registerBrowserMenuIpc(): void {
-  // Renderer шлет якорь ПРАВОГО НИЖНЕГО угла кнопки относительно
+  // Renderer шлёт якорь ПРАВОГО НИЖНЕГО угла кнопки относительно
   // content-области окна. Оверлей позиционируется в overlay/service.
   ipcMain.on('menu:popup', (e, anchor: { x: number; y: number }) => {
     const win = BrowserWindow.fromWebContents(e.sender)
-    const ws = win ? getState(win) : undefined
-    if (!win || !ws) return
-    const openPage = (url: string) => {
-      // Внутреннюю страницу открываем в активной вкладке.
-      const rec = ws.activeTabId !== null ? ws.tabs.get(ws.activeTabId) : undefined
-      if (rec) void rec.view.webContents.loadURL(url)
-      else createTab(ws, url)
-    }
-    const items: OverlayMenuItem[] = [
-      // Заглушки: разделы в разработке, пункты неактивны.
-      { id: 'profile', label: t('menu.profile'), icon: '👤', disabled: true },
-      { id: 'settings', label: t('menu.settings'), icon: '⚙️' },
-      { id: 'history', label: t('menu.history'), icon: '🕘' },
-      { id: 'downloads', label: t('menu.downloads'), icon: '📥' },
-      { id: 'extensions', label: t('menu.extensions'), icon: '🧩' },
-      // DevTools активной вкладки. Состояние читаем при открытии меню:
-      // панель могли закрыть крестиком в самом DevTools, и подпись пункта
-      // обязана это отражать.
-      {
-        id: 'devtools',
-        label: devToolsStateOf(ws, ws.activeTabId ?? -1).open
-          ? t('menu.devtoolsClose')
-          : t('menu.devtoolsOpen'),
-        icon: '🛠️'
-      },
-      // Debug — dev-only пункт, не переводится (см. I18N.md).
-      { id: 'debug', label: 'Debug', icon: '🐞', disabled: true },
-      // Пункт виден всегда: он переключает режим ТЕКУЩЕГО окна, а не
-      // создаёт новое. В приватном окне он предлагает обратный переход,
-      // поэтому скрывать его было бы неверно.
-      {
-        id: 'incognito',
-        label: ws.incognito
-          ? t('menu.incognitoToNormal')
-          : t('menu.incognitoToPrivate'),
-        icon: '🕵️'
-      }
-    ]
-    showOverlay(win, {
-      kind: 'menu',
-      anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
-      items,
-      // Второй клик по кнопке ☰ закрывает открытое ею же меню.
-      toggleKey: 'browser-menu',
-      onSelect: (id) => {
-        if (id === 'downloads') openPage(DOWNLOADS_URL)
-        else if (id === 'history') openPage(HISTORY_URL)
-        else if (id === 'settings') openPage(SETTINGS_URL)
-        else if (id === 'extensions') openPage(EXTENSIONS_URL)
-        else if (id === 'devtools') {
-          // Меню закрываем ДО открытия панели: оверлей лежит поверх view,
-          // и докнутые DevTools перерисовали бы его область. Плюс панель
-          // забирает фокус, а меню его держит — оставить открытым значало бы
-          // оставить окно без фокуса.
-          closeOverlay(win)
-          if (ws.activeTabId !== null) {
-            toggleDevTools(ws, ws.activeTabId)
-            pushTabsState(ws)
-          }
-        } else if (id === 'incognito') {
-          // Переключение переоткрывает вкладки, поэтому активный оверлей
-          // (меню, открытый поверх вкладок) закрываем заранее: его
-          // содержимое сейчас станет неактуальным.
-          closeOverlay(win)
-          switchIncognito(ws, tabsDeps, !ws.incognito)
-        }
-      }
-    })
+    if (win) showBrowserMenu(win, anchor)
   })
   // Клик по shell или по странице мимо открытого меню. Меню живёт в
   // отдельном окне, само оно клик не видит. Закрываем ТОЛЬКО меню:

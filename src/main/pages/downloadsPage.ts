@@ -1,9 +1,11 @@
 // Страница загрузок: список с прогрессом, системными иконками,
 // открытием и удалением. Выделено из internalPages.ts.
-import { t } from '../i18n'
+import { translatorFor } from '../i18n'
 import { shell } from './shell'
 
+// Язык — параметр сборки: страница отдаётся в языке СВОЕГО пространства.
 export function buildDownloadsPage(lang: string): string {
+  const t = translatorFor(lang)
   return shell(
     t('downloads.title'),
     `<input id="q" type="search" placeholder="${t('downloads.search')}" autocomplete="off" />

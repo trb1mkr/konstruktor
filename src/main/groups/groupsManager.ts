@@ -45,11 +45,13 @@ export function registerGroupsIpc(): void {
   }
 
   // Моментальная синхронизация шаблонов: после каждой мутации store
-  // рассылаем свежий список во все окна — shell не ждет tabs:state.
-  const broadcastGroups = () => {
-    void getGroups()
+  // рассылаем свежий список окнам ТОГО ЖЕ пространства — shell не ждёт
+  // tabs:state. Чужим окнам список не нужен: у них свои шаблоны.
+  const broadcastGroups = (wsId: string) => {
+    void getGroups(wsId)
       .then((groups) => {
         for (const ws of windows.values()) {
+          if (ws.workspaceId !== wsId) continue
           ws.window?.webContents.send('groups:changed', groups)
         }
       })
@@ -57,15 +59,15 @@ export function registerGroupsIpc(): void {
   }
   const menuDeps = { ...deps, broadcastGroups }
 
-  ipcMain.handle('groups:list', () => getGroups())
+  ipcMain.handle('groups:list', (e) => getGroups(wsOf(e).workspaceId))
   // Создать шаблон + сразу открыть экземпляр в этом окне.
   ipcMain.handle(
     'groups:create',
     async (e, input: { name?: string; icon?: string; color?: string; pinned?: boolean }) => {
       const ws = wsOf(e)
       const { savedId, instanceId } = await createAndOpen(ws, deps, input)
-      broadcastGroups()
-      const saved = (await getGroups()).find((g) => g.id === savedId)!
+      broadcastGroups(ws.workspaceId)
+      const saved = (await getGroups(ws.workspaceId)).find((g) => g.id === savedId)!
       return { saved, instanceId }
     }
   )
@@ -73,36 +75,39 @@ export function registerGroupsIpc(): void {
   // Дочерние группы открываются рекурсивно внутрь родителя.
   ipcMain.handle('groups:open', async (e, savedId: string) => {
     const ws = wsOf(e)
-    const list = await getGroups()
+    const list = await getGroups(ws.workspaceId)
     if (!list.some((g) => g.id === savedId)) throw new Error(`Group ${savedId} not found`)
     openInstance(ws, deps, savedId)
     return ws.openGroups[ws.openGroups.length - 1]?.instanceId ?? ''
   })
-  ipcMain.handle('groups:rename', async (_e, savedId: string, name: string) => {
-    const res = await updateSavedGroup(savedId, { name })
-    broadcastGroups()
+  ipcMain.handle('groups:rename', async (e, savedId: string, name: string) => {
+    const wsId = wsOf(e).workspaceId
+    const res = await updateSavedGroup(savedId, { name }, wsId)
+    broadcastGroups(wsId)
     return res
   })
-  ipcMain.handle('groups:set-color', async (_e, savedId: string, color: string) => {
-    const res = await updateSavedGroup(savedId, { color })
-    broadcastGroups()
+  ipcMain.handle('groups:set-color', async (e, savedId: string, color: string) => {
+    const wsId = wsOf(e).workspaceId
+    const res = await updateSavedGroup(savedId, { color }, wsId)
+    broadcastGroups(wsId)
     return res
   })
   ipcMain.handle(
     'groups:set-icon',
-    async (_e, savedId: string, icon: string) => {
-      const res = await updateSavedGroup(savedId, { icon })
-      broadcastGroups()
+    async (e, savedId: string, icon: string) => {
+      const wsId = wsOf(e).workspaceId
+      const res = await updateSavedGroup(savedId, { icon }, wsId)
+      broadcastGroups(wsId)
       return res
     }
   )
   // Удалить шаблон: открытые экземпляры разгруппировываются, вкладки живут.
   ipcMain.handle('groups:delete', async (e, savedId: string) => {
     const ws = wsOf(e)
-    await deleteSavedGroup(savedId)
+    await deleteSavedGroup(savedId, ws.workspaceId)
     removeSavedInstances(ws, savedId)
     pushTabsState(ws)
-    broadcastGroups()
+    broadcastGroups(ws.workspaceId)
     return true
   })
   ipcMain.handle('groups:toggle-collapse', (e, instanceId: string) => {
@@ -113,19 +118,21 @@ export function registerGroupsIpc(): void {
   })
   // Закрепление шаблона на панели закладок: незакрепленная группа
   // живет только на панели вкладок, пока открыта.
-  ipcMain.handle('groups:toggle-bookmark-pin', async (_e, savedId: string) => {
-    const list = await getGroups()
+  ipcMain.handle('groups:toggle-bookmark-pin', async (e, savedId: string) => {
+    const wsId = wsOf(e).workspaceId
+    const list = await getGroups(wsId)
     const cur = list.find((g) => g.id === savedId)
     if (!cur) throw new Error(`Group ${savedId} not found`)
-    const res = await updateSavedGroup(savedId, { pinned: !cur.pinned })
-    broadcastGroups()
+    const res = await updateSavedGroup(savedId, { pinned: !cur.pinned }, wsId)
+    broadcastGroups(wsId)
     return res
   })
   // Вложить группу в группу: дочерний шаблон открывается внутри родителя.
   // Циклы запрещены: проверяем, что target не внутри source.
   ipcMain.handle('groups:nest', async (e, childSavedId: string, parentSavedId: string) => {
     const ws = wsOf(e)
-    const list = await getGroups()
+    const wsId = ws.workspaceId
+    const list = await getGroups(wsId)
     const byId = new Map(list.map((g) => [g.id, g]))
     if (!byId.has(childSavedId) || !byId.has(parentSavedId)) {
       throw new Error('Group not found')
@@ -144,8 +151,8 @@ export function registerGroupsIpc(): void {
     if (!parent.children.includes(childSavedId)) {
       const res = await updateSavedGroup(parentSavedId, {
         children: [...parent.children, childSavedId]
-      })
-      broadcastGroups()
+      }, wsId)
+      broadcastGroups(wsId)
       // Если родитель открыт — открываем ребенка внутрь сразу.
       for (const inst of ws.openGroups.filter((g) => g.savedId === parentSavedId)) {
         const nid = openInstance(ws, deps, childSavedId, inst.instanceId)
@@ -160,13 +167,14 @@ export function registerGroupsIpc(): void {
   // экземпляр поднимается на верхний уровень панели вкладок.
   ipcMain.handle('groups:unnest', async (e, childSavedId: string, parentSavedId: string) => {
     const ws = wsOf(e)
-    const list = await getGroups()
+    const wsId = ws.workspaceId
+    const list = await getGroups(wsId)
     const parent = list.find((g) => g.id === parentSavedId)
     if (!parent) throw new Error(`Group ${parentSavedId} not found`)
     const res = await updateSavedGroup(parentSavedId, {
       children: parent.children.filter((c) => c !== childSavedId)
-    })
-    broadcastGroups()
+    }, wsId)
+    broadcastGroups(wsId)
     for (const inst of ws.openGroups.filter(
       (g) => g.savedId === childSavedId && g.parentInstanceId
     )) {

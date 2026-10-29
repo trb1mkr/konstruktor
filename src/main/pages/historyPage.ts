@@ -1,9 +1,12 @@
 // Страница истории: хронология визитов, группировка по дню/месяцу/году,
 // поиск и удаление. Выделено из internalPages.ts.
-import { t } from '../i18n'
+import { translatorFor } from '../i18n'
 import { shell } from './shell'
 
+// Язык — параметр сборки: страница отдаётся в языке СВОЕГО пространства,
+// а не в языке процесса (см. main/i18n.ts).
 export function buildHistoryPage(lang: string): string {
+  const t = translatorFor(lang)
   return shell(
     t('history.title'),
     `<div class="hist-controls">

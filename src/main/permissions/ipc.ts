@@ -25,13 +25,21 @@ import { closeOverlay, showOverlay, type OverlayMenuItem } from '../overlay'
 import { pushTabsState } from '../tabs/tabsManager'
 import { createTab } from '../windows/deps'
 import { log } from '../overlay/logger'
-import { t } from '../i18n'
+import { tFor } from '../i18n'
 import { PERMISSIONS_URL } from '../pages/internalPages'
+import { bootWorkspaceId } from '../workspaces/registry'
 
 /** Решения сайта в виде, удобном для списка в интерфейсе. */
-function scopesOf(origin: string, persist: boolean): PermissionScope[] {
+function scopesOf(origin: string, persist: boolean, wsId: string): PermissionScope[] {
   return (Object.keys(SCOPE_ICON) as PermissionScope[]).filter(
-    (scope) => getDecision(origin, scope, persist) !== undefined,
+    (scope) => getDecision(origin, scope, persist, wsId) !== undefined,
+  )
+}
+
+/** Пространство окна-отправителя: у каждого свои решения по сайтам. */
+function wsIdOf(e: { sender: Electron.WebContents }): string {
+  return (
+    getState(BrowserWindow.fromWebContents(e.sender) ?? null)?.workspaceId ?? bootWorkspaceId()
   )
 }
 
@@ -62,33 +70,37 @@ export function registerPermissionsIpc(): void {
   // Список решений для страницы настроек. Приватные решения сюда не
   // попадают: они умирают вместе с процессом, и показывать их в списке,
   // который переживёт перезапуск, было бы обманом.
-  ipcMain.handle('permissions:list', () => {
-    const { origins } = allDecisions()
+  ipcMain.handle('permissions:list', (e) => {
+    const { origins } = allDecisions(wsIdOf(e))
     return Object.entries(origins).map(([origin, record]) => ({
       origin,
       scopes: Object.entries(record).map(([scope, value]) => ({ scope, value })),
     }))
   })
 
-  ipcMain.handle('permissions:clear-origin', async (_e, origin: string) => {
-    await clearOrigin(origin, true)
+  ipcMain.handle('permissions:clear-origin', async (e, origin: string) => {
+    await clearOrigin(origin, true, wsIdOf(e))
     return true
   })
 
   // Снятие одной области: сайт остаётся в списке со своими остальными
   // решениями, а снятая область снова начнёт спрашивать. Бейдж в адресной
   // строке обязан пересчитаться — из разрешённых значков пропадает один.
-  ipcMain.handle('permissions:clear-scope', async (_e, origin: string, scope: string) => {
+  ipcMain.handle('permissions:clear-scope', async (e, origin: string, scope: string) => {
     if (typeof origin !== 'string' || typeof scope !== 'string') return false
     if (!ALL_SCOPES.includes(scope as PermissionScope)) return false
-    await clearScope(origin, scope as PermissionScope, true)
-    log('session', 'site permission scope cleared', { origin, scope })
-    for (const ws of windows.values()) pushTabsState(ws)
+    const wsId = wsIdOf(e)
+    await clearScope(origin, scope as PermissionScope, true, wsId)
+    log('session', 'site permission scope cleared', { origin, scope, wsId })
+    for (const ws of windows.values()) {
+      if (ws.workspaceId !== wsId) continue
+      pushTabsState(ws)
+    }
     return true
   })
 
-  ipcMain.handle('permissions:clear-all', async () => {
-    await clearAllDecisions()
+  ipcMain.handle('permissions:clear-all', async (e) => {
+    await clearAllDecisions(wsIdOf(e))
     return true
   })
 }
@@ -111,9 +123,15 @@ export function showPermissionsMenu(ws: WindowState, anchor: { x: number; y: num
   const origin = originOfUrl(rec?.url)
   if (!origin) return
   const persist = !ws.incognito
-  const scopes = scopesOf(origin, persist)
-  const allowed = scopes.filter((scope) => getDecision(origin, scope, persist) === 'allow')
-  const blocked = scopes.filter((scope) => getDecision(origin, scope, persist) !== 'allow')
+  const wsId = ws.workspaceId
+  const t = tFor(wsId)
+  const scopes = scopesOf(origin, persist, wsId)
+  const allowed = scopes.filter(
+    (scope) => getDecision(origin, scope, persist, wsId) === 'allow'
+  )
+  const blocked = scopes.filter(
+    (scope) => getDecision(origin, scope, persist, wsId) !== 'allow'
+  )
   const items: OverlayMenuItem[] = []
   // Подзаголовок — неактивный пункт: он не нажимается и пропускается
   // клавиатурной навигацией (MenuList пропускает disabled), то есть ведёт
@@ -169,20 +187,24 @@ export function showPermissionsMenu(ws: WindowState, anchor: { x: number; y: num
     toggleKey: 'permissions-menu',
     onSelect: (id) => {
       const pushAll = (): void => {
-        // Решение снято для всех окон: сайт мог быть открыт в нескольких,
-        // и бейдж обязан пересчитаться везде.
-        for (const other of windows.values()) pushTabsState(other)
+        // Решение снято для всех окон ПРОСТРАНСТВА: сайт мог быть открыт
+        // в нескольких, и бейдж обязан пересчитаться везде. Чужие окна
+        // не трогаем — у них свои решения.
+        for (const other of windows.values()) {
+          if (other.workspaceId !== wsId) continue
+          pushTabsState(other)
+        }
       }
       if (id === 'clear-site') {
-        void clearOrigin(origin, persist).then(() => {
-          log('session', 'site permissions cleared', { origin })
+        void clearOrigin(origin, persist, wsId).then(() => {
+          log('session', 'site permissions cleared', { origin, wsId })
           pushAll()
         })
       } else if (id.startsWith('scope:')) {
         const scope = id.slice('scope:'.length)
         if (!ALL_SCOPES.includes(scope as PermissionScope)) return
-        void clearScope(origin, scope as PermissionScope, persist).then(() => {
-          log('session', 'site permission scope cleared', { origin, scope })
+        void clearScope(origin, scope as PermissionScope, persist, wsId).then(() => {
+          log('session', 'site permission scope cleared', { origin, scope, wsId })
           pushAll()
         })
       } else if (id === 'manage') {
